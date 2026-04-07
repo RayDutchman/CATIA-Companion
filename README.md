@@ -1,1 +1,16 @@
-I will add this later
+CATIA Companion
+Revision 1.0.0 | Released: 2026-04-03
+ 
+A lightweight internal tool designed to streamline common CATIA V5 workflows,
+including drawing and part conversion, font installation, and drafting standard setup.
+ 
+Features:
+  - Convert CATDrawing files to PDF
+  - Convert CATPart/CATProduct files to STEP
+  - Copy font files to the CATIA installation folder
+  - Copy ISO.xml drafting standard to the CATIA installation folder
+ 
+Developed by: CHEN Weibo
+Contact: thucwb@gmail.com
+ 
+For internal use only. Not for redistribution.
