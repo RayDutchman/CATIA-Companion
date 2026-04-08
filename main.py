@@ -1064,7 +1064,7 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
     from openpyxl.styles import Font, Alignment
     from pycatia import catia
     from pycatia.product_structure_interfaces.product_document import ProductDocument
-    from pycatia.enumeration.enumeration_types import CatWorkModeType
+    from pycatia import CatWorkModeType
 
     if columns is None:
         columns = BOM_DEFAULT_COLUMNS
