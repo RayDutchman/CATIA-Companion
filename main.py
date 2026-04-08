@@ -1,6 +1,7 @@
 import sys
 import os
 import shutil
+import subprocess
 import winreg
 import logging
 from logging.handlers import RotatingFileHandler
@@ -12,7 +13,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QRadioButton, QButtonGroup, QLineEdit, QGroupBox,
     QListWidgetItem, QComboBox, QCheckBox, QPlainTextEdit
 )
-from PySide6.QtGui import QAction, QFont
+from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt, QSettings, QObject, Signal
 
 # ---------------------------------------------------------------------------
@@ -117,14 +118,11 @@ class MainWindow(QMainWindow):
         # Log display area
         self._log_view = QPlainTextEdit()
         self._log_view.setReadOnly(True)
-        self._log_view.setFont(QFont("Consolas", 9))
         self._log_view.setStyleSheet(
             "background-color: #1e1e1e; color: #d4d4d4;"
             " font-family: Consolas, 'Courier New', monospace; font-size: 9pt;"
         )
-        self._log_view.setMinimumHeight(
-            self._log_view.fontMetrics().height() * 10
-        )
+        self._log_view.setMinimumHeight(150)
         layout.addWidget(self._log_view)
 
         # Open Log File button
@@ -152,7 +150,6 @@ class MainWindow(QMainWindow):
         if sys.platform == "win32":
             os.startfile(_log_file)
         else:
-            import subprocess
             subprocess.Popen(["xdg-open", str(_log_file)])
 
     def _setup_menu_bar(self):
@@ -643,6 +640,8 @@ def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
         out_stem = stem
 
         logger.info(f"Opening: {src}")
+        documents.open(str(src))
+        from pycatia.drafting_interfaces.drawing_document import DrawingDocument
         drawing_doc = DrawingDocument(application.active_document.com_object)
         drawing = drawing_doc.drawing_root
         sheet_count = drawing.sheets.count
@@ -755,7 +754,6 @@ def stamp_part_template(file_paths: list[str], output_folder: str | None = None)
                 application.active_document.close()
             except Exception:
                 pass
-        logger.info("")
 
     msg = "Stamping complete.\n\n"
     if succeeded:
