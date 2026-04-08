@@ -1,26 +1,20 @@
 import sys
 import shutil
 import winreg
+import tempfile
 from pathlib import Path
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QMessageBox, QDialog, QPushButton, QListWidget, QFileDialog,
     QAbstractItemView, QRadioButton, QButtonGroup, QLineEdit, QGroupBox,
-    QListWidgetItem
+    QListWidgetItem, QComboBox, QCheckBox
 )
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt, QSettings
 
-
 def resource_path(filename: str) -> Path:
-    """
-    Returns the correct path to a resource file.
-    - When running as a PyInstaller .exe: looks next to the .exe
-    - When running as a script: looks next to main.py
-    """
     if hasattr(sys, "_MEIPASS"):
-        # Running as PyInstaller bundle — look next to the .exe
         return Path(sys.executable).parent / filename
     return Path(__file__).parent / filename
 
@@ -35,19 +29,55 @@ APP_DATE    = "2026-04-03"
 APP_AUTHOR  = "CHEN Weibo"
 APP_CONTACT = "thucwb@gmail.com"
 
-ABOUT_TEXT = f"""{APP_NAME} v{APP_VERSION}
+ABOUT_TEXT = f"""{APP_NAME} v{APP_VERSION}\n\nA CATIA V5 productivity tool for engineering teams.\nAutomates drawing conversion, part export, and\ninstallation of CATIA resources.\n\n─────────────────────────────────────────\nDeveloper   {APP_AUTHOR}\nContact     {APP_CONTACT}\nReleased    {APP_DATE}\n─────────────────────────────────────────\n\n\u00a9 2026 {APP_AUTHOR}. For internal use only."""
 
-A CATIA V5 productivity tool for engineering teams.
-Automates drawing conversion, part export, and
-installation of CATIA resources.
+# ---------------------------------------------------------------------------
+# Part template properties
+# ---------------------------------------------------------------------------
 
-─────────────────────────────────────────
-Developer   {APP_AUTHOR}
-Contact     {APP_CONTACT}
-Released    {APP_DATE}
-─────────────────────────────────────────
+PART_TEMPLATE_PROPERTIES = ["物料编码", "物料名称", "中文名称", "规格型号", "物料来源", "数据状态", "存货类别", "质量", "备注"]
 
-\u00a9 2026 {APP_AUTHOR}. For internal use only."""
+# ---------------------------------------------------------------------------
+# File-exists conflict dialog
+# ---------------------------------------------------------------------------
+
+CONFLICT_OVERWRITE     = "overwrite"
+CONFLICT_OVERWRITE_ALL = "overwrite_all"
+CONFLICT_SKIP          = "skip"
+CONFLICT_SKIP_ALL      = "skip_all"
+CONFLICT_CANCEL        = "cancel"
+
+def ask_file_conflict(dest: Path) -> str:
+    msg = QMessageBox()
+    msg.setWindowTitle("File Already Exists")
+    msg.setIcon(QMessageBox.Icon.Warning)
+    msg.setText("The output file already exists:")
+    msg.setInformativeText(str(dest))
+    msg.setDetailedText(
+        "• Overwrite — replace the existing file\n"
+        "• Overwrite All — replace all existing files without asking again\n"
+        "• Skip — keep the existing file and continue\n"
+        "• Skip All — keep all existing files without asking again\n"
+        "• Cancel — stop the conversion"
+    )
+    btn_overwrite     = msg.addButton("Overwrite",     QMessageBox.ButtonRole.AcceptRole)
+    btn_overwrite_all = msg.addButton("Overwrite All", QMessageBox.ButtonRole.AcceptRole)
+    btn_skip          = msg.addButton("Skip",          QMessageBox.ButtonRole.RejectRole)
+    btn_skip_all      = msg.addButton("Skip All",      QMessageBox.ButtonRole.RejectRole)
+    _btn_cancel       = msg.addButton("Cancel",        QMessageBox.ButtonRole.DestructiveRole)
+    msg.setDefaultButton(btn_overwrite)
+    msg.exec()
+    clicked = msg.clickedButton()
+    if clicked == btn_overwrite:
+        return CONFLICT_OVERWRITE
+    elif clicked == btn_overwrite_all:
+        return CONFLICT_OVERWRITE_ALL
+    elif clicked == btn_skip:
+        return CONFLICT_SKIP
+    elif clicked == btn_skip_all:
+        return CONFLICT_SKIP_ALL
+    else:
+        return CONFLICT_CANCEL
 
 
 # ---------------------------------------------------------------------------
@@ -57,34 +87,22 @@ Released    {APP_DATE}
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-
-        # --- Window settings ---
         self.setWindowTitle("CATIA Companion")
         self.resize(600, 400)
-
-        # --- Menu bar ---
         self._setup_menu_bar()
-
-        # --- Central widget & layout ---
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-
         layout = QVBoxLayout(central_widget)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
-
-        # --- Placeholder content ---
         label = QLabel("Welcome to CATIA Companion")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(label)
-
-        # --- Status bar ---
         self.statusBar().showMessage("Ready")
 
     def _setup_menu_bar(self):
         menu_bar = self.menuBar()
 
-        # --- File ---
         file_menu = menu_bar.addMenu("File")
         file_menu.addAction(QAction("New", self))
         file_menu.addAction(QAction("Open...", self))
@@ -92,7 +110,6 @@ class MainWindow(QMainWindow):
         file_menu.addAction(QAction("Save As...", self))
         file_menu.addSeparator()
 
-        # --- Convert submenu ---
         convert_menu = file_menu.addMenu("Convert")
         convert_part_action = QAction("Convert CATPart/CATProduct", self)
         convert_part_action.triggered.connect(self._open_convert_part_dialog)
@@ -101,7 +118,6 @@ class MainWindow(QMainWindow):
         convert_drawing_action.triggered.connect(self._open_convert_drawing_dialog)
         convert_menu.addAction(convert_drawing_action)
 
-        # --- Export BOM ---
         export_bom_action = QAction("Export BOM from CATProduct", self)
         export_bom_action.triggered.connect(self._open_export_bom_dialog)
         file_menu.addAction(export_bom_action)
@@ -111,7 +127,6 @@ class MainWindow(QMainWindow):
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
 
-        # --- Edit ---
         edit_menu = menu_bar.addMenu("Edit")
         edit_menu.addAction(QAction("Undo", self))
         edit_menu.addAction(QAction("Redo", self))
@@ -120,7 +135,6 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(QAction("Copy", self))
         edit_menu.addAction(QAction("Paste", self))
 
-        # --- Tools ---
         tools_menu = menu_bar.addMenu("Tools")
         copy_font_action = QAction("Copy Font File to CATIA folder", self)
         copy_font_action.triggered.connect(self._copy_font_to_catia)
@@ -131,8 +145,10 @@ class MainWindow(QMainWindow):
         pojie_action = QAction("PoJie", self)
         pojie_action.triggered.connect(self._pojie)
         tools_menu.addAction(pojie_action)
+        stamp_action = QAction("刷写零件模板", self)
+        stamp_action.triggered.connect(self._open_stamp_part_template_dialog)
+        tools_menu.addAction(stamp_action)
 
-        # --- View ---
         view_menu = menu_bar.addMenu("View")
         view_menu.addAction(QAction("Zoom In", self))
         view_menu.addAction(QAction("Zoom Out", self))
@@ -140,23 +156,14 @@ class MainWindow(QMainWindow):
         view_menu.addSeparator()
         view_menu.addAction(QAction("Toggle Status Bar", self))
 
-        # --- Help ---
         help_menu = menu_bar.addMenu("Help")
         help_menu.addAction(QAction("Documentation", self))
         about_action = QAction("About CATIA Companion", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
 
-    # ------------------------------------------------------------------ #
-    # Help menu
-    # ------------------------------------------------------------------ #
-
     def _show_about(self):
         QMessageBox.about(self, f"About {APP_NAME}", ABOUT_TEXT)
-
-    # ------------------------------------------------------------------ #
-    # File > Convert menu
-    # ------------------------------------------------------------------ #
 
     def _open_convert_part_dialog(self):
         dialog = ConvertDialog(
@@ -166,7 +173,9 @@ class MainWindow(QMainWindow):
             file_filter="CATIA Part/Product Files (*.CATPart *.CATProduct);;All Files (*)",
             no_files_msg="Please select at least one CATPart or CATProduct file.",
             conversion_fn=CATPart_to_STP,
-            settings_key="CATPart"
+            settings_key="CATPart",
+            show_prefix_option=True,
+            prefix="MD_"
         )
         dialog.exec()
 
@@ -178,17 +187,15 @@ class MainWindow(QMainWindow):
             file_filter="CATDrawing Files (*.CATDrawing);;All Files (*)",
             no_files_msg="Please select at least one CATDrawing file.",
             conversion_fn=CATDrawing_to_PDF,
-            settings_key="CATDrawing"
+            settings_key="CATDrawing",
+            show_prefix_option=True,
+            prefix="DR_"
         )
         dialog.exec()
 
     def _open_export_bom_dialog(self):
         dialog = ExportBOMDialog(self)
         dialog.exec()
-
-    # ------------------------------------------------------------------ #
-    # Tools menu
-    # ------------------------------------------------------------------ #
 
     def _copy_font_to_catia(self):
         self._copy_file_to_catia(
@@ -204,130 +211,94 @@ class MainWindow(QMainWindow):
 
     def _copy_file_to_catia(self, file_name: str, relative_dest: Path):
         src_file = resource_path(file_name)
-
         if not src_file.exists():
-            QMessageBox.warning(
-                self, "File Not Found",
-                f"Could not find '{file_name}' in the working folder:\n{src_file.parent}"
-            )
+            QMessageBox.warning(self, "File Not Found",
+                f"Could not find '{file_name}' in the working folder:\n{src_file.parent}")
             return
-
         catia_root = detect_catia_root()
-
         if catia_root:
-            reply = QMessageBox.question(
-                self, "CATIA Installation Detected",
+            reply = QMessageBox.question(self, "CATIA Installation Detected",
                 f"CATIA installation found at:\n{catia_root}\n\nUse this folder?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if reply == QMessageBox.StandardButton.No:
                 catia_root = None
-
         if not catia_root:
-            catia_root = QFileDialog.getExistingDirectory(
-                self,
-                "Select CATIA Installation Folder (e.g. C:\\Program Files\\Dassault Systemes\\B28)",
-                ""
-            )
+            catia_root = QFileDialog.getExistingDirectory(self,
+                "Select CATIA Installation Folder (e.g. C:\Program Files\Dassault Systemes\B28)", "")
             if not catia_root:
                 return
-
         dest_dir = Path(catia_root) / relative_dest
-
         if not dest_dir.exists():
-            reply = QMessageBox.question(
-                self, "Folder Not Found",
+            reply = QMessageBox.question(self, "Folder Not Found",
                 f"The target folder does not exist:\n{dest_dir}\n\nDo you want to create it?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if reply == QMessageBox.StandardButton.Yes:
                 dest_dir.mkdir(parents=True, exist_ok=True)
             else:
                 return
-
         dest_file = dest_dir / file_name
-
         try:
             shutil.copy2(str(src_file), str(dest_file))
-            QMessageBox.information(
-                self, "Success",
-                f"'{file_name}' has been copied to:\n{dest_file}"
-            )
+            QMessageBox.information(self, "Success",
+                f"'{file_name}' has been copied to:\n{dest_file}")
         except PermissionError:
-            QMessageBox.critical(
-                self, "Permission Denied",
-                f"Could not copy the file. Try running the application as Administrator.\n\nTarget:\n{dest_file}"
-            )
+            QMessageBox.critical(self, "Permission Denied",
+                f"Could not copy the file. Try running the application as Administrator.\n\nTarget:\n{dest_file}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"An unexpected error occurred:\n{e}")
 
     def _pojie(self):
         src_dir = resource_path("Pojie")
-
-        # Check source folder exists
         if not src_dir.exists() or not src_dir.is_dir():
-            QMessageBox.warning(
-                self, "Folder Not Found",
-                f"Could not find the 'Pojie' folder at:\n{src_dir.parent}"
-            )
+            QMessageBox.warning(self, "Folder Not Found",
+                f"Could not find the 'Pojie' folder at:\n{src_dir.parent}")
             return
-
-        # Auto-detect or manually select CATIA root
         catia_root = detect_catia_root()
-
         if catia_root:
-            reply = QMessageBox.question(
-                self, "CATIA Installation Detected",
+            reply = QMessageBox.question(self, "CATIA Installation Detected",
                 f"CATIA installation found at:\n{catia_root}\n\nUse this folder?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if reply == QMessageBox.StandardButton.No:
                 catia_root = None
-
         if not catia_root:
-            catia_root = QFileDialog.getExistingDirectory(
-                self,
-                "Select CATIA Installation Folder (e.g. C:\\Program Files\\Dassault Systemes\\B28)",
-                ""
-            )
+            catia_root = QFileDialog.getExistingDirectory(self,
+                "Select CATIA Installation Folder (e.g. C:\Program Files\Dassault Systemes\B28)", "")
             if not catia_root:
                 return
-
         dest_dir = Path(catia_root) / "win_b64" / "code" / "bin"
-
         if not dest_dir.exists():
-            QMessageBox.critical(
-                self, "Folder Not Found",
-                f"The target folder does not exist:\n{dest_dir}\n\nPlease check your CATIA installation."
-            )
+            QMessageBox.critical(self, "Folder Not Found",
+                f"The target folder does not exist:\n{dest_dir}\n\nPlease check your CATIA installation.")
             return
-
-        # Copy all files from Pojie folder, overwriting existing ones
         files = [f for f in src_dir.iterdir() if f.is_file()]
         if not files:
             QMessageBox.warning(self, "Empty Folder", "The 'Pojie' folder contains no files.")
             return
-
         try:
             copied = []
             for src_file in files:
                 dest_file = dest_dir / src_file.name
                 shutil.copy2(str(src_file), str(dest_file))
                 copied.append(src_file.name)
-                print(f"  Copied: {src_file.name} -> {dest_file}")
-
-            QMessageBox.information(
-                self, "Success",
-                f"Successfully copied {len(copied)} file(s) to:\n{dest_dir}\n\n" +
-                "\n".join(copied)
-            )
+            QMessageBox.information(self, "Success",
+                f"Successfully copied {len(copied)} file(s) to:\n{dest_dir}\n\n" + "\n".join(copied))
         except PermissionError:
-            QMessageBox.critical(
-                self, "Permission Denied",
-                f"Could not copy files. Try running the application as Administrator.\n\nTarget:\n{dest_dir}"
-            )
+            QMessageBox.critical(self, "Permission Denied",
+                f"Could not copy files. Try running the application as Administrator.\n\nTarget:\n{dest_dir}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"An unexpected error occurred:\n{e}")
+
+    def _open_stamp_part_template_dialog(self):
+        dialog = ConvertDialog(
+            parent=self,
+            title="刷写零件模板",
+            file_label="Selected CATPart files:",
+            file_filter="CATIA Part Files (*.CATPart);;All Files (*)",
+            no_files_msg="Please select at least one CATPart file.",
+            conversion_fn=stamp_part_template,
+            settings_key="StampPartTemplate"
+        )
+        dialog.exec()
 
 
 # ---------------------------------------------------------------------------
@@ -337,15 +308,17 @@ class MainWindow(QMainWindow):
 class ConvertDialog(QDialog):
     def __init__(self, parent=None, title="Convert", file_label="Selected files:",
                  file_filter="All Files (*)", no_files_msg="Please select at least one file.",
-                 conversion_fn=None, settings_key="default"):
+                 conversion_fn=None, settings_key="default",
+                 show_prefix_option=False, prefix=""):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setMinimumSize(520, 450)
-        self._file_filter = file_filter
-        self._no_files_msg = no_files_msg
-        self._conversion_fn = conversion_fn
+        self._file_filter        = file_filter
+        self._no_files_msg       = no_files_msg
+        self._conversion_fn      = conversion_fn
+        self._show_prefix_option = show_prefix_option
+        self._prefix             = prefix
 
-        # QSettings persists values between sessions under a key per dialog type
         self._settings = QSettings("CATIACompanion", f"ConvertDialog_{settings_key}")
         self._last_browse_dir = self._settings.value("last_browse_dir", "")
         self._last_output_dir = self._settings.value("last_output_dir", "")
@@ -354,9 +327,7 @@ class ConvertDialog(QDialog):
         layout.setSpacing(10)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        # --- Input files ---
         layout.addWidget(QLabel(file_label))
-
         self.file_list = QListWidget()
         self.file_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         layout.addWidget(self.file_list)
@@ -371,43 +342,50 @@ class ConvertDialog(QDialog):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
-        # --- Output folder ---
-        output_group = QGroupBox("Output Folder")
-        output_layout = QVBoxLayout(output_group)
+        if settings_key != "StampPartTemplate":
+            output_group = QGroupBox("Output Folder")
+            output_layout = QVBoxLayout(output_group)
+            self.radio_same = QRadioButton("Same folder as source files")
+            self.radio_custom = QRadioButton("Choose a folder:")
+            self.radio_same.setChecked(True)
+            self.btn_group = QButtonGroup(self)
+            self.btn_group.addButton(self.radio_same)
+            self.btn_group.addButton(self.radio_custom)
+            output_layout.addWidget(self.radio_same)
+            output_layout.addWidget(self.radio_custom)
+            folder_row = QHBoxLayout()
+            self.folder_edit = QLineEdit()
+            self.folder_edit.setPlaceholderText("Select output folder...")
+            self.folder_edit.setReadOnly(True)
+            self.folder_edit.setEnabled(False)
+            self.folder_browse_btn = QPushButton("Browse...")
+            self.folder_browse_btn.setEnabled(False)
+            self.folder_browse_btn.clicked.connect(self._browse_output_folder)
+            folder_row.addWidget(self.folder_edit)
+            folder_row.addWidget(self.folder_browse_btn)
+            output_layout.addLayout(folder_row)
+            self.radio_custom.toggled.connect(self._toggle_folder_row)
+            layout.addWidget(output_group)
+            if self._last_output_dir:
+                self.radio_custom.setChecked(True)
+                self.folder_edit.setText(self._last_output_dir)
+        else:
+            self.radio_same  = None
+            self.folder_edit = None
 
-        self.radio_same = QRadioButton("Same folder as source files")
-        self.radio_custom = QRadioButton("Choose a folder:")
-        self.radio_same.setChecked(True)
+        if show_prefix_option and prefix:
+            saved_prefix = self._settings.value("add_prefix", True)
+            if isinstance(saved_prefix, str):
+                saved_prefix = saved_prefix.lower() == "true"
+            self.prefix_checkbox = QCheckBox(
+                f'Add "{prefix}" prefix to output filename'
+                f' (skipped if name already starts with "{prefix}")'
+            )
+            self.prefix_checkbox.setChecked(saved_prefix)
+            layout.addWidget(self.prefix_checkbox)
+        else:
+            self.prefix_checkbox = None
 
-        self.btn_group = QButtonGroup(self)
-        self.btn_group.addButton(self.radio_same)
-        self.btn_group.addButton(self.radio_custom)
-
-        output_layout.addWidget(self.radio_same)
-        output_layout.addWidget(self.radio_custom)
-
-        folder_row = QHBoxLayout()
-        self.folder_edit = QLineEdit()
-        self.folder_edit.setPlaceholderText("Select output folder...")
-        self.folder_edit.setReadOnly(True)
-        self.folder_edit.setEnabled(False)
-        self.folder_browse_btn = QPushButton("Browse...")
-        self.folder_browse_btn.setEnabled(False)
-        self.folder_browse_btn.clicked.connect(self._browse_output_folder)
-        folder_row.addWidget(self.folder_edit)
-        folder_row.addWidget(self.folder_browse_btn)
-        output_layout.addLayout(folder_row)
-
-        self.radio_custom.toggled.connect(self._toggle_folder_row)
-
-        layout.addWidget(output_group)
-
-        # Restore last output folder if saved
-        if self._last_output_dir:
-            self.radio_custom.setChecked(True)
-            self.folder_edit.setText(self._last_output_dir)
-
-        # --- Confirm / Cancel ---
         action_row = QHBoxLayout()
         action_row.addStretch()
         confirm_btn = QPushButton("Confirm")
@@ -425,10 +403,8 @@ class ConvertDialog(QDialog):
 
     def _browse_files(self):
         files, _ = QFileDialog.getOpenFileNames(
-            self, "Select Files", self._last_browse_dir, self._file_filter
-        )
+            self, "Select Files", self._last_browse_dir, self._file_filter)
         if files:
-            # Save the directory of the first selected file
             self._last_browse_dir = str(Path(files[0]).parent)
             self._settings.setValue("last_browse_dir", self._last_browse_dir)
         for f in files:
@@ -442,8 +418,7 @@ class ConvertDialog(QDialog):
 
     def _browse_output_folder(self):
         folder = QFileDialog.getExistingDirectory(
-            self, "Select Output Folder", self._last_output_dir
-        )
+            self, "Select Output Folder", self._last_output_dir)
         if folder:
             self.folder_edit.setText(folder)
             self._last_output_dir = folder
@@ -454,16 +429,20 @@ class ConvertDialog(QDialog):
         if not files:
             QMessageBox.warning(self, "No Files", self._no_files_msg)
             return
-
-        if self.radio_same.isChecked():
+        if self.radio_same is None:
+            output_folder = None
+        elif self.radio_same.isChecked():
             output_folder = None
         else:
             output_folder = self.folder_edit.text().strip()
             if not output_folder:
                 QMessageBox.warning(self, "No Output Folder", "Please select an output folder.")
                 return
-
-        if self._conversion_fn:
+        if self.prefix_checkbox is not None:
+            add_prefix = self.prefix_checkbox.isChecked()
+            self._settings.setValue("add_prefix", add_prefix)
+            self._conversion_fn(files, output_folder, add_prefix=add_prefix)
+        else:
             self._conversion_fn(files, output_folder)
         self.accept()
 
@@ -473,16 +452,10 @@ class ConvertDialog(QDialog):
 # ---------------------------------------------------------------------------
 
 def detect_catia_root() -> str | None:
-    """
-    Try to find the CATIA V5 installation root from the Windows Registry.
-    Looks for DEST_FOLDER under HKEY_LOCAL_MACHINE\\SOFTWARE\\Dassault Systemes\\<release>\\0.
-    Returns the path string if found, or None if not detected.
-    """
     registry_paths = [
         r"SOFTWARE\Dassault Systemes",
         r"SOFTWARE\WOW6432Node\Dassault Systemes",
     ]
-
     for reg_path in registry_paths:
         print(f"Trying registry path: HKEY_LOCAL_MACHINE\\{reg_path}")
         try:
@@ -491,134 +464,258 @@ def detect_catia_root() -> str | None:
                 while True:
                     try:
                         release = winreg.EnumKey(ds_key, i)
-                        full_key = rf"HKEY_LOCAL_MACHINE\{reg_path}\{release}\0"
-                        print(f"  Trying key: {full_key}")
+                        print(f"  Trying key: HKEY_LOCAL_MACHINE\\{reg_path}\\{release}\\0")
                         try:
-                            with winreg.OpenKey(ds_key, rf"{release}\0") as release_key:
+                            with winreg.OpenKey(ds_key, rf"{release}\\0") as release_key:
                                 try:
                                     install_path, _ = winreg.QueryValueEx(release_key, "DEST_FOLDER")
-                                    print(f"    Found DEST_FOLDER: {install_path}")
                                     candidate = Path(install_path)
-                                    win_b64 = candidate / "win_b64"
-                                    print(f"    Checking win_b64 exists: {win_b64}")
-                                    if win_b64.exists():
+                                    if (candidate / "win_b64").exists():
                                         print(f"    -> Valid CATIA installation found: {candidate}")
                                         return str(candidate)
-                                    else:
-                                        print(f"    -> win_b64 not found, skipping.")
                                 except FileNotFoundError:
-                                    print(f"    -> DEST_FOLDER value not found in this key.")
+                                    pass
                         except OSError:
-                            print(f"    -> Could not open subkey \\0 under {release}.")
+                            pass
                         i += 1
                     except OSError:
-                        break  # No more subkeys
+                        break
         except OSError:
-            print(f"  -> Registry path not found, skipping.")
-
+            pass
     print("No valid CATIA installation detected.")
     return None
 
 
 # ---------------------------------------------------------------------------
-# Conversion function
+# Conversion functions
 # ---------------------------------------------------------------------------
 
-def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None):
+def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
+                      add_prefix: bool = True):
     """
     Convert CATDrawing files to PDF using pyCATIA.
-    Single sheet: saved as <file>.pdf
-    Multiple sheets: saved as <file>_Sheet1.pdf, <file>_Sheet2.pdf, ...
-    CATIA remains visible during processing.
+    Exports to a temp directory first, then moves to the final destination.
+    If destination exists, asks the user (Overwrite/Overwrite All/Skip/Skip All/Cancel).
     """
     from pycatia import catia
 
     caa = catia()
     application = caa.application
     application.visible = True
-
     documents = application.documents
+
+    conflict_policy = None
 
     for path in file_paths:
         src = Path(path).resolve()
         dest_dir = Path(output_folder).resolve() if output_folder else src.parent
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        print(f"Opening: {src}")
+        stem = src.stem
+        out_stem = f"DR_{stem}" if add_prefix and not stem.startswith("DR_") else stem
+        dest = dest_dir / f"{out_stem}.pdf"
 
-        documents.open(str(src))
-        from pycatia.drafting_interfaces.drawing_document import DrawingDocument
-        drawing_doc = DrawingDocument(application.active_document.com_object)
-        drawing = drawing_doc.drawing_root
+        if dest.exists():
+            policy = (conflict_policy
+                      if conflict_policy in (CONFLICT_OVERWRITE_ALL, CONFLICT_SKIP_ALL)
+                      else ask_file_conflict(dest))
+            if policy == CONFLICT_OVERWRITE_ALL:
+                conflict_policy = CONFLICT_OVERWRITE_ALL
+            elif policy == CONFLICT_SKIP_ALL:
+                conflict_policy = CONFLICT_SKIP_ALL
+                print(f"  Skipped (file exists): {dest}")
+                continue
+            elif policy == CONFLICT_SKIP:
+                print(f"  Skipped (file exists): {dest}")
+                continue
+            elif policy == CONFLICT_CANCEL:
+                print("  Conversion cancelled by user.")
+                return
+            if conflict_policy == CONFLICT_SKIP_ALL:
+                print(f"  Skipped (file exists): {dest}")
+                continue
 
-        sheets = drawing.sheets
-        sheet_count = sheets.count
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_dest = Path(tmp_dir) / f"{out_stem}.pdf"
+            print(f"Opening: {src}")
+            documents.open(str(src))
+            from pycatia.drafting_interfaces.drawing_document import DrawingDocument
+            drawing_doc = DrawingDocument(application.active_document.com_object)
+            drawing = drawing_doc.drawing_root
+            sheet_count = drawing.sheets.count
+            drawing_doc.export_data(str(tmp_dest), "pdf")
+            drawing_doc.close()
+            if not tmp_dest.exists():
+                print(f"  WARNING: export_data did not create {tmp_dest}")
+            else:
+                shutil.move(str(tmp_dest), str(dest))
+                print(f"  Exported {sheet_count} sheet(s) -> {dest}")
 
-        dest = dest_dir / f"{src.stem}.pdf"
-        drawing_doc.export_data(str(dest), "pdf")
-        if not dest.exists():
-            print(f"  WARNING: export_data did not create {dest}")
-        else:
-            print(f"  Exported {sheet_count} sheet(s) -> {dest}")
-
-        drawing_doc.close()
         print(f"Done: {src.name}\n")
 
 
-def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None):
+def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
+                   add_prefix: bool = True):
     """
     Convert CATPart/CATProduct files to STEP (.stp) using pyCATIA.
-    CATIA remains visible during processing.
+    Exports to a temp directory first, then moves to the final destination.
+    If destination exists, asks the user (Overwrite/Overwrite All/Skip/Skip All/Cancel).
     """
     from pycatia import catia
 
     caa = catia()
     application = caa.application
     application.visible = True
-
     documents = application.documents
+
+    conflict_policy = None
 
     for path in file_paths:
         src = Path(path)
         dest_dir = Path(output_folder) if output_folder else src.parent
         dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / f"{src.stem}.stp"
 
-        print(f"Opening: {src}")
+        stem = src.stem
+        out_stem = f"MD_{stem}" if add_prefix and not stem.startswith("MD_") else stem
+        dest = dest_dir / f"{out_stem}.stp"
 
-        documents.open(str(src))
-        doc = application.active_document
+        if dest.exists():
+            policy = (conflict_policy
+                      if conflict_policy in (CONFLICT_OVERWRITE_ALL, CONFLICT_SKIP_ALL)
+                      else ask_file_conflict(dest))
+            if policy == CONFLICT_OVERWRITE_ALL:
+                conflict_policy = CONFLICT_OVERWRITE_ALL
+            elif policy == CONFLICT_SKIP_ALL:
+                conflict_policy = CONFLICT_SKIP_ALL
+                print(f"  Skipped (file exists): {dest}")
+                continue
+            elif policy == CONFLICT_SKIP:
+                print(f"  Skipped (file exists): {dest}")
+                continue
+            elif policy == CONFLICT_CANCEL:
+                print("  Conversion cancelled by user.")
+                return
+            if conflict_policy == CONFLICT_SKIP_ALL:
+                print(f"  Skipped (file exists): {dest}")
+                continue
 
-        doc.export_data(str(dest), "stp")
-        print(f"  Exported -> {dest}")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_dest = Path(tmp_dir) / f"{out_stem}.stp"
+            print(f"Opening: {src}")
+            documents.open(str(src))
+            doc = application.active_document
+            doc.export_data(str(tmp_dest), "stp")
+            doc.close()
+            if not tmp_dest.exists():
+                print(f"  WARNING: export_data did not create {tmp_dest}")
+            else:
+                shutil.move(str(tmp_dest), str(dest))
+                print(f"  Exported -> {dest}")
 
-        doc.close()
         print(f"Done: {src.name}\n")
+
+
+# ---------------------------------------------------------------------------
+# Stamp part template function
+# ---------------------------------------------------------------------------
+
+def stamp_part_template(file_paths: list[str], output_folder: str | None = None):
+    """
+    For each CATPart, add the 9 standard user-defined properties if they do
+    not already exist. Properties are added as strings with empty default value.
+    The part is saved automatically after stamping.
+    """
+    from pycatia import catia
+    from pycatia.mec_mod_interfaces.part_document import PartDocument
+
+    caa = catia()
+    application = caa.application
+    application.visible = True
+    documents = application.documents
+
+    succeeded = []
+    failed    = []
+
+    for path in file_paths:
+        src = Path(path).resolve()
+        print(f"Opening: {src}")
+        try:
+            documents.open(str(src))
+            doc        = PartDocument(application.active_document.com_object)
+            product    = doc.product
+            user_props = product.user_ref_properties
+
+            existing_names: set[str] = set()
+            for i in range(1, user_props.count + 1):
+                try:
+                    existing_names.add(user_props.item(i).name)
+                except Exception:
+                    pass
+
+            added = []
+            for prop_name in PART_TEMPLATE_PROPERTIES:
+                if prop_name not in existing_names:
+                    user_props.create_string(prop_name, "")
+                    added.append(prop_name)
+                    print(f"  Added property: '{prop_name}'")
+                else:
+                    print(f"  Skipped (already exists): '{prop_name}'")
+
+            doc.save()
+            print(f"  Saved: {src.name}")
+            succeeded.append(f"{src.name} (+{len(added)} added)")
+
+        except Exception as e:
+            print(f"  ERROR processing {src.name}: {e}")
+            failed.append(f"{src.name}: {e}")
+        finally:
+            try:
+                application.active_document.close()
+            except Exception:
+                pass
+        print()  
+
+    msg = "Stamping complete.\n\n"
+    if succeeded:
+        msg += "✔ Succeeded:\n" + "\n".join(f"  {s}" for s in succeeded)
+    if failed:
+        msg += "\n\n✘ Failed:\n" + "\n".join(f"  {f}" for f in failed)
+
+    from PySide6.QtWidgets import QMessageBox
+    if failed:
+        QMessageBox.warning(None, "刷写零件模板", msg)
+    else:
+        QMessageBox.information(None, "刷写零件模板", msg)
 
 
 # ---------------------------------------------------------------------------
 # Export BOM Dialog
 # ---------------------------------------------------------------------------
 
-# All available BOM columns
-BOM_ALL_COLUMNS     = ["Level", "Part Number", "Nomenclature", "Definition", "Revision", "Source", "Material", "Quantity"]
-BOM_DEFAULT_COLUMNS = ["Level", "Part Number", "Nomenclature", "Definition", "Revision", "Source", "Material", "Quantity"]
+BOM_ALL_COLUMNS           = ["Level", "Part Number", "Nomenclature", "Definition", "Revision", "Source", "Quantity"]
+BOM_DEFAULT_COLUMNS       = ["Level", "Part Number", "Nomenclature", "Definition", "Revision", "Source", "Quantity"]
+BOM_PRESET_CUSTOM_COLUMNS = ["物料编码", "物料名称", "中文名称", "规格型号", "物料来源", "数据状态", "存货类别", "质量", "备注"]
+
 
 class ExportBOMDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Export BOM from CATProduct")
-        self.setMinimumSize(560, 520)
+        self.setMinimumSize(560, 580)
 
         self._settings = QSettings("CATIACompanion", "ExportBOMDialog")
         self._last_browse_dir = self._settings.value("last_browse_dir", "")
         self._last_output_dir = self._settings.value("last_output_dir", "")
 
+        saved_custom = self._settings.value("custom_columns", [])
+        if isinstance(saved_custom, str):
+            saved_custom = [saved_custom]
+        self._custom_columns: list[str] = list(saved_custom)
+
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        # --- CATProduct file ---
         layout.addWidget(QLabel("CATProduct file:"))
         file_row = QHBoxLayout()
         self.file_edit = QLineEdit()
@@ -630,7 +727,6 @@ class ExportBOMDialog(QDialog):
         file_row.addWidget(file_browse_btn)
         layout.addLayout(file_row)
 
-        # --- Output folder ---
         output_group = QGroupBox("Output Folder")
         output_layout = QVBoxLayout(output_group)
         self.radio_same = QRadioButton("Same folder as source file")
@@ -655,16 +751,14 @@ class ExportBOMDialog(QDialog):
         self.radio_custom.toggled.connect(self._toggle_folder_row)
         layout.addWidget(output_group)
 
-        # Restore last output folder
         if self._last_output_dir:
             self.radio_custom.setChecked(True)
             self.folder_edit.setText(self._last_output_dir)
 
-        # --- Column selector ---
         col_group = QGroupBox("Columns to Export (drag to reorder)")
-        col_layout = QHBoxLayout(col_group)
+        col_outer = QVBoxLayout(col_group)
+        col_layout = QHBoxLayout()
 
-        # Available columns (left)
         avail_layout = QVBoxLayout()
         avail_layout.addWidget(QLabel("Available:"))
         self.avail_list = QListWidget()
@@ -673,7 +767,6 @@ class ExportBOMDialog(QDialog):
         avail_layout.addWidget(self.avail_list)
         col_layout.addLayout(avail_layout)
 
-        # Arrow buttons (center)
         arrow_layout = QVBoxLayout()
         arrow_layout.addStretch()
         add_btn = QPushButton("→")
@@ -696,27 +789,53 @@ class ExportBOMDialog(QDialog):
         arrow_layout.addStretch()
         col_layout.addLayout(arrow_layout)
 
-        # Selected columns (right)
         selected_layout = QVBoxLayout()
         selected_layout.addWidget(QLabel("Selected:"))
         self.selected_list = QListWidget()
-        self.selected_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.selected_list.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.selected_list.setDefaultDropAction(Qt.DropAction.MoveAction)
         selected_layout.addWidget(self.selected_list)
         col_layout.addLayout(selected_layout)
+        col_outer.addLayout(col_layout)
 
+        add_custom_row = QHBoxLayout()
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItem("— Presets —")
+        for p in BOM_PRESET_CUSTOM_COLUMNS:
+            self.preset_combo.addItem(p)
+        self.preset_combo.currentIndexChanged.connect(self._on_preset_selected)
+        add_custom_row.addWidget(self.preset_combo)
+
+        self.custom_col_edit = QLineEdit()
+        self.custom_col_edit.setPlaceholderText("Custom CATIA property name...")
+        self.custom_col_edit.returnPressed.connect(self._add_custom_column)
+        add_custom_row.addWidget(self.custom_col_edit)
+
+        add_custom_btn = QPushButton("Add")
+        add_custom_btn.clicked.connect(self._add_custom_column)
+        add_custom_row.addWidget(add_custom_btn)
+
+        self.delete_custom_btn = QPushButton("Delete Custom")
+        self.delete_custom_btn.clicked.connect(self._delete_custom_column)
+        self.delete_custom_btn.setEnabled(False)
+        add_custom_row.addWidget(self.delete_custom_btn)
+
+        col_outer.addLayout(add_custom_row)
         layout.addWidget(col_group)
 
-        # Populate lists from saved settings
+        self.avail_list.itemSelectionChanged.connect(self._on_avail_selection_changed)
+
         saved = self._settings.value("selected_columns", BOM_DEFAULT_COLUMNS)
         if isinstance(saved, str):
             saved = [saved]
+        all_known = BOM_ALL_COLUMNS + self._custom_columns
         for col in saved:
-            self.selected_list.addItem(QListWidgetItem(col))
-        for col in BOM_ALL_COLUMNS:
+            if col in all_known:
+                self.selected_list.addItem(QListWidgetItem(col))
+        for col in all_known:
             if col not in saved:
                 self.avail_list.addItem(QListWidgetItem(col))
 
-        # --- Confirm / Cancel ---
         action_row = QHBoxLayout()
         action_row.addStretch()
         confirm_btn = QPushButton("Export")
@@ -733,10 +852,8 @@ class ExportBOMDialog(QDialog):
         self.folder_browse_btn.setEnabled(checked)
 
     def _browse_file(self):
-        file, _ = QFileDialog.getOpenFileName(
-            self, "Select CATProduct File", self._last_browse_dir,
-            "CATProduct Files (*.CATProduct);;All Files (*)"
-        )
+        file, _ = QFileDialog.getOpenFileName(self, "Select CATProduct File",
+            self._last_browse_dir, "CATProduct Files (*.CATProduct);;All Files (*)")
         if file:
             self.file_edit.setText(file)
             self._last_browse_dir = str(Path(file).parent)
@@ -744,12 +861,20 @@ class ExportBOMDialog(QDialog):
 
     def _browse_output_folder(self):
         folder = QFileDialog.getExistingDirectory(
-            self, "Select Output Folder", self._last_output_dir
-        )
+            self, "Select Output Folder", self._last_output_dir)
         if folder:
             self.folder_edit.setText(folder)
             self._last_output_dir = folder
             self._settings.setValue("last_output_dir", folder)
+
+    def _on_preset_selected(self, index: int):
+        if index <= 0:
+            return
+        label = self.preset_combo.itemText(index)
+        self.custom_col_edit.setText(label)
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.setCurrentIndex(0)
+        self.preset_combo.blockSignals(False)
 
     def _add_column(self):
         for item in self.avail_list.selectedItems():
@@ -775,23 +900,54 @@ class ExportBOMDialog(QDialog):
             self.selected_list.insertItem(row + 1, item)
             self.selected_list.setCurrentRow(row + 1)
 
+    def _add_custom_column(self):
+        label = self.custom_col_edit.text().strip()
+        if not label:
+            return
+        all_existing = (
+            [self.avail_list.item(i).text() for i in range(self.avail_list.count())] +
+            [self.selected_list.item(i).text() for i in range(self.selected_list.count())]
+        )
+        if label in all_existing:
+            QMessageBox.warning(self, "Duplicate Column", f"'{label}' already exists.")
+            return
+        self.selected_list.addItem(QListWidgetItem(label))
+        self._custom_columns.append(label)
+        self._settings.setValue("custom_columns", self._custom_columns)
+        self.custom_col_edit.clear()
+
+    def _delete_custom_column(self):
+        selected = self.avail_list.selectedItems()
+        to_delete = [item for item in selected if item.text() in self._custom_columns]
+        if not to_delete:
+            return
+        names = ", ".join(f"'{item.text()}'" for item in to_delete)
+        reply = QMessageBox.question(self, "Delete Custom Column",
+            f"Permanently delete {names}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        for item in to_delete:
+            self._custom_columns.remove(item.text())
+            self.avail_list.takeItem(self.avail_list.row(item))
+        self._settings.setValue("custom_columns", self._custom_columns)
+
+    def _on_avail_selection_changed(self):
+        selected = self.avail_list.selectedItems()
+        has_custom = any(item.text() in self._custom_columns for item in selected)
+        self.delete_custom_btn.setEnabled(has_custom)
+
     def _confirm(self):
         file_path = self.file_edit.text().strip()
         if not file_path:
             QMessageBox.warning(self, "No File", "Please select a CATProduct file.")
             return
-
-        selected_cols = [
-            self.selected_list.item(i).text()
-            for i in range(self.selected_list.count())
-        ]
+        selected_cols = [self.selected_list.item(i).text()
+                         for i in range(self.selected_list.count())]
         if not selected_cols:
             QMessageBox.warning(self, "No Columns", "Please select at least one column to export.")
             return
-
-        # Save column selection
         self._settings.setValue("selected_columns", selected_cols)
-
         if self.radio_same.isChecked():
             output_folder = None
         else:
@@ -799,8 +955,8 @@ class ExportBOMDialog(QDialog):
             if not output_folder:
                 QMessageBox.warning(self, "No Output Folder", "Please select an output folder.")
                 return
-
-        export_bom_to_excel([file_path], output_folder, columns=selected_cols)
+        export_bom_to_excel([file_path], output_folder, columns=selected_cols,
+                            custom_columns=self._custom_columns)
         self.accept()
 
 
@@ -809,58 +965,52 @@ class ExportBOMDialog(QDialog):
 # ---------------------------------------------------------------------------
 
 def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
-                        columns: list[str] | None = None):
+                        columns: list[str] | None = None,
+                        custom_columns: list[str] | None = None):
     """
     Export a hierarchical BOM from CATProduct files to Excel (.xlsx).
-    Columns are user-defined and ordered.
-    CATIA remains visible during processing.
+    Custom columns are read from CATIA user-defined properties (UserRefProperties).
+    Each product is switched to DESIGN_MODE before reading properties.
     """
     import openpyxl
     from openpyxl.styles import Font, Alignment
     from pycatia import catia
     from pycatia.product_structure_interfaces.product_document import ProductDocument
+    from pycatia.enumeration.enumeration_types import CatWorkModeType
 
     if columns is None:
         columns = BOM_DEFAULT_COLUMNS
+    if custom_columns is None:
+        custom_columns = []
 
     caa = catia()
     application = caa.application
     application.visible = True
-
     documents = application.documents
 
-    # Direct attribute names on the pyCATIA product object
     DIRECT_ATTR_MAP = {
         "Nomenclature": "nomenclature",
         "Revision":     "revision",
         "Definition":   "definition",
         "Source":       "source",
-        "Material":     "material",
     }
 
     def get_property(product, name: str) -> str:
-        """Read a standard CATIA property from a product or part."""
         attr = DIRECT_ATTR_MAP.get(name)
         if not attr:
             return ""
-
-        # Build list of targets to try, in priority order
         targets = [product]
         try:
             targets.insert(0, product.reference_product)
         except Exception:
             pass
-
         for target in targets:
-            # Try direct attribute on the product/reference_product
             try:
                 value = getattr(target, attr)
                 if value:
                     return str(value)
             except Exception:
                 pass
-
-            # Try via get_item("Part") for CATPart objects
             try:
                 part = target.get_item("Part")
                 value = getattr(part, attr)
@@ -868,41 +1018,62 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
                     return str(value)
             except Exception:
                 pass
-
         return ""
 
-    def get_material(product) -> str:
-        """Read the material from a product using the Chinese property name."""
-        return get_property(product, "Material")
+    def get_user_property(product, name: str) -> str:
+        targets = [product]
+        try:
+            targets.insert(0, product.reference_product)
+        except Exception:
+            pass
+        for target in targets:
+            try:
+                user_props = target.user_ref_properties
+                prop = user_props.item(name)
+                value = prop.value
+                if value is not None and str(value).strip():
+                    return str(value)
+            except Exception:
+                pass
+            try:
+                part = target.get_item("Part")
+                user_props = part.user_ref_properties
+                prop = user_props.item(name)
+                value = prop.value
+                if value is not None and str(value).strip():
+                    return str(value)
+            except Exception:
+                pass
+        return ""
 
     def traverse(product, rows: list, level: int):
-        """Recursively traverse the assembly tree and collect BOM rows."""
         try:
             pn = product.part_number
         except Exception:
             name = product.name
             pn = name.rsplit(".", 1)[0] if "." in name else name
-            print(f"    part_number failed, using instance name: {pn}")
+
+        try:
+            product.apply_work_mode(CatWorkModeType.DESIGN_MODE)
+        except Exception as e:
+            print(f"  {'  ' * level}  -> apply_work_mode failed: {e}")
+
         row = {"Level": level, "Part Number": pn}
-        #print(row)#截止到这里row有两个内容，有零件号
         print(f"  {'  ' * level}[Level {level}] {pn}")
 
         for col in columns:
             if col in DIRECT_ATTR_MAP:
-                row[col] = get_property(product, col)#到这里之后Part Number变成了空值
+                row[col] = get_property(product, col)
+            elif col in custom_columns:
+                row[col] = get_user_property(product, col)
 
         rows.append(row)
 
         try:
             products = product.products
             count = products.count
-            print(f"  {'  ' * level}  -> {count} child(ren) found")
-
             if count == 0:
-                # This is a leaf CATPart — no children to recurse into
                 return
-
-            # Group children by part number to compute quantities
             children = {}
             for i in range(1, count + 1):
                 try:
@@ -915,21 +1086,18 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
                         except Exception:
                             name = child.name
                             pn = name.rsplit(".", 1)[0] if "." in name else name
-                            print(f"  {'  ' * level}  -> Using instance name as part number: {pn}")
                 except Exception as e:
                     print(f"  {'  ' * level}  -> Skipping child {i}: {e}")
                     continue
                 if pn not in children:
                     children[pn] = {"products": child, "qty": 0}
                 children[pn]["qty"] += 1
-
             for pn, data in children.items():
                 child_rows = []
                 traverse(data["products"], child_rows, level + 1)
                 if child_rows:
                     child_rows[0]["Quantity"] = data["qty"]
                 rows.extend(child_rows)
-
         except Exception as e:
             print(f"  {'  ' * level}  -> Exception accessing children: {e}")
 
@@ -939,33 +1107,23 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / f"{src.stem}_BOM.xlsx"
 
-        # Check if the file is already open in Excel
         if dest.exists():
             try:
-                # Try opening the file exclusively to check if it's locked
                 with open(dest, "a+b"):
                     pass
             except PermissionError:
-                from PySide6.QtWidgets import QMessageBox
-                reply = QMessageBox.question(
-                    None,
-                    "File In Use",
+                reply = QMessageBox.question(None, "File In Use",
                     f"The file is currently open in Excel:\n{dest}\n\n"
                     f"Please close it in Excel, then click Retry, or Cancel to abort.",
-                    QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel
-                )
+                    QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel)
                 if reply == QMessageBox.StandardButton.Cancel:
-                    print(f"  Aborted: {dest} is open in Excel.")
                     continue
-                # Retry check
                 try:
                     with open(dest, "a+b"):
                         pass
                 except PermissionError:
-                    QMessageBox.critical(
-                        None, "Still In Use",
-                        f"The file is still open. Please close it and try again.\n{dest}"
-                    )
+                    QMessageBox.critical(None, "Still In Use",
+                        f"The file is still open. Please close it and try again.\n{dest}")
                     continue
 
         print(f"Opening: {src}")
@@ -976,19 +1134,15 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
         rows = []
         traverse(root_product, rows, level=0)
 
-        # Write to Excel — plain, no formatting
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "BOM"
-
         center = Alignment(horizontal="center")
 
-        # Header row — bold only
         for col_idx, col_name in enumerate(columns, start=1):
             cell = ws.cell(row=1, column=col_idx, value=col_name)
             cell.font = Font(bold=True)
 
-        # Data rows
         for row_idx, row in enumerate(rows, start=2):
             level = row.get("Level", 0)
             for col_idx, col_name in enumerate(columns, start=1):
@@ -1002,7 +1156,6 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
                 if col_name in ("Level", "Quantity"):
                     cell.alignment = center
 
-        # Auto column widths based on content
         for col_idx, col_name in enumerate(columns, start=1):
             col_letter = ws.cell(row=1, column=col_idx).column_letter
             max_width = len(col_name)
@@ -1014,7 +1167,6 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
 
         wb.save(str(dest))
         print(f"  BOM exported -> {dest}")
-
         product_doc.close()
         print(f"Done: {src.name}\n")
 
@@ -1026,10 +1178,8 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("CATIA Companion")
-
     window = MainWindow()
     window.show()
-
     sys.exit(app.exec())
 
 
