@@ -1240,7 +1240,8 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
         try:
             child_count = product.products.count
             row["Type"] = "装配体" if child_count > 0 else "零件"
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Could not determine Type for {pn}: {e}")
             row["Type"] = ""
         logger.debug(f"  {'  ' * level}[Level {level}] {pn}")
 
