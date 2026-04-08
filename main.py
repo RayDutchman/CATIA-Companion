@@ -111,7 +111,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
 
-        label = QLabel("Welcome to CATIA Companion")
+        label = QLabel("欢迎使用 CATIA Companion")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(label)
 
@@ -126,7 +126,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._log_view)
 
         # Open Log File button
-        open_log_btn = QPushButton("Open Log File")
+        open_log_btn = QPushButton("打开日志文件")
         open_log_btn.clicked.connect(self._open_log_file)
         layout.addWidget(open_log_btn)
 
@@ -138,7 +138,7 @@ class MainWindow(QMainWindow):
 
         _log_emitter.message_logged.connect(self._append_log)
 
-        self.statusBar().showMessage("Ready")
+        self.statusBar().showMessage("就绪")
 
     def _append_log(self, message: str):
         self._log_view.appendPlainText(message)
@@ -157,21 +157,21 @@ class MainWindow(QMainWindow):
                     stderr=subprocess.DEVNULL,
                 )
         except Exception as e:
-            QMessageBox.warning(self, "Cannot Open Log File",
-                f"Failed to open the log file:\n{_log_file}\n\n{e}")
+            QMessageBox.warning(self, "无法打开日志文件",
+                f"无法打开日志文件：\n{_log_file}\n\n{e}")
 
     def _setup_menu_bar(self):
         menu_bar = self.menuBar()
 
         # --- File ---
-        file_menu = menu_bar.addMenu("File")
-        file_menu.addAction(QAction("New", self))
-        file_menu.addAction(QAction("Open...", self))
-        file_menu.addAction(QAction("Save", self))
-        file_menu.addAction(QAction("Save As...", self))
+        file_menu = menu_bar.addMenu("文件")
+        file_menu.addAction(QAction("新建", self))
+        file_menu.addAction(QAction("打开...", self))
+        file_menu.addAction(QAction("保存", self))
+        file_menu.addAction(QAction("另存为...", self))
         file_menu.addSeparator()
 
-        convert_menu = file_menu.addMenu("Convert")
+        convert_menu = file_menu.addMenu("转换")
         convert_part_action = QAction("从CATPart/CATProduct导出stp", self)
         convert_part_action.triggered.connect(self._open_convert_part_dialog)
         convert_menu.addAction(convert_part_action)
@@ -179,30 +179,30 @@ class MainWindow(QMainWindow):
         convert_drawing_action.triggered.connect(self._open_convert_drawing_dialog)
         convert_menu.addAction(convert_drawing_action)
 
-        export_bom_action = QAction("Export BOM from CATProduct", self)
+        export_bom_action = QAction("从CATProduct导出BOM", self)
         export_bom_action.triggered.connect(self._open_export_bom_dialog)
         file_menu.addAction(export_bom_action)
 
         file_menu.addSeparator()
-        quit_action = QAction("Quit", self)
+        quit_action = QAction("退出", self)
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
 
         # --- Edit ---
-        edit_menu = menu_bar.addMenu("Edit")
-        edit_menu.addAction(QAction("Undo", self))
-        edit_menu.addAction(QAction("Redo", self))
+        edit_menu = menu_bar.addMenu("编辑")
+        edit_menu.addAction(QAction("撤销", self))
+        edit_menu.addAction(QAction("重做", self))
         edit_menu.addSeparator()
-        edit_menu.addAction(QAction("Cut", self))
-        edit_menu.addAction(QAction("Copy", self))
-        edit_menu.addAction(QAction("Paste", self))
+        edit_menu.addAction(QAction("剪切", self))
+        edit_menu.addAction(QAction("复制", self))
+        edit_menu.addAction(QAction("粘贴", self))
 
         # --- Tools ---
-        tools_menu = menu_bar.addMenu("Tools")
-        copy_font_action = QAction("Copy Font File to CATIA folder", self)
+        tools_menu = menu_bar.addMenu("工具")
+        copy_font_action = QAction("复制字体文件到CATIA目录", self)
         copy_font_action.triggered.connect(self._copy_font_to_catia)
         tools_menu.addAction(copy_font_action)
-        copy_iso_action = QAction("Copy ISO.xml File to CATIA folder", self)
+        copy_iso_action = QAction("复制ISO.xml到CATIA目录", self)
         copy_iso_action.triggered.connect(self._copy_iso_to_catia)
         tools_menu.addAction(copy_iso_action)
         pojie_action = QAction("PoJie", self)
@@ -213,17 +213,17 @@ class MainWindow(QMainWindow):
         tools_menu.addAction(stamp_action)
 
         # --- View ---
-        view_menu = menu_bar.addMenu("View")
-        view_menu.addAction(QAction("Zoom In", self))
-        view_menu.addAction(QAction("Zoom Out", self))
-        view_menu.addAction(QAction("Reset Zoom", self))
+        view_menu = menu_bar.addMenu("视图")
+        view_menu.addAction(QAction("放大", self))
+        view_menu.addAction(QAction("缩小", self))
+        view_menu.addAction(QAction("重置缩放", self))
         view_menu.addSeparator()
-        view_menu.addAction(QAction("Toggle Status Bar", self))
+        view_menu.addAction(QAction("切换状态栏", self))
 
         # --- Help ---
-        help_menu = menu_bar.addMenu("Help")
-        help_menu.addAction(QAction("Documentation", self))
-        about_action = QAction("About CATIA Companion", self)
+        help_menu = menu_bar.addMenu("帮助")
+        help_menu.addAction(QAction("文档", self))
+        about_action = QAction("关于 CATIA Companion", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
 
@@ -233,10 +233,10 @@ class MainWindow(QMainWindow):
     def _open_convert_part_dialog(self):
         dialog = ConvertDialog(
             parent=self,
-            title="Convert CATPart/CATProduct to STEP",
-            file_label="Selected CATPart/CATProduct files:",
+            title="将CATPart/CATProduct导出为STP",
+            file_label="已选CATPart/CATProduct文件:",
             file_filter="CATIA Part/Product Files (*.CATPart *.CATProduct);;All Files (*)",
-            no_files_msg="Please select at least one CATPart or CATProduct file.",
+            no_files_msg="请至少选择一个CATPart或CATProduct文件。",
             conversion_fn=CATPart_to_STP,
             settings_key="CATPart",
             show_prefix_option=True,
@@ -248,10 +248,10 @@ class MainWindow(QMainWindow):
     def _open_convert_drawing_dialog(self):
         dialog = ConvertDialog(
             parent=self,
-            title="Convert CATDrawing to PDF",
-            file_label="Selected CATDrawing files:",
+            title="将CATDrawing导出为PDF",
+            file_label="已选CATDrawing文件:",
             file_filter="CATDrawing Files (*.CATDrawing);;All Files (*)",
-            no_files_msg="Please select at least one CATDrawing file.",
+            no_files_msg="请至少选择一个CATDrawing文件。",
             conversion_fn=CATDrawing_to_PDF,
             settings_key="CATDrawing",
             show_prefix_option=True,
@@ -279,28 +279,28 @@ class MainWindow(QMainWindow):
     def _copy_file_to_catia(self, file_name: str, relative_dest: Path):
         src_file = resource_path(file_name)
         if not src_file.exists():
-            QMessageBox.warning(self, "File Not Found",
-                f"Could not find '{file_name}' in the working folder:\n{src_file.parent}")
+            QMessageBox.warning(self, "文件未找到",
+                f"在工作目录中找不到 '{file_name}'：\n{src_file.parent}")
             return
 
         catia_root = detect_catia_root()
         if catia_root:
-            reply = QMessageBox.question(self, "CATIA Installation Detected",
-                f"CATIA installation found at:\n{catia_root}\n\nUse this folder?",
+            reply = QMessageBox.question(self, "检测到CATIA安装",
+                f"检测到CATIA安装路径：\n{catia_root}\n\n是否使用该目录？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if reply == QMessageBox.StandardButton.No:
                 catia_root = None
 
         if not catia_root:
             catia_root = QFileDialog.getExistingDirectory(self,
-                "Select CATIA Installation Folder (e.g. C:\\Program Files\\Dassault Systemes\\B28)", "")
+                "选择CATIA安装目录（例如 C:\\Program Files\\Dassault Systemes\\B28）", "")
             if not catia_root:
                 return
 
         dest_dir = Path(catia_root) / relative_dest
         if not dest_dir.exists():
-            reply = QMessageBox.question(self, "Folder Not Found",
-                f"The target folder does not exist:\n{dest_dir}\n\nDo you want to create it?",
+            reply = QMessageBox.question(self, "文件夹未找到",
+                f"目标文件夹不存在：\n{dest_dir}\n\n是否要创建该文件夹？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if reply == QMessageBox.StandardButton.Yes:
                 dest_dir.mkdir(parents=True, exist_ok=True)
@@ -310,44 +310,44 @@ class MainWindow(QMainWindow):
         dest_file = dest_dir / file_name
         try:
             shutil.copy2(str(src_file), str(dest_file))
-            QMessageBox.information(self, "Success",
-                f"'{file_name}' has been copied to:\n{dest_file}")
+            QMessageBox.information(self, "成功",
+                f"'{file_name}' 已成功复制到：\n{dest_file}")
         except PermissionError:
-            QMessageBox.critical(self, "Permission Denied",
-                f"Could not copy the file. Try running the application as Administrator.\n\nTarget:\n{dest_file}")
+            QMessageBox.critical(self, "权限不足",
+                f"无法复制文件，请以管理员身份运行程序。\n\n目标路径：\n{dest_file}")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"An unexpected error occurred:\n{e}")
+            QMessageBox.critical(self, "错误", f"发生意外错误：\n{e}")
 
     def _pojie(self):
         src_dir = resource_path("Pojie")
         if not src_dir.exists() or not src_dir.is_dir():
-            QMessageBox.warning(self, "Folder Not Found",
-                f"Could not find the 'Pojie' folder at:\n{src_dir.parent}")
+            QMessageBox.warning(self, "文件夹未找到",
+                f"找不到 'Pojie' 文件夹：\n{src_dir.parent}")
             return
 
         catia_root = detect_catia_root()
         if catia_root:
-            reply = QMessageBox.question(self, "CATIA Installation Detected",
-                f"CATIA installation found at:\n{catia_root}\n\nUse this folder?",
+            reply = QMessageBox.question(self, "检测到CATIA安装",
+                f"检测到CATIA安装路径：\n{catia_root}\n\n是否使用该目录？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if reply == QMessageBox.StandardButton.No:
                 catia_root = None
 
         if not catia_root:
             catia_root = QFileDialog.getExistingDirectory(self,
-                "Select CATIA Installation Folder (e.g. C:\\Program Files\\Dassault Systemes\\B28)", "")
+                "选择CATIA安装目录（例如 C:\\Program Files\\Dassault Systemes\\B28）", "")
             if not catia_root:
                 return
 
         dest_dir = Path(catia_root) / "win_b64" / "code" / "bin"
         if not dest_dir.exists():
-            QMessageBox.critical(self, "Folder Not Found",
-                f"The target folder does not exist:\n{dest_dir}\n\nPlease check your CATIA installation.")
+            QMessageBox.critical(self, "文件夹未找到",
+                f"目标文件夹不存在：\n{dest_dir}\n\n请检查您的CATIA安装。")
             return
 
         files = [f for f in src_dir.iterdir() if f.is_file()]
         if not files:
-            QMessageBox.warning(self, "Empty Folder", "The 'Pojie' folder contains no files.")
+            QMessageBox.warning(self, "文件夹为空", "'Pojie' 文件夹中没有文件。")
             return
 
         try:
@@ -357,21 +357,21 @@ class MainWindow(QMainWindow):
                 shutil.copy2(str(src_file), str(dest_file))
                 copied.append(src_file.name)
                 logger.info(f"  Copied: {src_file.name} -> {dest_file}")
-            QMessageBox.information(self, "Success",
-                f"Successfully copied {len(copied)} file(s) to:\n{dest_dir}\n\n" + "\n".join(copied))
+            QMessageBox.information(self, "成功",
+                f"已成功复制 {len(copied)} 个文件到：\n{dest_dir}\n\n" + "\n".join(copied))
         except PermissionError:
-            QMessageBox.critical(self, "Permission Denied",
-                f"Could not copy files. Try running the application as Administrator.\n\nTarget:\n{dest_dir}")
+            QMessageBox.critical(self, "权限不足",
+                f"无法复制文件，请以管理员身份运行程序。\n\n目标路径：\n{dest_dir}")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"An unexpected error occurred:\n{e}")
+            QMessageBox.critical(self, "错误", f"发生意外错误：\n{e}")
 
     def _open_stamp_part_template_dialog(self):
         dialog = ConvertDialog(
             parent=self,
             title="刷写零件模板",
-            file_label="Selected CATPart files:",
+            file_label="已选CATPart文件:",
             file_filter="CATIA Part Files (*.CATPart);;All Files (*)",
-            no_files_msg="Please select at least one CATPart file.",
+            no_files_msg="请至少选择一个CATPart文件。",
             conversion_fn=stamp_part_template,
             settings_key="StampPartTemplate"
         )
@@ -419,11 +419,11 @@ class ConvertDialog(QDialog):
         layout.addWidget(self.file_list)
 
         btn_row = QHBoxLayout()
-        browse_btn = QPushButton("Browse...")
+        browse_btn = QPushButton("浏览...")
         browse_btn.clicked.connect(self._browse_files)
-        remove_btn = QPushButton("Remove Selected")
+        remove_btn = QPushButton("移除所选")
         remove_btn.clicked.connect(self._remove_selected)
-        remove_all_btn = QPushButton("Remove All")
+        remove_all_btn = QPushButton("全部移除")
         remove_all_btn.clicked.connect(self._remove_all)
         btn_row.addWidget(browse_btn)
         btn_row.addWidget(remove_btn)
@@ -433,10 +433,10 @@ class ConvertDialog(QDialog):
 
         # Output folder — hidden for stamp dialog
         if settings_key != "StampPartTemplate":
-            output_group = QGroupBox("Output Folder")
+            output_group = QGroupBox("输出文件夹")
             output_layout = QVBoxLayout(output_group)
-            self.radio_same = QRadioButton("Same folder as source files")
-            self.radio_custom = QRadioButton("Choose a folder:")
+            self.radio_same = QRadioButton("与源文件相同目录")
+            self.radio_custom = QRadioButton("自定义目录:")
             self.radio_same.setChecked(True)
             self.btn_group = QButtonGroup(self)
             self.btn_group.addButton(self.radio_same)
@@ -445,10 +445,10 @@ class ConvertDialog(QDialog):
             output_layout.addWidget(self.radio_custom)
             folder_row = QHBoxLayout()
             self.folder_edit = QLineEdit()
-            self.folder_edit.setPlaceholderText("Select output folder...")
+            self.folder_edit.setPlaceholderText("选择输出文件夹...")
             self.folder_edit.setReadOnly(True)
             self.folder_edit.setEnabled(False)
-            self.folder_browse_btn = QPushButton("Browse...")
+            self.folder_browse_btn = QPushButton("浏览...")
             self.folder_browse_btn.setEnabled(False)
             self.folder_browse_btn.clicked.connect(self._browse_output_folder)
             folder_row.addWidget(self.folder_edit)
@@ -471,7 +471,7 @@ class ConvertDialog(QDialog):
             saved_prefix_value = self._settings.value("prefix_value", prefix)
 
             prefix_row = QHBoxLayout()
-            self.prefix_checkbox = QCheckBox("Add prefix:")
+            self.prefix_checkbox = QCheckBox("添加前缀:")
             self.prefix_checkbox.setChecked(saved_add_prefix)
             self.prefix_edit = QLineEdit(saved_prefix_value)
             self.prefix_edit.setEnabled(saved_add_prefix)
@@ -486,7 +486,7 @@ class ConvertDialog(QDialog):
             saved_suffix_value = self._settings.value("suffix_value", "")
 
             suffix_row = QHBoxLayout()
-            self.suffix_checkbox = QCheckBox("Add suffix:")
+            self.suffix_checkbox = QCheckBox("添加后缀:")
             self.suffix_checkbox.setChecked(saved_add_suffix)
             self.suffix_edit = QLineEdit(saved_suffix_value)
             self.suffix_edit.setEnabled(saved_add_suffix)
@@ -508,10 +508,10 @@ class ConvertDialog(QDialog):
 
         action_row = QHBoxLayout()
         action_row.addStretch()
-        confirm_btn = QPushButton("Confirm")
+        confirm_btn = QPushButton("确认")
         confirm_btn.setDefault(True)
         confirm_btn.clicked.connect(self._confirm)
-        cancel_btn = QPushButton("Cancel")
+        cancel_btn = QPushButton("取消")
         cancel_btn.clicked.connect(self.reject)
         action_row.addWidget(confirm_btn)
         action_row.addWidget(cancel_btn)
@@ -523,7 +523,7 @@ class ConvertDialog(QDialog):
 
     def _browse_files(self):
         files, _ = QFileDialog.getOpenFileNames(
-            self, "Select Files", self._last_browse_dir, self._file_filter)
+            self, "选择文件", self._last_browse_dir, self._file_filter)
         if files:
             self._last_browse_dir = str(Path(files[0]).parent)
             self._settings.setValue("last_browse_dir", self._last_browse_dir)
@@ -549,7 +549,7 @@ class ConvertDialog(QDialog):
 
     def _browse_output_folder(self):
         folder = QFileDialog.getExistingDirectory(
-            self, "Select Output Folder", self._last_output_dir)
+            self, "选择输出文件夹", self._last_output_dir)
         if folder:
             self.folder_edit.setText(folder)
             self._last_output_dir = folder
@@ -558,7 +558,7 @@ class ConvertDialog(QDialog):
     def _confirm(self):
         files = [self.file_list.item(i).text() for i in range(self.file_list.count())]
         if not files:
-            QMessageBox.warning(self, "No Files", self._no_files_msg)
+            QMessageBox.warning(self, "未选择文件", self._no_files_msg)
             return
 
         if self.radio_same is None:
@@ -568,7 +568,7 @@ class ConvertDialog(QDialog):
         else:
             output_folder = self.folder_edit.text().strip()
             if not output_folder:
-                QMessageBox.warning(self, "No Output Folder", "Please select an output folder.")
+                QMessageBox.warning(self, "未选择输出文件夹", "请选择一个输出文件夹。")
                 return
 
         if self.prefix_checkbox is not None:
@@ -665,21 +665,21 @@ def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
 
         if dest.exists():
             if bulk_action == "skip_all":
-                print(f"  Skipped (skip all): {dest}")
+                logger.info(f"  Skipped (skip all): {dest}")
                 continue
             if bulk_action == "overwrite_all":
                 dest.unlink()
             else:
                 msg = QMessageBox()
-                msg.setWindowTitle("File Already Exists")
-                msg.setText(f'"{dest.name}" already exists in the output folder.')
+                msg.setWindowTitle("文件已存在")
+                msg.setText(f'"{dest.name}" 已存在于输出文件夹中。')
                 msg.setInformativeText(str(dest.parent))
                 msg.setIcon(QMessageBox.Icon.Warning)
-                skip_btn          = msg.addButton("Skip",         QMessageBox.ButtonRole.RejectRole)
-                skip_all_btn      = msg.addButton("Skip All",     QMessageBox.ButtonRole.RejectRole)
-                overwrite_btn     = msg.addButton("Overwrite",    QMessageBox.ButtonRole.AcceptRole)
-                overwrite_all_btn = msg.addButton("Overwrite All", QMessageBox.ButtonRole.AcceptRole)
-                cancel_btn        = msg.addButton("Cancel",       QMessageBox.ButtonRole.DestructiveRole)
+                skip_btn          = msg.addButton("跳过",     QMessageBox.ButtonRole.RejectRole)
+                skip_all_btn      = msg.addButton("全部跳过", QMessageBox.ButtonRole.RejectRole)
+                overwrite_btn     = msg.addButton("覆盖",     QMessageBox.ButtonRole.AcceptRole)
+                overwrite_all_btn = msg.addButton("全部覆盖", QMessageBox.ButtonRole.AcceptRole)
+                cancel_btn        = msg.addButton("取消",     QMessageBox.ButtonRole.DestructiveRole)
                 msg.exec()
                 clicked = msg.clickedButton()
                 if clicked is cancel_btn:
@@ -687,10 +687,10 @@ def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
                     break
                 elif clicked is skip_all_btn:
                     bulk_action = "skip_all"
-                    print(f"  Skipped (skip all): {dest}")
+                    logger.info(f"  Skipped (skip all): {dest}")
                     continue
                 elif clicked is skip_btn:
-                    print(f"  Skipped: {dest}")
+                    logger.info(f"  Skipped: {dest}")
                     continue
                 elif clicked is overwrite_all_btn:
                     bulk_action = "overwrite_all"
@@ -698,7 +698,6 @@ def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
                 else:  # overwrite_btn
                     dest.unlink()
 
-        print(f"Opening: {src}")
         documents.open(str(src))
         from pycatia.drafting_interfaces.drawing_document import DrawingDocument
         drawing_doc = DrawingDocument(application.active_document.com_object)
@@ -753,21 +752,21 @@ def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
         logger.info(f"Opening: {src}")
         if dest.exists():
             if bulk_action == "skip_all":
-                print(f"  Skipped (skip all): {dest}")
+                logger.info(f"  Skipped (skip all): {dest}")
                 continue
             if bulk_action == "overwrite_all":
                 dest.unlink()
             else:
                 msg = QMessageBox()
-                msg.setWindowTitle("File Already Exists")
-                msg.setText(f'"{dest.name}" already exists in the output folder.')
+                msg.setWindowTitle("文件已存在")
+                msg.setText(f'"{dest.name}" 已存在于输出文件夹中。')
                 msg.setInformativeText(str(dest.parent))
                 msg.setIcon(QMessageBox.Icon.Warning)
-                skip_btn          = msg.addButton("Skip",         QMessageBox.ButtonRole.RejectRole)
-                skip_all_btn      = msg.addButton("Skip All",     QMessageBox.ButtonRole.RejectRole)
-                overwrite_btn     = msg.addButton("Overwrite",    QMessageBox.ButtonRole.AcceptRole)
-                overwrite_all_btn = msg.addButton("Overwrite All", QMessageBox.ButtonRole.AcceptRole)
-                cancel_btn        = msg.addButton("Cancel",       QMessageBox.ButtonRole.DestructiveRole)
+                skip_btn          = msg.addButton("跳过",     QMessageBox.ButtonRole.RejectRole)
+                skip_all_btn      = msg.addButton("全部跳过", QMessageBox.ButtonRole.RejectRole)
+                overwrite_btn     = msg.addButton("覆盖",     QMessageBox.ButtonRole.AcceptRole)
+                overwrite_all_btn = msg.addButton("全部覆盖", QMessageBox.ButtonRole.AcceptRole)
+                cancel_btn        = msg.addButton("取消",     QMessageBox.ButtonRole.DestructiveRole)
                 msg.exec()
                 clicked = msg.clickedButton()
                 if clicked is cancel_btn:
@@ -775,10 +774,10 @@ def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
                     break
                 elif clicked is skip_all_btn:
                     bulk_action = "skip_all"
-                    print(f"  Skipped (skip all): {dest}")
+                    logger.info(f"  Skipped (skip all): {dest}")
                     continue
                 elif clicked is skip_btn:
-                    print(f"  Skipped: {dest}")
+                    logger.info(f"  Skipped: {dest}")
                     continue
                 elif clicked is overwrite_all_btn:
                     bulk_action = "overwrite_all"
@@ -786,7 +785,7 @@ def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
                 else:  # overwrite_btn
                     dest.unlink()
 
-        print(f"Opening: {src}")
+        logger.info(f"Opening: {src}")
         documents.open(str(src))
         doc = application.active_document
         doc.export_data(str(dest), "stp")
@@ -871,15 +870,15 @@ def stamp_part_template(file_paths: list[str], output_folder: str | None = None)
 # Export BOM Dialog
 # ---------------------------------------------------------------------------
 
-BOM_ALL_COLUMNS       = ["Level", "Part Number", "Nomenclature", "Definition", "Revision", "Source", "Quantity"]
-BOM_DEFAULT_COLUMNS   = ["Level", "Part Number", "Nomenclature", "Definition", "Revision", "Source", "Quantity"]
+BOM_ALL_COLUMNS       = ["Level", "Part Number", "Type", "Nomenclature", "Definition", "Revision", "Source", "Quantity"]
+BOM_DEFAULT_COLUMNS   = ["Level", "Part Number", "Type", "Nomenclature", "Definition", "Revision", "Source", "Quantity"]
 BOM_PRESET_CUSTOM_COLUMNS = ["物料编码", "物料名称", "中文名称", "规格型号", "物料来源", "数据状态", "存货类别", "质量", "备注"]
 
 
 class ExportBOMDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Export BOM from CATProduct")
+        self.setWindowTitle("从CATProduct导出BOM")
         self.setMinimumSize(560, 580)
 
         self._settings = QSettings("CATIACompanion", "ExportBOMDialog")
@@ -895,21 +894,21 @@ class ExportBOMDialog(QDialog):
         layout.setSpacing(10)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        layout.addWidget(QLabel("CATProduct file:"))
+        layout.addWidget(QLabel("CATProduct文件:"))
         file_row = QHBoxLayout()
         self.file_edit = QLineEdit()
-        self.file_edit.setPlaceholderText("Select a CATProduct file...")
+        self.file_edit.setPlaceholderText("选择一个CATProduct文件...")
         self.file_edit.setReadOnly(True)
-        file_browse_btn = QPushButton("Browse...")
+        file_browse_btn = QPushButton("浏览...")
         file_browse_btn.clicked.connect(self._browse_file)
         file_row.addWidget(self.file_edit)
         file_row.addWidget(file_browse_btn)
         layout.addLayout(file_row)
 
-        output_group = QGroupBox("Output Folder")
+        output_group = QGroupBox("输出文件夹")
         output_layout = QVBoxLayout(output_group)
-        self.radio_same = QRadioButton("Same folder as source file")
-        self.radio_custom = QRadioButton("Choose a folder:")
+        self.radio_same = QRadioButton("与源文件相同目录")
+        self.radio_custom = QRadioButton("自定义目录:")
         self.radio_same.setChecked(True)
         self.btn_group = QButtonGroup(self)
         self.btn_group.addButton(self.radio_same)
@@ -918,10 +917,10 @@ class ExportBOMDialog(QDialog):
         output_layout.addWidget(self.radio_custom)
         folder_row = QHBoxLayout()
         self.folder_edit = QLineEdit()
-        self.folder_edit.setPlaceholderText("Select output folder...")
+        self.folder_edit.setPlaceholderText("选择输出文件夹...")
         self.folder_edit.setReadOnly(True)
         self.folder_edit.setEnabled(False)
-        self.folder_browse_btn = QPushButton("Browse...")
+        self.folder_browse_btn = QPushButton("浏览...")
         self.folder_browse_btn.setEnabled(False)
         self.folder_browse_btn.clicked.connect(self._browse_output_folder)
         folder_row.addWidget(self.folder_edit)
@@ -934,12 +933,12 @@ class ExportBOMDialog(QDialog):
             self.radio_custom.setChecked(True)
             self.folder_edit.setText(self._last_output_dir)
 
-        col_group = QGroupBox("Columns to Export (drag to reorder)")
+        col_group = QGroupBox("导出列（拖动以排序）")
         col_outer = QVBoxLayout(col_group)
         col_layout = QHBoxLayout()
 
         avail_layout = QVBoxLayout()
-        avail_layout.addWidget(QLabel("Available:"))
+        avail_layout.addWidget(QLabel("可用列:"))
         self.avail_list = QListWidget()
         self.avail_list.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
         self.avail_list.setDefaultDropAction(Qt.DropAction.MoveAction)
@@ -969,7 +968,7 @@ class ExportBOMDialog(QDialog):
         col_layout.addLayout(arrow_layout)
 
         selected_layout = QVBoxLayout()
-        selected_layout.addWidget(QLabel("Selected:"))
+        selected_layout.addWidget(QLabel("已选列:"))
         self.selected_list = QListWidget()
         self.selected_list.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
         self.selected_list.setDefaultDropAction(Qt.DropAction.MoveAction)
@@ -986,15 +985,15 @@ class ExportBOMDialog(QDialog):
         add_custom_row.addWidget(self.preset_combo)
 
         self.custom_col_edit = QLineEdit()
-        self.custom_col_edit.setPlaceholderText("Custom CATIA property name...")
+        self.custom_col_edit.setPlaceholderText("自定义CATIA属性名...")
         self.custom_col_edit.returnPressed.connect(self._add_custom_column)
         add_custom_row.addWidget(self.custom_col_edit)
 
-        add_custom_btn = QPushButton("Add")
+        add_custom_btn = QPushButton("添加")
         add_custom_btn.clicked.connect(self._add_custom_column)
         add_custom_row.addWidget(add_custom_btn)
 
-        self.delete_custom_btn = QPushButton("Delete Custom")
+        self.delete_custom_btn = QPushButton("删除自定义")
         self.delete_custom_btn.clicked.connect(self._delete_custom_column)
         self.delete_custom_btn.setEnabled(False)
         add_custom_row.addWidget(self.delete_custom_btn)
@@ -1017,10 +1016,10 @@ class ExportBOMDialog(QDialog):
 
         action_row = QHBoxLayout()
         action_row.addStretch()
-        confirm_btn = QPushButton("Export")
+        confirm_btn = QPushButton("导出")
         confirm_btn.setDefault(True)
         confirm_btn.clicked.connect(self._confirm)
-        cancel_btn = QPushButton("Cancel")
+        cancel_btn = QPushButton("取消")
         cancel_btn.clicked.connect(self.reject)
         action_row.addWidget(confirm_btn)
         action_row.addWidget(cancel_btn)
@@ -1031,7 +1030,7 @@ class ExportBOMDialog(QDialog):
         self.folder_browse_btn.setEnabled(checked)
 
     def _browse_file(self):
-        file, _ = QFileDialog.getOpenFileName(self, "Select CATProduct File",
+        file, _ = QFileDialog.getOpenFileName(self, "选择CATProduct文件",
             self._last_browse_dir, "CATProduct Files (*.CATProduct);;All Files (*)")
         if file:
             self.file_edit.setText(file)
@@ -1040,7 +1039,7 @@ class ExportBOMDialog(QDialog):
 
     def _browse_output_folder(self):
         folder = QFileDialog.getExistingDirectory(
-            self, "Select Output Folder", self._last_output_dir)
+            self, "选择输出文件夹", self._last_output_dir)
         if folder:
             self.folder_edit.setText(folder)
             self._last_output_dir = folder
@@ -1088,7 +1087,7 @@ class ExportBOMDialog(QDialog):
             [self.selected_list.item(i).text() for i in range(self.selected_list.count())]
         )
         if label in all_existing:
-            QMessageBox.warning(self, "Duplicate Column", f"'{label}' already exists.")
+            QMessageBox.warning(self, "列名重复", f"'{label}' 已存在。")
             return
         self.selected_list.addItem(QListWidgetItem(label))
         self._custom_columns.append(label)
@@ -1101,8 +1100,8 @@ class ExportBOMDialog(QDialog):
         if not to_delete:
             return
         names = ", ".join(f"'{item.text()}'" for item in to_delete)
-        reply = QMessageBox.question(self, "Delete Custom Column",
-            f"Permanently delete {names}?",
+        reply = QMessageBox.question(self, "删除自定义列",
+            f"确认永久删除 {names}？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
             return
@@ -1119,12 +1118,12 @@ class ExportBOMDialog(QDialog):
     def _confirm(self):
         file_path = self.file_edit.text().strip()
         if not file_path:
-            QMessageBox.warning(self, "No File", "Please select a CATProduct file.")
+            QMessageBox.warning(self, "未选择文件", "请选择一个CATProduct文件。")
             return
         selected_cols = [self.selected_list.item(i).text()
                          for i in range(self.selected_list.count())]
         if not selected_cols:
-            QMessageBox.warning(self, "No Columns", "Please select at least one column to export.")
+            QMessageBox.warning(self, "未选择列", "请至少选择一列进行导出。")
             return
         self._settings.setValue("selected_columns", selected_cols)
         if self.radio_same.isChecked():
@@ -1132,7 +1131,7 @@ class ExportBOMDialog(QDialog):
         else:
             output_folder = self.folder_edit.text().strip()
             if not output_folder:
-                QMessageBox.warning(self, "No Output Folder", "Please select an output folder.")
+                QMessageBox.warning(self, "未选择输出文件夹", "请选择一个输出文件夹。")
                 return
         export_bom_to_excel([file_path], output_folder, columns=selected_cols,
                             custom_columns=self._custom_columns)
@@ -1238,7 +1237,12 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
             logger.warning(f"  {'  ' * level}  -> apply_work_mode failed: {e}")
 
         row = {"Level": level, "Part Number": pn}
-        logger.info(f"  {'  ' * level}[Level {level}] {pn}")
+        try:
+            child_count = product.products.count
+            row["Type"] = "装配体" if child_count > 0 else "零件"
+        except Exception:
+            row["Type"] = ""
+        logger.debug(f"  {'  ' * level}[Level {level}] {pn}")
 
         for col in columns:
             if col in DIRECT_ATTR_MAP:
@@ -1278,7 +1282,7 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
                     child_rows[0]["Quantity"] = data["qty"]
                 rows.extend(child_rows)
         except Exception as e:
-            logger.error(f"  {'  ' * level}  -> Exception accessing children: {e}")
+            logger.warning(f"  {'  ' * level}  -> Exception accessing children: {e}")
 
     for path in file_paths:
         src = Path(path).resolve()
@@ -1292,9 +1296,9 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
                     pass
             except PermissionError:
                 from PySide6.QtWidgets import QMessageBox
-                reply = QMessageBox.question(None, "File In Use",
-                    f"The file is currently open in Excel:\n{dest}\n\n"
-                    f"Please close it in Excel, then click Retry, or Cancel to abort.",
+                reply = QMessageBox.question(None, "文件正在使用",
+                    f"该文件当前在Excel中已打开：\n{dest}\n\n"
+                    f"请在Excel中关闭该文件，然后点击【重试】，或点击【取消】以中止。",
                     QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel)
                 if reply == QMessageBox.StandardButton.Cancel:
                     continue
@@ -1302,8 +1306,8 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
                     with open(dest, "a+b"):
                         pass
                 except PermissionError:
-                    QMessageBox.critical(None, "Still In Use",
-                        f"The file is still open. Please close it and try again.\n{dest}")
+                    QMessageBox.critical(None, "文件仍在使用中",
+                        f"文件仍处于打开状态，请关闭后重试。\n{dest}")
                     continue
 
         logger.info(f"Opening: {src}")
@@ -1330,10 +1334,12 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
                     value = level
                 elif col_name == "Quantity":
                     value = row.get("Quantity", 1)
+                elif col_name == "Type":
+                    value = row.get("Type", "")
                 else:
                     value = row.get(col_name, "")
                 cell = ws.cell(row=row_idx, column=col_idx, value=value)
-                if col_name in ("Level", "Quantity"):
+                if col_name in ("Level", "Quantity", "Type"):
                     cell.alignment = center
 
         for col_idx, col_name in enumerate(columns, start=1):
