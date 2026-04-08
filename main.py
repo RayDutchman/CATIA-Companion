@@ -1,7 +1,6 @@
 import sys
 import shutil
 import winreg
-import tempfile
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -12,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt, QSettings
+
 
 def resource_path(filename: str) -> Path:
     if hasattr(sys, "_MEIPASS"):
@@ -29,62 +29,25 @@ APP_DATE    = "2026-04-03"
 APP_AUTHOR  = "CHEN Weibo"
 APP_CONTACT = "thucwb@gmail.com"
 
-ABOUT_TEXT = f"""{APP_NAME} v{APP_VERSION}\n\nA CATIA V5 productivity tool for engineering teams.\nAutomates drawing conversion, part export, and\ninstallation of CATIA resources.\n\n─────────────────────────────────────────\nDeveloper   {APP_AUTHOR}\nContact     {APP_CONTACT}\nReleased    {APP_DATE}\n─────────────────────────────────────────\n\n\u00a9 2026 {APP_AUTHOR}. For internal use only."""
+ABOUT_TEXT = f"""{APP_NAME} v{APP_VERSION}
+
+A CATIA V5 productivity tool for engineering teams.
+Automates drawing conversion, part export, and
+installation of CATIA resources.
+
+─────────────────────────────────────────
+Developer   {APP_AUTHOR}
+Contact     {APP_CONTACT}
+Released    {APP_DATE}
+─────────────────────────────────────────
+
+\u00a9 2026 {APP_AUTHOR}. For internal use only."""
 
 # ---------------------------------------------------------------------------
 # Part template properties
 # ---------------------------------------------------------------------------
 
 PART_TEMPLATE_PROPERTIES = ["物料编码", "物料名称", "中文名称", "规格型号", "物料来源", "数据状态", "存货类别", "质量", "备注"]
-
-# ---------------------------------------------------------------------------
-# File-exists conflict dialog
-# ---------------------------------------------------------------------------
-
-CONFLICT_OVERWRITE     = "overwrite"
-CONFLICT_OVERWRITE_ALL = "overwrite_all"
-CONFLICT_SKIP          = "skip"
-CONFLICT_SKIP_ALL      = "skip_all"
-CONFLICT_CANCEL        = "cancel"
-
-def ask_file_conflict(dest: Path) -> str:
-    """
-    Show a Windows-style dialog asking what to do when an output file already exists.
-    Returns one of the CONFLICT_* constants.
-    """
-    msg = QMessageBox()
-    msg.setWindowTitle("File Already Exists")
-    msg.setIcon(QMessageBox.Icon.Warning)
-    msg.setText("The output file already exists:")
-    msg.setInformativeText(str(dest))
-    msg.setDetailedText(
-        "• Overwrite — replace the existing file\n"
-        "• Overwrite All — replace all existing files without asking again\n"
-        "• Skip — keep the existing file and continue\n"
-        "• Skip All — keep all existing files without asking again\n"
-        "• Cancel — stop the conversion"
-    )
-
-    btn_overwrite     = msg.addButton("Overwrite",     QMessageBox.ButtonRole.AcceptRole)
-    btn_overwrite_all = msg.addButton("Overwrite All", QMessageBox.ButtonRole.AcceptRole)
-    btn_skip          = msg.addButton("Skip",          QMessageBox.ButtonRole.RejectRole)
-    btn_skip_all      = msg.addButton("Skip All",      QMessageBox.ButtonRole.RejectRole)
-    _btn_cancel       = msg.addButton("Cancel",        QMessageBox.ButtonRole.DestructiveRole)
-
-    msg.setDefaultButton(btn_overwrite)
-    msg.exec()
-
-    clicked = msg.clickedButton()
-    if clicked == btn_overwrite:
-        return CONFLICT_OVERWRITE
-    elif clicked == btn_overwrite_all:
-        return CONFLICT_OVERWRITE_ALL
-    elif clicked == btn_skip:
-        return CONFLICT_SKIP
-    elif clicked == btn_skip_all:
-        return CONFLICT_SKIP_ALL
-    else:
-        return CONFLICT_CANCEL
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +150,8 @@ class MainWindow(QMainWindow):
             no_files_msg="Please select at least one CATPart or CATProduct file.",
             conversion_fn=CATPart_to_STP,
             settings_key="CATPart",
-            default_prefix="MD_"
+            show_prefix_option=True,  # NEW
+            prefix="MD_"              # NEW
         )
         dialog.exec()
 
@@ -200,7 +164,8 @@ class MainWindow(QMainWindow):
             no_files_msg="Please select at least one CATDrawing file.",
             conversion_fn=CATDrawing_to_PDF,
             settings_key="CATDrawing",
-            default_prefix="DR_"
+            show_prefix_option=True,  # existing
+            prefix="DR_"              # NEW (was hardcoded, now explicit)
         )
         dialog.exec()
 
@@ -300,6 +265,7 @@ class MainWindow(QMainWindow):
                 dest_file = dest_dir / src_file.name
                 shutil.copy2(str(src_file), str(dest_file))
                 copied.append(src_file.name)
+                print(f"  Copied: {src_file.name} -> {dest_file}")
             QMessageBox.information(self, "Success",
                 f"Successfully copied {len(copied)} file(s) to:\n{dest_dir}\n\n" + "\n".join(copied))
         except PermissionError:
@@ -329,17 +295,15 @@ class ConvertDialog(QDialog):
     def __init__(self, parent=None, title="Convert", file_label="Selected files:",
                  file_filter="All Files (*)", no_files_msg="Please select at least one file.",
                  conversion_fn=None, settings_key="default",
-                 default_prefix: str = ""):
-        """
-        default_prefix  — pre-filled value for the prefix field (e.g. "DR_" or "MD_").
-                          Pass "" to show no default. The suffix field always starts empty.
-        """
+                 show_prefix_option=False, prefix=""):  # NEW: prefix param
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.setMinimumSize(520, 480)
-        self._file_filter   = file_filter
-        self._no_files_msg  = no_files_msg
-        self._conversion_fn = conversion_fn
+        self.setMinimumSize(520, 450)
+        self._file_filter     = file_filter
+        self._no_files_msg    = no_files_msg
+        self._conversion_fn   = conversion_fn
+        self._show_prefix_option = show_prefix_option
+        self._prefix          = prefix  # NEW
 
         self._settings = QSettings("CATIACompanion", f"ConvertDialog_{settings_key}")
         self._last_browse_dir = self._settings.value("last_browse_dir", "")
@@ -396,50 +360,19 @@ class ConvertDialog(QDialog):
             self.radio_same  = None
             self.folder_edit = None
 
-        # ------------------------------------------------------------------
-        # Prefix row  (only shown when a default_prefix is provided)
-        # ------------------------------------------------------------------
-        if default_prefix:
-            saved_add_prefix = self._settings.value("add_prefix", True)
-            if isinstance(saved_add_prefix, str):
-                saved_add_prefix = saved_add_prefix.lower() == "true"
-            saved_prefix_text = self._settings.value("prefix_text", default_prefix)
-
-            prefix_row = QHBoxLayout()
-            self.prefix_checkbox = QCheckBox("Add prefix:")
-            self.prefix_checkbox.setChecked(bool(saved_add_prefix))
-            self.prefix_edit = QLineEdit(saved_prefix_text)
-            self.prefix_edit.setFixedWidth(80)
-            self.prefix_edit.setEnabled(self.prefix_checkbox.isChecked())
-            self.prefix_checkbox.toggled.connect(self.prefix_edit.setEnabled)
-            prefix_row.addWidget(self.prefix_checkbox)
-            prefix_row.addWidget(self.prefix_edit)
-            prefix_row.addStretch()
-            layout.addLayout(prefix_row)
+        # Prefix checkbox — shown when show_prefix_option=True
+        if show_prefix_option and prefix:
+            saved_prefix = self._settings.value("add_prefix", True)
+            if isinstance(saved_prefix, str):
+                saved_prefix = saved_prefix.lower() == "true"
+            self.prefix_checkbox = QCheckBox(
+                f'Add "{prefix}" prefix to output filename'
+                f' (skipped if name already starts with "{prefix}")'
+            )
+            self.prefix_checkbox.setChecked(saved_prefix)
+            layout.addWidget(self.prefix_checkbox)
         else:
             self.prefix_checkbox = None
-            self.prefix_edit     = None
-
-        # ------------------------------------------------------------------
-        # Suffix row  (always shown; default empty)
-        # ------------------------------------------------------------------
-        saved_add_suffix = self._settings.value("add_suffix", False)
-        if isinstance(saved_add_suffix, str):
-            saved_add_suffix = saved_add_suffix.lower() == "true"
-        saved_suffix_text = self._settings.value("suffix_text", "")
-
-        suffix_row = QHBoxLayout()
-        self.suffix_checkbox = QCheckBox("Add suffix:")
-        self.suffix_checkbox.setChecked(bool(saved_add_suffix))
-        self.suffix_edit = QLineEdit(saved_suffix_text)
-        self.suffix_edit.setFixedWidth(80)
-        self.suffix_edit.setPlaceholderText("e.g. _v2")
-        self.suffix_edit.setEnabled(self.suffix_checkbox.isChecked())
-        self.suffix_checkbox.toggled.connect(self.suffix_edit.setEnabled)
-        suffix_row.addWidget(self.suffix_checkbox)
-        suffix_row.addWidget(self.suffix_edit)
-        suffix_row.addStretch()
-        layout.addLayout(suffix_row)
 
         action_row = QHBoxLayout()
         action_row.addStretch()
@@ -495,27 +428,12 @@ class ConvertDialog(QDialog):
                 QMessageBox.warning(self, "No Output Folder", "Please select an output folder.")
                 return
 
-        # Resolve prefix
         if self.prefix_checkbox is not None:
             add_prefix = self.prefix_checkbox.isChecked()
-            prefix_text = self.prefix_edit.text() if add_prefix else ""
-            self._settings.setValue("add_prefix",  add_prefix)
-            self._settings.setValue("prefix_text", self.prefix_edit.text())
+            self._settings.setValue("add_prefix", add_prefix)
+            self._conversion_fn(files, output_folder, add_prefix=add_prefix)
         else:
-            add_prefix  = False
-            prefix_text = ""
-
-        # Resolve suffix
-        add_suffix  = self.suffix_checkbox.isChecked()
-        suffix_text = self.suffix_edit.text() if add_suffix else ""
-        self._settings.setValue("add_suffix",  add_suffix)
-        self._settings.setValue("suffix_text", self.suffix_edit.text())
-
-        if self.prefix_checkbox is not None:
-            self._conversion_fn(files, output_folder,
-                                prefix=prefix_text, suffix=suffix_text)
-        else:
-            self._conversion_fn(files, output_folder, suffix=suffix_text)
+            self._conversion_fn(files, output_folder)
         self.accept()
 
 
@@ -563,12 +481,11 @@ def detect_catia_root() -> str | None:
 # ---------------------------------------------------------------------------
 
 def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
-                      prefix: str = "", suffix: str = ""):
+                      add_prefix: bool = True):
     """
     Convert CATDrawing files to PDF using pyCATIA.
-    - Exports to a temp directory first, then moves to the final destination.
-    - prefix/suffix are applied to the output filename stem.
-    - If destination exists, asks the user (Overwrite/Overwrite All/Skip/Skip All/Cancel).
+    If add_prefix is True, prepends 'DR_' to the output filename unless it
+    already starts with 'DR_'.
     """
     from pycatia import catia
 
@@ -576,64 +493,42 @@ def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
     application = caa.application
     application.visible = True
     documents = application.documents
-
-    conflict_policy = None
 
     for path in file_paths:
         src = Path(path).resolve()
         dest_dir = Path(output_folder).resolve() if output_folder else src.parent
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        stem     = src.stem
-        out_stem = f"{prefix}{stem}{suffix}"
-        dest     = dest_dir / f"{out_stem}.pdf"
+        stem = src.stem
+        if add_prefix and not stem.startswith("DR_"):
+            out_stem = f"DR_{stem}"
+        else:
+            out_stem = stem
 
-        if dest.exists():
-            policy = (conflict_policy
-                      if conflict_policy in (CONFLICT_OVERWRITE_ALL, CONFLICT_SKIP_ALL)
-                      else ask_file_conflict(dest))
-            if policy == CONFLICT_OVERWRITE_ALL:
-                conflict_policy = CONFLICT_OVERWRITE_ALL
-            elif policy == CONFLICT_SKIP_ALL:
-                conflict_policy = CONFLICT_SKIP_ALL
-                print(f"  Skipped (file exists): {dest}")
-                continue
-            elif policy == CONFLICT_SKIP:
-                print(f"  Skipped (file exists): {dest}")
-                continue
-            elif policy == CONFLICT_CANCEL:
-                print("  Conversion cancelled by user.")
-                return
-            if conflict_policy == CONFLICT_SKIP_ALL:
-                print(f"  Skipped (file exists): {dest}")
-                continue
+        print(f"Opening: {src}")
+        documents.open(str(src))
+        from pycatia.drafting_interfaces.drawing_document import DrawingDocument
+        drawing_doc = DrawingDocument(application.active_document.com_object)
+        drawing = drawing_doc.drawing_root
+        sheet_count = drawing.sheets.count
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_dest = Path(tmp_dir) / f"{out_stem}.pdf"
-            print(f"Opening: {src}")
-            documents.open(str(src))
-            from pycatia.drafting_interfaces.drawing_document import DrawingDocument
-            drawing_doc = DrawingDocument(application.active_document.com_object)
-            drawing = drawing_doc.drawing_root
-            sheet_count = drawing.sheets.count
-            drawing_doc.export_data(str(tmp_dest), "pdf")
-            drawing_doc.close()
-            if not tmp_dest.exists():
-                print(f"  WARNING: export_data did not create {tmp_dest}")
-            else:
-                shutil.move(str(tmp_dest), str(dest))
-                print(f"  Exported {sheet_count} sheet(s) -> {dest}")
+        dest = dest_dir / f"{out_stem}.pdf"
+        drawing_doc.export_data(str(dest), "pdf")
+        if not dest.exists():
+            print(f"  WARNING: export_data did not create {dest}")
+        else:
+            print(f"  Exported {sheet_count} sheet(s) -> {dest}")
 
+        drawing_doc.close()
         print(f"Done: {src.name}\n")
 
 
 def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
-                   prefix: str = "", suffix: str = ""):
+                   add_prefix: bool = True):  # NEW param
     """
     Convert CATPart/CATProduct files to STEP (.stp) using pyCATIA.
-    - Exports to a temp directory first, then moves to the final destination.
-    - prefix/suffix are applied to the output filename stem.
-    - If destination exists, asks the user (Overwrite/Overwrite All/Skip/Skip All/Cancel).
+    If add_prefix is True, prepends 'MD_' to the output filename unless it
+    already starts with 'MD_'.
     """
     from pycatia import catia
 
@@ -642,50 +537,25 @@ def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
     application.visible = True
     documents = application.documents
 
-    conflict_policy = None
-
     for path in file_paths:
         src = Path(path)
         dest_dir = Path(output_folder) if output_folder else src.parent
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        stem     = src.stem
-        out_stem = f"{prefix}{stem}{suffix}"
-        dest     = dest_dir / f"{out_stem}.stp"
+        stem = src.stem                                   # NEW
+        if add_prefix and not stem.startswith("MD_"):    # NEW
+            out_stem = f"MD_{stem}"                       # NEW
+        else:                                             # NEW
+            out_stem = stem                               # NEW
 
-        if dest.exists():
-            policy = (conflict_policy
-                      if conflict_policy in (CONFLICT_OVERWRITE_ALL, CONFLICT_SKIP_ALL)
-                      else ask_file_conflict(dest))
-            if policy == CONFLICT_OVERWRITE_ALL:
-                conflict_policy = CONFLICT_OVERWRITE_ALL
-            elif policy == CONFLICT_SKIP_ALL:
-                conflict_policy = CONFLICT_SKIP_ALL
-                print(f"  Skipped (file exists): {dest}")
-                continue
-            elif policy == CONFLICT_SKIP:
-                print(f"  Skipped (file exists): {dest}")
-                continue
-            elif policy == CONFLICT_CANCEL:
-                print("  Conversion cancelled by user.")
-                return
-            if conflict_policy == CONFLICT_SKIP_ALL:
-                print(f"  Skipped (file exists): {dest}")
-                continue
+        dest = dest_dir / f"{out_stem}.stp"              # NEW
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_dest = Path(tmp_dir) / f"{out_stem}.stp"
-            print(f"Opening: {src}")
-            documents.open(str(src))
-            doc = application.active_document
-            doc.export_data(str(tmp_dest), "stp")
-            doc.close()
-            if not tmp_dest.exists():
-                print(f"  WARNING: export_data did not create {tmp_dest}")
-            else:
-                shutil.move(str(tmp_dest), str(dest))
-                print(f"  Exported -> {dest}")
-
+        print(f"Opening: {src}")
+        documents.open(str(src))
+        doc = application.active_document
+        doc.export_data(str(dest), "stp")
+        print(f"  Exported -> {dest}")
+        doc.close()
         print(f"Done: {src.name}\n")
 
 
@@ -693,12 +563,11 @@ def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
 # Stamp part template function
 # ---------------------------------------------------------------------------
 
-def stamp_part_template(file_paths: list[str], output_folder: str | None = None,
-                        suffix: str = ""):
+def stamp_part_template(file_paths: list[str], output_folder: str | None = None):
     """
     For each CATPart, add the 9 standard user-defined properties if they do
-    not already exist. The part is saved automatically after stamping.
-    (suffix parameter accepted for interface compatibility but not used)
+    not already exist. Properties are added as strings with empty default value.
+    The part is saved automatically after stamping.
     """
     from pycatia import catia
     from pycatia.mec_mod_interfaces.part_document import PartDocument
@@ -767,8 +636,8 @@ def stamp_part_template(file_paths: list[str], output_folder: str | None = None,
 # Export BOM Dialog
 # ---------------------------------------------------------------------------
 
-BOM_ALL_COLUMNS           = ["Level", "Part Number", "Nomenclature", "Definition", "Revision", "Source", "Quantity"]
-BOM_DEFAULT_COLUMNS       = ["Level", "Part Number", "Nomenclature", "Definition", "Revision", "Source", "Quantity"]
+BOM_ALL_COLUMNS       = ["Level", "Part Number", "Nomenclature", "Definition", "Revision", "Source", "Quantity"]
+BOM_DEFAULT_COLUMNS   = ["Level", "Part Number", "Nomenclature", "Definition", "Revision", "Source", "Quantity"]
 BOM_PRESET_CUSTOM_COLUMNS = ["物料编码", "物料名称", "中文名称", "规格型号", "物料来源", "数据状态", "存货类别", "质量", "备注"]
 
 
@@ -1187,6 +1056,7 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
                 with open(dest, "a+b"):
                     pass
             except PermissionError:
+                from PySide6.QtWidgets import QMessageBox
                 reply = QMessageBox.question(None, "File In Use",
                     f"The file is currently open in Excel:\n{dest}\n\n"
                     f"Please close it in Excel, then click Retry, or Cancel to abort.",
