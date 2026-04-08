@@ -318,7 +318,7 @@ class ConvertDialog(QDialog):
         self.file_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
 
         # Restore previously saved file list
-        saved_files: list = self._settings.value("saved_files", [])
+        saved_files: list = self._settings.value("saved_files", []) or []
         if isinstance(saved_files, str):
             saved_files = [saved_files]
         for f in saved_files:
@@ -548,7 +548,7 @@ def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
 
     for path in file_paths:
         src = Path(path).resolve()
-        dest_dir = Path(output_folder).resolve() if output_folder else src.parent
+        dest_dir = Path(output_folder).resolve() if output_folder else src.parent.resolve()
         dest_dir.mkdir(parents=True, exist_ok=True)
 
         stem = src.stem
