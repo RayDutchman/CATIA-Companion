@@ -132,7 +132,7 @@ class MainWindow(QMainWindow):
 
         # Log file path label
         log_path_label = QLabel(f"Log: {_log_file}")
-        log_path_label.setStyleSheet("color: gray; font-size: 9px;")
+        log_path_label.setStyleSheet("color: gray; font-size: 9pt;")
         log_path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(log_path_label)
 
@@ -147,10 +147,18 @@ class MainWindow(QMainWindow):
         )
 
     def _open_log_file(self):
-        if sys.platform == "win32":
-            os.startfile(_log_file)
-        else:
-            subprocess.Popen(["xdg-open", str(_log_file)])
+        try:
+            if sys.platform == "win32":
+                os.startfile(_log_file)
+            else:
+                subprocess.Popen(
+                    ["xdg-open", str(_log_file)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+        except Exception as e:
+            QMessageBox.warning(self, "Cannot Open Log File",
+                f"Failed to open the log file:\n{_log_file}\n\n{e}")
 
     def _setup_menu_bar(self):
         menu_bar = self.menuBar()
