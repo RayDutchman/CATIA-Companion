@@ -360,19 +360,46 @@ class ConvertDialog(QDialog):
             self.radio_same  = None
             self.folder_edit = None
 
-        # Prefix checkbox — shown when show_prefix_option=True
-        if show_prefix_option and prefix:
-            saved_prefix = self._settings.value("add_prefix", True)
-            if isinstance(saved_prefix, str):
-                saved_prefix = saved_prefix.lower() == "true"
-            self.prefix_checkbox = QCheckBox(
-                f'Add "{prefix}" prefix to output filename'
-                f' (skipped if name already starts with "{prefix}")'
-            )
-            self.prefix_checkbox.setChecked(saved_prefix)
-            layout.addWidget(self.prefix_checkbox)
+        # Prefix checkbox + editable QLineEdit — shown when show_prefix_option=True
+        if show_prefix_option:
+            saved_add_prefix = self._settings.value("add_prefix", True)
+            if isinstance(saved_add_prefix, str):
+                saved_add_prefix = saved_add_prefix.lower() == "true"
+            saved_prefix_value = self._settings.value("prefix_value", prefix)
+
+            prefix_row = QHBoxLayout()
+            self.prefix_checkbox = QCheckBox("Add prefix:")
+            self.prefix_checkbox.setChecked(saved_add_prefix)
+            self.prefix_edit = QLineEdit(saved_prefix_value)
+            self.prefix_edit.setMaximumWidth(120)
+            self.prefix_edit.setEnabled(saved_add_prefix)
+            self.prefix_checkbox.toggled.connect(self.prefix_edit.setEnabled)
+            prefix_row.addWidget(self.prefix_checkbox)
+            prefix_row.addWidget(self.prefix_edit)
+            prefix_row.addStretch()
+            layout.addLayout(prefix_row)
+
+            saved_add_suffix = self._settings.value("add_suffix", False)
+            if isinstance(saved_add_suffix, str):
+                saved_add_suffix = saved_add_suffix.lower() == "true"
+            saved_suffix_value = self._settings.value("suffix_value", "")
+
+            suffix_row = QHBoxLayout()
+            self.suffix_checkbox = QCheckBox("Add suffix:")
+            self.suffix_checkbox.setChecked(saved_add_suffix)
+            self.suffix_edit = QLineEdit(saved_suffix_value)
+            self.suffix_edit.setMaximumWidth(120)
+            self.suffix_edit.setEnabled(saved_add_suffix)
+            self.suffix_checkbox.toggled.connect(self.suffix_edit.setEnabled)
+            suffix_row.addWidget(self.suffix_checkbox)
+            suffix_row.addWidget(self.suffix_edit)
+            suffix_row.addStretch()
+            layout.addLayout(suffix_row)
         else:
             self.prefix_checkbox = None
+            self.prefix_edit = None
+            self.suffix_checkbox = None
+            self.suffix_edit = None
 
         action_row = QHBoxLayout()
         action_row.addStretch()
@@ -430,8 +457,14 @@ class ConvertDialog(QDialog):
 
         if self.prefix_checkbox is not None:
             add_prefix = self.prefix_checkbox.isChecked()
+            prefix_value = self.prefix_edit.text() if add_prefix else ""
+            add_suffix = self.suffix_checkbox.isChecked()
+            suffix_value = self.suffix_edit.text() if add_suffix else ""
             self._settings.setValue("add_prefix", add_prefix)
-            self._conversion_fn(files, output_folder, add_prefix=add_prefix)
+            self._settings.setValue("prefix_value", self.prefix_edit.text())
+            self._settings.setValue("add_suffix", add_suffix)
+            self._settings.setValue("suffix_value", self.suffix_edit.text())
+            self._conversion_fn(files, output_folder, prefix=prefix_value, suffix=suffix_value)
         else:
             self._conversion_fn(files, output_folder)
         self.accept()
@@ -481,11 +514,12 @@ def detect_catia_root() -> str | None:
 # ---------------------------------------------------------------------------
 
 def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
-                      add_prefix: bool = True):
+                      prefix: str = "DR_", suffix: str = ""):
     """
     Convert CATDrawing files to PDF using pyCATIA.
-    If add_prefix is True, prepends 'DR_' to the output filename unless it
-    already starts with 'DR_'.
+    If prefix is non-empty, prepends it to the output filename unless the stem
+    already starts with it.  If suffix is non-empty, appends it to the stem
+    unless the stem already ends with it.
     """
     from pycatia import catia
 
@@ -500,10 +534,10 @@ def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
         dest_dir.mkdir(parents=True, exist_ok=True)
 
         stem = src.stem
-        if add_prefix and not stem.startswith("DR_"):
-            out_stem = f"DR_{stem}"
-        else:
-            out_stem = stem
+        if prefix and not stem.startswith(prefix):
+            stem = f"{prefix}{stem}"
+        if suffix and not stem.endswith(suffix):
+            stem = f"{stem}{suffix}"
 
         print(f"Opening: {src}")
         documents.open(str(src))
@@ -512,7 +546,7 @@ def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
         drawing = drawing_doc.drawing_root
         sheet_count = drawing.sheets.count
 
-        dest = dest_dir / f"{out_stem}.pdf"
+        dest = dest_dir / f"{stem}.pdf"
         drawing_doc.export_data(str(dest), "pdf")
         if not dest.exists():
             print(f"  WARNING: export_data did not create {dest}")
@@ -524,11 +558,12 @@ def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
 
 
 def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
-                   add_prefix: bool = True):  # NEW param
+                   prefix: str = "MD_", suffix: str = ""):
     """
     Convert CATPart/CATProduct files to STEP (.stp) using pyCATIA.
-    If add_prefix is True, prepends 'MD_' to the output filename unless it
-    already starts with 'MD_'.
+    If prefix is non-empty, prepends it to the output filename unless the stem
+    already starts with it.  If suffix is non-empty, appends it to the stem
+    unless the stem already ends with it.
     """
     from pycatia import catia
 
@@ -542,13 +577,13 @@ def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
         dest_dir = Path(output_folder) if output_folder else src.parent
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        stem = src.stem                                   # NEW
-        if add_prefix and not stem.startswith("MD_"):    # NEW
-            out_stem = f"MD_{stem}"                       # NEW
-        else:                                             # NEW
-            out_stem = stem                               # NEW
+        stem = src.stem
+        if prefix and not stem.startswith(prefix):
+            stem = f"{prefix}{stem}"
+        if suffix and not stem.endswith(suffix):
+            stem = f"{stem}{suffix}"
 
-        dest = dest_dir / f"{out_stem}.stp"              # NEW
+        dest = dest_dir / f"{stem}.stp"
 
         print(f"Opening: {src}")
         documents.open(str(src))
