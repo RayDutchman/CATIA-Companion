@@ -1,16 +1,60 @@
 import sys
+import os
 import shutil
+import subprocess
 import winreg
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QMessageBox, QDialog, QPushButton, QListWidget, QFileDialog,
     QAbstractItemView, QRadioButton, QButtonGroup, QLineEdit, QGroupBox,
-    QListWidgetItem, QComboBox, QCheckBox
+    QListWidgetItem, QComboBox, QCheckBox, QPlainTextEdit
 )
 from PySide6.QtGui import QAction
-from PySide6.QtCore import Qt, QSettings
+from PySide6.QtCore import Qt, QSettings, QObject, Signal
+
+# ---------------------------------------------------------------------------
+# Logging setup
+# ---------------------------------------------------------------------------
+
+_log_dir = Path.home() / "CATIA_Companion" / "logs"
+_log_dir.mkdir(parents=True, exist_ok=True)
+_log_file = _log_dir / "catia_companion.log"
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        RotatingFileHandler(_log_file, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ]
+)
+logger = logging.getLogger(__name__)
+
+
+class _LogSignalEmitter(QObject):
+    message_logged = Signal(str)
+
+
+_log_emitter = _LogSignalEmitter()
+
+
+class QtLogHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord):
+        msg = self.format(record)
+        _log_emitter.message_logged.emit(msg)
+
+
+_qt_log_handler = QtLogHandler()
+_qt_log_handler.setFormatter(logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+))
+logging.getLogger().addHandler(_qt_log_handler)
 
 
 def resource_path(filename: str) -> Path:
@@ -66,10 +110,55 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central_widget)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
+
         label = QLabel("Welcome to CATIA Companion")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(label)
+
+        # Log display area
+        self._log_view = QPlainTextEdit()
+        self._log_view.setReadOnly(True)
+        self._log_view.setStyleSheet(
+            "background-color: #1e1e1e; color: #d4d4d4;"
+            " font-family: Consolas, 'Courier New', monospace; font-size: 9pt;"
+        )
+        self._log_view.setMinimumHeight(150)
+        layout.addWidget(self._log_view)
+
+        # Open Log File button
+        open_log_btn = QPushButton("Open Log File")
+        open_log_btn.clicked.connect(self._open_log_file)
+        layout.addWidget(open_log_btn)
+
+        # Log file path label
+        log_path_label = QLabel(f"Log: {_log_file}")
+        log_path_label.setStyleSheet("color: gray; font-size: 9pt;")
+        log_path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(log_path_label)
+
+        _log_emitter.message_logged.connect(self._append_log)
+
         self.statusBar().showMessage("Ready")
+
+    def _append_log(self, message: str):
+        self._log_view.appendPlainText(message)
+        self._log_view.verticalScrollBar().setValue(
+            self._log_view.verticalScrollBar().maximum()
+        )
+
+    def _open_log_file(self):
+        try:
+            if sys.platform == "win32":
+                os.startfile(_log_file)
+            else:
+                subprocess.Popen(
+                    ["xdg-open", str(_log_file)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+        except Exception as e:
+            QMessageBox.warning(self, "Cannot Open Log File",
+                f"Failed to open the log file:\n{_log_file}\n\n{e}")
 
     def _setup_menu_bar(self):
         menu_bar = self.menuBar()
@@ -267,7 +356,7 @@ class MainWindow(QMainWindow):
                 dest_file = dest_dir / src_file.name
                 shutil.copy2(str(src_file), str(dest_file))
                 copied.append(src_file.name)
-                print(f"  Copied: {src_file.name} -> {dest_file}")
+                logger.info(f"  Copied: {src_file.name} -> {dest_file}")
             QMessageBox.information(self, "Success",
                 f"Successfully copied {len(copied)} file(s) to:\n{dest_dir}\n\n" + "\n".join(copied))
         except PermissionError:
@@ -505,21 +594,21 @@ def detect_catia_root() -> str | None:
         r"SOFTWARE\WOW6432Node\Dassault Systemes",
     ]
     for reg_path in registry_paths:
-        print(f"Trying registry path: HKEY_LOCAL_MACHINE\\{reg_path}")
+        logger.debug(f"Trying registry path: HKEY_LOCAL_MACHINE\\{reg_path}")
         try:
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path) as ds_key:
                 i = 0
                 while True:
                     try:
                         release = winreg.EnumKey(ds_key, i)
-                        print(f"  Trying key: HKEY_LOCAL_MACHINE\\{reg_path}\\{release}\\0")
+                        logger.debug(f"  Trying key: HKEY_LOCAL_MACHINE\\{reg_path}\\{release}\\0")
                         try:
                             with winreg.OpenKey(ds_key, rf"{release}\0") as release_key:
                                 try:
                                     install_path, _ = winreg.QueryValueEx(release_key, "DEST_FOLDER")
                                     candidate = Path(install_path)
                                     if (candidate / "win_b64").exists():
-                                        print(f"    -> Valid CATIA installation found: {candidate}")
+                                        logger.debug(f"    -> Valid CATIA installation found: {candidate}")
                                         return str(candidate)
                                 except FileNotFoundError:
                                     pass
@@ -530,7 +619,7 @@ def detect_catia_root() -> str | None:
                         break
         except OSError:
             pass
-    print("No valid CATIA installation detected.")
+    logger.debug("No valid CATIA installation detected.")
     return None
 
 
@@ -571,6 +660,7 @@ def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
             stem = f"{stem}{suffix}"
         out_stem = stem
 
+        logger.info(f"Opening: {src}")
         dest = dest_dir / f"{out_stem}.pdf"
 
         if dest.exists():
@@ -617,12 +707,12 @@ def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
 
         drawing_doc.export_data(str(dest), "pdf")
         if not dest.exists():
-            print(f"  WARNING: export_data did not create {dest}")
+            logger.warning(f"  WARNING: export_data did not create {dest}")
         else:
-            print(f"  Exported {sheet_count} sheet(s) -> {dest}")
+            logger.info(f"  Exported {sheet_count} sheet(s) -> {dest}")
 
         drawing_doc.close()
-        print(f"Done: {src.name}\n")
+        logger.info(f"Done: {src.name}\n")
 
 
 def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
@@ -660,6 +750,7 @@ def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
 
         dest = dest_dir / f"{out_stem}.stp"
 
+        logger.info(f"Opening: {src}")
         if dest.exists():
             if bulk_action == "skip_all":
                 print(f"  Skipped (skip all): {dest}")
@@ -699,9 +790,9 @@ def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
         documents.open(str(src))
         doc = application.active_document
         doc.export_data(str(dest), "stp")
-        print(f"  Exported -> {dest}")
+        logger.info(f"  Exported -> {dest}")
         doc.close()
-        print(f"Done: {src.name}\n")
+        logger.info(f"Done: {src.name}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -727,7 +818,7 @@ def stamp_part_template(file_paths: list[str], output_folder: str | None = None)
 
     for path in file_paths:
         src = Path(path).resolve()
-        print(f"Opening: {src}")
+        logger.info(f"Opening: {src}")
         try:
             documents.open(str(src))
             doc        = PartDocument(application.active_document.com_object)
@@ -746,23 +837,22 @@ def stamp_part_template(file_paths: list[str], output_folder: str | None = None)
                 if prop_name not in existing_names:
                     user_props.create_string(prop_name, "")
                     added.append(prop_name)
-                    print(f"  Added property: '{prop_name}'")
+                    logger.info(f"  Added property: '{prop_name}'")
                 else:
-                    print(f"  Skipped (already exists): '{prop_name}'")
+                    logger.info(f"  Skipped (already exists): '{prop_name}'")
 
             doc.save()
-            print(f"  Saved: {src.name}")
+            logger.info(f"  Saved: {src.name}")
             succeeded.append(f"{src.name} (+{len(added)} added)")
 
         except Exception as e:
-            print(f"  ERROR processing {src.name}: {e}")
+            logger.error(f"  ERROR processing {src.name}: {e}")
             failed.append(f"{src.name}: {e}")
         finally:
             try:
                 application.active_document.close()
             except Exception:
                 pass
-        print()
 
     msg = "Stamping complete.\n\n"
     if succeeded:
@@ -1065,7 +1155,7 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
     from openpyxl.styles import Font, Alignment
     from pycatia import catia
     from pycatia.product_structure_interfaces.product_document import ProductDocument
-    from pycatia.enumeration.enumeration_types import CatWorkModeType
+    from pycatia import CatWorkModeType
 
     if columns is None:
         columns = BOM_DEFAULT_COLUMNS
@@ -1145,10 +1235,10 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
         try:
             product.apply_work_mode(CatWorkModeType.DESIGN_MODE)
         except Exception as e:
-            print(f"  {'  ' * level}  -> apply_work_mode failed: {e}")
+            logger.warning(f"  {'  ' * level}  -> apply_work_mode failed: {e}")
 
         row = {"Level": level, "Part Number": pn}
-        print(f"  {'  ' * level}[Level {level}] {pn}")
+        logger.info(f"  {'  ' * level}[Level {level}] {pn}")
 
         for col in columns:
             if col in DIRECT_ATTR_MAP:
@@ -1176,7 +1266,7 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
                             name = child.name
                             pn = name.rsplit(".", 1)[0] if "." in name else name
                 except Exception as e:
-                    print(f"  {'  ' * level}  -> Skipping child {i}: {e}")
+                    logger.warning(f"  {'  ' * level}  -> Skipping child {i}: {e}")
                     continue
                 if pn not in children:
                     children[pn] = {"products": child, "qty": 0}
@@ -1188,7 +1278,7 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
                     child_rows[0]["Quantity"] = data["qty"]
                 rows.extend(child_rows)
         except Exception as e:
-            print(f"  {'  ' * level}  -> Exception accessing children: {e}")
+            logger.error(f"  {'  ' * level}  -> Exception accessing children: {e}")
 
     for path in file_paths:
         src = Path(path).resolve()
@@ -1216,7 +1306,7 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
                         f"The file is still open. Please close it and try again.\n{dest}")
                     continue
 
-        print(f"Opening: {src}")
+        logger.info(f"Opening: {src}")
         documents.open(str(src))
         product_doc = ProductDocument(application.active_document.com_object)
         root_product = product_doc.product
@@ -1256,9 +1346,9 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
             ws.column_dimensions[col_letter].width = max_width
 
         wb.save(str(dest))
-        print(f"  BOM exported -> {dest}")
+        logger.info(f"  BOM exported -> {dest}")
         product_doc.close()
-        print(f"Done: {src.name}\n")
+        logger.info(f"Done: {src.name}\n")
 
 
 # ---------------------------------------------------------------------------
