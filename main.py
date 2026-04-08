@@ -48,6 +48,10 @@ CONFLICT_SKIP_ALL      = "skip_all"
 CONFLICT_CANCEL        = "cancel"
 
 def ask_file_conflict(dest: Path) -> str:
+    """
+    Show a Windows-style dialog asking what to do when an output file already exists.
+    Returns one of the CONFLICT_* constants.
+    """
     msg = QMessageBox()
     msg.setWindowTitle("File Already Exists")
     msg.setIcon(QMessageBox.Icon.Warning)
@@ -60,13 +64,16 @@ def ask_file_conflict(dest: Path) -> str:
         "• Skip All — keep all existing files without asking again\n"
         "• Cancel — stop the conversion"
     )
+
     btn_overwrite     = msg.addButton("Overwrite",     QMessageBox.ButtonRole.AcceptRole)
     btn_overwrite_all = msg.addButton("Overwrite All", QMessageBox.ButtonRole.AcceptRole)
     btn_skip          = msg.addButton("Skip",          QMessageBox.ButtonRole.RejectRole)
     btn_skip_all      = msg.addButton("Skip All",      QMessageBox.ButtonRole.RejectRole)
     _btn_cancel       = msg.addButton("Cancel",        QMessageBox.ButtonRole.DestructiveRole)
+
     msg.setDefaultButton(btn_overwrite)
     msg.exec()
+
     clicked = msg.clickedButton()
     if clicked == btn_overwrite:
         return CONFLICT_OVERWRITE
@@ -90,6 +97,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("CATIA Companion")
         self.resize(600, 400)
         self._setup_menu_bar()
+
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
@@ -103,6 +111,7 @@ class MainWindow(QMainWindow):
     def _setup_menu_bar(self):
         menu_bar = self.menuBar()
 
+        # --- File ---
         file_menu = menu_bar.addMenu("File")
         file_menu.addAction(QAction("New", self))
         file_menu.addAction(QAction("Open...", self))
@@ -127,6 +136,7 @@ class MainWindow(QMainWindow):
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
 
+        # --- Edit ---
         edit_menu = menu_bar.addMenu("Edit")
         edit_menu.addAction(QAction("Undo", self))
         edit_menu.addAction(QAction("Redo", self))
@@ -135,6 +145,7 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(QAction("Copy", self))
         edit_menu.addAction(QAction("Paste", self))
 
+        # --- Tools ---
         tools_menu = menu_bar.addMenu("Tools")
         copy_font_action = QAction("Copy Font File to CATIA folder", self)
         copy_font_action.triggered.connect(self._copy_font_to_catia)
@@ -149,6 +160,7 @@ class MainWindow(QMainWindow):
         stamp_action.triggered.connect(self._open_stamp_part_template_dialog)
         tools_menu.addAction(stamp_action)
 
+        # --- View ---
         view_menu = menu_bar.addMenu("View")
         view_menu.addAction(QAction("Zoom In", self))
         view_menu.addAction(QAction("Zoom Out", self))
@@ -156,6 +168,7 @@ class MainWindow(QMainWindow):
         view_menu.addSeparator()
         view_menu.addAction(QAction("Toggle Status Bar", self))
 
+        # --- Help ---
         help_menu = menu_bar.addMenu("Help")
         help_menu.addAction(QAction("Documentation", self))
         about_action = QAction("About CATIA Companion", self)
@@ -174,8 +187,7 @@ class MainWindow(QMainWindow):
             no_files_msg="Please select at least one CATPart or CATProduct file.",
             conversion_fn=CATPart_to_STP,
             settings_key="CATPart",
-            show_prefix_option=True,
-            prefix="MD_"
+            default_prefix="MD_"
         )
         dialog.exec()
 
@@ -188,8 +200,7 @@ class MainWindow(QMainWindow):
             no_files_msg="Please select at least one CATDrawing file.",
             conversion_fn=CATDrawing_to_PDF,
             settings_key="CATDrawing",
-            show_prefix_option=True,
-            prefix="DR_"
+            default_prefix="DR_"
         )
         dialog.exec()
 
@@ -215,6 +226,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "File Not Found",
                 f"Could not find '{file_name}' in the working folder:\n{src_file.parent}")
             return
+
         catia_root = detect_catia_root()
         if catia_root:
             reply = QMessageBox.question(self, "CATIA Installation Detected",
@@ -222,11 +234,13 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if reply == QMessageBox.StandardButton.No:
                 catia_root = None
+
         if not catia_root:
             catia_root = QFileDialog.getExistingDirectory(self,
-                "Select CATIA Installation Folder (e.g. C:\Program Files\Dassault Systemes\B28)", "")
+                "Select CATIA Installation Folder (e.g. C:\\Program Files\\Dassault Systemes\\B28)", "")
             if not catia_root:
                 return
+
         dest_dir = Path(catia_root) / relative_dest
         if not dest_dir.exists():
             reply = QMessageBox.question(self, "Folder Not Found",
@@ -236,6 +250,7 @@ class MainWindow(QMainWindow):
                 dest_dir.mkdir(parents=True, exist_ok=True)
             else:
                 return
+
         dest_file = dest_dir / file_name
         try:
             shutil.copy2(str(src_file), str(dest_file))
@@ -253,6 +268,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Folder Not Found",
                 f"Could not find the 'Pojie' folder at:\n{src_dir.parent}")
             return
+
         catia_root = detect_catia_root()
         if catia_root:
             reply = QMessageBox.question(self, "CATIA Installation Detected",
@@ -260,20 +276,24 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if reply == QMessageBox.StandardButton.No:
                 catia_root = None
+
         if not catia_root:
             catia_root = QFileDialog.getExistingDirectory(self,
-                "Select CATIA Installation Folder (e.g. C:\Program Files\Dassault Systemes\B28)", "")
+                "Select CATIA Installation Folder (e.g. C:\\Program Files\\Dassault Systemes\\B28)", "")
             if not catia_root:
                 return
+
         dest_dir = Path(catia_root) / "win_b64" / "code" / "bin"
         if not dest_dir.exists():
             QMessageBox.critical(self, "Folder Not Found",
                 f"The target folder does not exist:\n{dest_dir}\n\nPlease check your CATIA installation.")
             return
+
         files = [f for f in src_dir.iterdir() if f.is_file()]
         if not files:
             QMessageBox.warning(self, "Empty Folder", "The 'Pojie' folder contains no files.")
             return
+
         try:
             copied = []
             for src_file in files:
@@ -309,15 +329,17 @@ class ConvertDialog(QDialog):
     def __init__(self, parent=None, title="Convert", file_label="Selected files:",
                  file_filter="All Files (*)", no_files_msg="Please select at least one file.",
                  conversion_fn=None, settings_key="default",
-                 show_prefix_option=False, prefix=""):
+                 default_prefix: str = ""):
+        """
+        default_prefix  — pre-filled value for the prefix field (e.g. "DR_" or "MD_").
+                          Pass "" to show no default. The suffix field always starts empty.
+        """
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.setMinimumSize(520, 450)
-        self._file_filter        = file_filter
-        self._no_files_msg       = no_files_msg
-        self._conversion_fn      = conversion_fn
-        self._show_prefix_option = show_prefix_option
-        self._prefix             = prefix
+        self.setMinimumSize(520, 480)
+        self._file_filter   = file_filter
+        self._no_files_msg  = no_files_msg
+        self._conversion_fn = conversion_fn
 
         self._settings = QSettings("CATIACompanion", f"ConvertDialog_{settings_key}")
         self._last_browse_dir = self._settings.value("last_browse_dir", "")
@@ -342,6 +364,7 @@ class ConvertDialog(QDialog):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
+        # Output folder — hidden for stamp dialog
         if settings_key != "StampPartTemplate":
             output_group = QGroupBox("Output Folder")
             output_layout = QVBoxLayout(output_group)
@@ -373,18 +396,50 @@ class ConvertDialog(QDialog):
             self.radio_same  = None
             self.folder_edit = None
 
-        if show_prefix_option and prefix:
-            saved_prefix = self._settings.value("add_prefix", True)
-            if isinstance(saved_prefix, str):
-                saved_prefix = saved_prefix.lower() == "true"
-            self.prefix_checkbox = QCheckBox(
-                f'Add "{prefix}" prefix to output filename'
-                f' (skipped if name already starts with "{prefix}")'
-            )
-            self.prefix_checkbox.setChecked(saved_prefix)
-            layout.addWidget(self.prefix_checkbox)
+        # ------------------------------------------------------------------
+        # Prefix row  (only shown when a default_prefix is provided)
+        # ------------------------------------------------------------------
+        if default_prefix:
+            saved_add_prefix = self._settings.value("add_prefix", True)
+            if isinstance(saved_add_prefix, str):
+                saved_add_prefix = saved_add_prefix.lower() == "true"
+            saved_prefix_text = self._settings.value("prefix_text", default_prefix)
+
+            prefix_row = QHBoxLayout()
+            self.prefix_checkbox = QCheckBox("Add prefix:")
+            self.prefix_checkbox.setChecked(bool(saved_add_prefix))
+            self.prefix_edit = QLineEdit(saved_prefix_text)
+            self.prefix_edit.setFixedWidth(80)
+            self.prefix_edit.setEnabled(self.prefix_checkbox.isChecked())
+            self.prefix_checkbox.toggled.connect(self.prefix_edit.setEnabled)
+            prefix_row.addWidget(self.prefix_checkbox)
+            prefix_row.addWidget(self.prefix_edit)
+            prefix_row.addStretch()
+            layout.addLayout(prefix_row)
         else:
             self.prefix_checkbox = None
+            self.prefix_edit     = None
+
+        # ------------------------------------------------------------------
+        # Suffix row  (always shown; default empty)
+        # ------------------------------------------------------------------
+        saved_add_suffix = self._settings.value("add_suffix", False)
+        if isinstance(saved_add_suffix, str):
+            saved_add_suffix = saved_add_suffix.lower() == "true"
+        saved_suffix_text = self._settings.value("suffix_text", "")
+
+        suffix_row = QHBoxLayout()
+        self.suffix_checkbox = QCheckBox("Add suffix:")
+        self.suffix_checkbox.setChecked(bool(saved_add_suffix))
+        self.suffix_edit = QLineEdit(saved_suffix_text)
+        self.suffix_edit.setFixedWidth(80)
+        self.suffix_edit.setPlaceholderText("e.g. _v2")
+        self.suffix_edit.setEnabled(self.suffix_checkbox.isChecked())
+        self.suffix_checkbox.toggled.connect(self.suffix_edit.setEnabled)
+        suffix_row.addWidget(self.suffix_checkbox)
+        suffix_row.addWidget(self.suffix_edit)
+        suffix_row.addStretch()
+        layout.addLayout(suffix_row)
 
         action_row = QHBoxLayout()
         action_row.addStretch()
@@ -429,6 +484,7 @@ class ConvertDialog(QDialog):
         if not files:
             QMessageBox.warning(self, "No Files", self._no_files_msg)
             return
+
         if self.radio_same is None:
             output_folder = None
         elif self.radio_same.isChecked():
@@ -438,12 +494,28 @@ class ConvertDialog(QDialog):
             if not output_folder:
                 QMessageBox.warning(self, "No Output Folder", "Please select an output folder.")
                 return
+
+        # Resolve prefix
         if self.prefix_checkbox is not None:
             add_prefix = self.prefix_checkbox.isChecked()
-            self._settings.setValue("add_prefix", add_prefix)
-            self._conversion_fn(files, output_folder, add_prefix=add_prefix)
+            prefix_text = self.prefix_edit.text() if add_prefix else ""
+            self._settings.setValue("add_prefix",  add_prefix)
+            self._settings.setValue("prefix_text", self.prefix_edit.text())
         else:
-            self._conversion_fn(files, output_folder)
+            add_prefix  = False
+            prefix_text = ""
+
+        # Resolve suffix
+        add_suffix  = self.suffix_checkbox.isChecked()
+        suffix_text = self.suffix_edit.text() if add_suffix else ""
+        self._settings.setValue("add_suffix",  add_suffix)
+        self._settings.setValue("suffix_text", self.suffix_edit.text())
+
+        if self.prefix_checkbox is not None:
+            self._conversion_fn(files, output_folder,
+                                prefix=prefix_text, suffix=suffix_text)
+        else:
+            self._conversion_fn(files, output_folder, suffix=suffix_text)
         self.accept()
 
 
@@ -466,7 +538,7 @@ def detect_catia_root() -> str | None:
                         release = winreg.EnumKey(ds_key, i)
                         print(f"  Trying key: HKEY_LOCAL_MACHINE\\{reg_path}\\{release}\\0")
                         try:
-                            with winreg.OpenKey(ds_key, rf"{release}\\0") as release_key:
+                            with winreg.OpenKey(ds_key, rf"{release}\0") as release_key:
                                 try:
                                     install_path, _ = winreg.QueryValueEx(release_key, "DEST_FOLDER")
                                     candidate = Path(install_path)
@@ -491,11 +563,12 @@ def detect_catia_root() -> str | None:
 # ---------------------------------------------------------------------------
 
 def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
-                      add_prefix: bool = True):
+                      prefix: str = "", suffix: str = ""):
     """
     Convert CATDrawing files to PDF using pyCATIA.
-    Exports to a temp directory first, then moves to the final destination.
-    If destination exists, asks the user (Overwrite/Overwrite All/Skip/Skip All/Cancel).
+    - Exports to a temp directory first, then moves to the final destination.
+    - prefix/suffix are applied to the output filename stem.
+    - If destination exists, asks the user (Overwrite/Overwrite All/Skip/Skip All/Cancel).
     """
     from pycatia import catia
 
@@ -511,9 +584,9 @@ def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
         dest_dir = Path(output_folder).resolve() if output_folder else src.parent
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        stem = src.stem
-        out_stem = f"DR_{stem}" if add_prefix and not stem.startswith("DR_") else stem
-        dest = dest_dir / f"{out_stem}.pdf"
+        stem     = src.stem
+        out_stem = f"{prefix}{stem}{suffix}"
+        dest     = dest_dir / f"{out_stem}.pdf"
 
         if dest.exists():
             policy = (conflict_policy
@@ -555,11 +628,12 @@ def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
 
 
 def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
-                   add_prefix: bool = True):
+                   prefix: str = "", suffix: str = ""):
     """
     Convert CATPart/CATProduct files to STEP (.stp) using pyCATIA.
-    Exports to a temp directory first, then moves to the final destination.
-    If destination exists, asks the user (Overwrite/Overwrite All/Skip/Skip All/Cancel).
+    - Exports to a temp directory first, then moves to the final destination.
+    - prefix/suffix are applied to the output filename stem.
+    - If destination exists, asks the user (Overwrite/Overwrite All/Skip/Skip All/Cancel).
     """
     from pycatia import catia
 
@@ -575,9 +649,9 @@ def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
         dest_dir = Path(output_folder) if output_folder else src.parent
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        stem = src.stem
-        out_stem = f"MD_{stem}" if add_prefix and not stem.startswith("MD_") else stem
-        dest = dest_dir / f"{out_stem}.stp"
+        stem     = src.stem
+        out_stem = f"{prefix}{stem}{suffix}"
+        dest     = dest_dir / f"{out_stem}.stp"
 
         if dest.exists():
             policy = (conflict_policy
@@ -619,11 +693,12 @@ def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
 # Stamp part template function
 # ---------------------------------------------------------------------------
 
-def stamp_part_template(file_paths: list[str], output_folder: str | None = None):
+def stamp_part_template(file_paths: list[str], output_folder: str | None = None,
+                        suffix: str = ""):
     """
     For each CATPart, add the 9 standard user-defined properties if they do
-    not already exist. Properties are added as strings with empty default value.
-    The part is saved automatically after stamping.
+    not already exist. The part is saved automatically after stamping.
+    (suffix parameter accepted for interface compatibility but not used)
     """
     from pycatia import catia
     from pycatia.mec_mod_interfaces.part_document import PartDocument
@@ -673,7 +748,7 @@ def stamp_part_template(file_paths: list[str], output_folder: str | None = None)
                 application.active_document.close()
             except Exception:
                 pass
-        print()  
+        print()
 
     msg = "Stamping complete.\n\n"
     if succeeded:
