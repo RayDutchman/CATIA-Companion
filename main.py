@@ -150,8 +150,8 @@ class MainWindow(QMainWindow):
             no_files_msg="Please select at least one CATPart or CATProduct file.",
             conversion_fn=CATPart_to_STP,
             settings_key="CATPart",
-            show_prefix_option=True,  # NEW
-            prefix="MD_"              # NEW
+            show_prefix_option=True,
+            prefix="MD_"
         )
         dialog.exec()
 
@@ -164,8 +164,8 @@ class MainWindow(QMainWindow):
             no_files_msg="Please select at least one CATDrawing file.",
             conversion_fn=CATDrawing_to_PDF,
             settings_key="CATDrawing",
-            show_prefix_option=True,  # existing
-            prefix="DR_"              # NEW (was hardcoded, now explicit)
+            show_prefix_option=True,
+            prefix="DR_"
         )
         dialog.exec()
 
@@ -295,15 +295,15 @@ class ConvertDialog(QDialog):
     def __init__(self, parent=None, title="Convert", file_label="Selected files:",
                  file_filter="All Files (*)", no_files_msg="Please select at least one file.",
                  conversion_fn=None, settings_key="default",
-                 show_prefix_option=False, prefix=""):  # NEW: prefix param
+                 show_prefix_option=False, prefix=""):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setMinimumSize(520, 450)
-        self._file_filter     = file_filter
-        self._no_files_msg    = no_files_msg
-        self._conversion_fn   = conversion_fn
+        self._file_filter        = file_filter
+        self._no_files_msg       = no_files_msg
+        self._conversion_fn      = conversion_fn
         self._show_prefix_option = show_prefix_option
-        self._prefix          = prefix  # NEW
+        self._prefix             = prefix
 
         self._settings = QSettings("CATIACompanion", f"ConvertDialog_{settings_key}")
         self._last_browse_dir = self._settings.value("last_browse_dir", "")
@@ -316,6 +316,15 @@ class ConvertDialog(QDialog):
         layout.addWidget(QLabel(file_label))
         self.file_list = QListWidget()
         self.file_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+
+        # Restore previously saved file list
+        saved_files: list = self._settings.value("saved_files", []) or []
+        if isinstance(saved_files, str):
+            saved_files = [saved_files]
+        for f in saved_files:
+            if Path(f).exists():
+                self.file_list.addItem(f)
+
         layout.addWidget(self.file_list)
 
         btn_row = QHBoxLayout()
@@ -323,8 +332,11 @@ class ConvertDialog(QDialog):
         browse_btn.clicked.connect(self._browse_files)
         remove_btn = QPushButton("Remove Selected")
         remove_btn.clicked.connect(self._remove_selected)
+        remove_all_btn = QPushButton("Remove All")
+        remove_all_btn.clicked.connect(self._remove_all)
         btn_row.addWidget(browse_btn)
         btn_row.addWidget(remove_btn)
+        btn_row.addWidget(remove_all_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
@@ -360,19 +372,42 @@ class ConvertDialog(QDialog):
             self.radio_same  = None
             self.folder_edit = None
 
-        # Prefix checkbox — shown when show_prefix_option=True
-        if show_prefix_option and prefix:
-            saved_prefix = self._settings.value("add_prefix", True)
-            if isinstance(saved_prefix, str):
-                saved_prefix = saved_prefix.lower() == "true"
-            self.prefix_checkbox = QCheckBox(
-                f'Add "{prefix}" prefix to output filename'
-                f' (skipped if name already starts with "{prefix}")'
-            )
-            self.prefix_checkbox.setChecked(saved_prefix)
-            layout.addWidget(self.prefix_checkbox)
+        # Prefix and suffix rows — shown when show_prefix_option=True
+        if show_prefix_option:
+            saved_add_prefix = self._settings.value("add_prefix", True)
+            if isinstance(saved_add_prefix, str):
+                saved_add_prefix = saved_add_prefix.lower() == "true"
+            saved_prefix_value = self._settings.value("prefix_value", prefix)
+
+            prefix_row = QHBoxLayout()
+            self.prefix_checkbox = QCheckBox("Add prefix:")
+            self.prefix_checkbox.setChecked(saved_add_prefix)
+            self.prefix_edit = QLineEdit(saved_prefix_value)
+            self.prefix_edit.setEnabled(saved_add_prefix)
+            self.prefix_checkbox.toggled.connect(self.prefix_edit.setEnabled)
+            prefix_row.addWidget(self.prefix_checkbox)
+            prefix_row.addWidget(self.prefix_edit)
+            layout.addLayout(prefix_row)
+
+            saved_add_suffix = self._settings.value("add_suffix", False)
+            if isinstance(saved_add_suffix, str):
+                saved_add_suffix = saved_add_suffix.lower() == "true"
+            saved_suffix_value = self._settings.value("suffix_value", "")
+
+            suffix_row = QHBoxLayout()
+            self.suffix_checkbox = QCheckBox("Add suffix:")
+            self.suffix_checkbox.setChecked(saved_add_suffix)
+            self.suffix_edit = QLineEdit(saved_suffix_value)
+            self.suffix_edit.setEnabled(saved_add_suffix)
+            self.suffix_checkbox.toggled.connect(self.suffix_edit.setEnabled)
+            suffix_row.addWidget(self.suffix_checkbox)
+            suffix_row.addWidget(self.suffix_edit)
+            layout.addLayout(suffix_row)
         else:
             self.prefix_checkbox = None
+            self.prefix_edit     = None
+            self.suffix_checkbox = None
+            self.suffix_edit     = None
 
         action_row = QHBoxLayout()
         action_row.addStretch()
@@ -399,10 +434,21 @@ class ConvertDialog(QDialog):
             existing = [self.file_list.item(i).text() for i in range(self.file_list.count())]
             if f not in existing:
                 self.file_list.addItem(f)
+        self._persist_file_list()
 
     def _remove_selected(self):
         for item in self.file_list.selectedItems():
             self.file_list.takeItem(self.file_list.row(item))
+        self._persist_file_list()
+
+    def _remove_all(self):
+        self.file_list.clear()
+        self._persist_file_list()
+
+    def _persist_file_list(self):
+        """Save the current file list to QSettings so it survives dialog re-opens."""
+        files = [self.file_list.item(i).text() for i in range(self.file_list.count())]
+        self._settings.setValue("saved_files", files)
 
     def _browse_output_folder(self):
         folder = QFileDialog.getExistingDirectory(
@@ -429,9 +475,13 @@ class ConvertDialog(QDialog):
                 return
 
         if self.prefix_checkbox is not None:
-            add_prefix = self.prefix_checkbox.isChecked()
-            self._settings.setValue("add_prefix", add_prefix)
-            self._conversion_fn(files, output_folder, add_prefix=add_prefix)
+            prefix_value = self.prefix_edit.text() if self.prefix_checkbox.isChecked() else ""
+            suffix_value = self.suffix_edit.text() if self.suffix_checkbox.isChecked() else ""
+            self._settings.setValue("add_prefix", self.prefix_checkbox.isChecked())
+            self._settings.setValue("prefix_value", self.prefix_edit.text())
+            self._settings.setValue("add_suffix", self.suffix_checkbox.isChecked())
+            self._settings.setValue("suffix_value", self.suffix_edit.text())
+            self._conversion_fn(files, output_folder, prefix=prefix_value, suffix=suffix_value)
         else:
             self._conversion_fn(files, output_folder)
         self.accept()
@@ -481,11 +531,13 @@ def detect_catia_root() -> str | None:
 # ---------------------------------------------------------------------------
 
 def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
-                      add_prefix: bool = True):
+                      prefix: str = "DR_", suffix: str = ""):
     """
     Convert CATDrawing files to PDF using pyCATIA.
-    If add_prefix is True, prepends 'DR_' to the output filename unless it
-    already starts with 'DR_'.
+    If prefix is non-empty, prepends it to the output filename unless it
+    already starts with that prefix.
+    If suffix is non-empty, appends it to the output stem unless it
+    already ends with that suffix.
     """
     from pycatia import catia
 
@@ -496,14 +548,15 @@ def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
 
     for path in file_paths:
         src = Path(path).resolve()
-        dest_dir = Path(output_folder).resolve() if output_folder else src.parent
+        dest_dir = Path(output_folder).resolve() if output_folder else src.parent.resolve()
         dest_dir.mkdir(parents=True, exist_ok=True)
 
         stem = src.stem
-        if add_prefix and not stem.startswith("DR_"):
-            out_stem = f"DR_{stem}"
-        else:
-            out_stem = stem
+        if prefix and not stem.startswith(prefix):
+            stem = f"{prefix}{stem}"
+        if suffix and not stem.endswith(suffix):
+            stem = f"{stem}{suffix}"
+        out_stem = stem
 
         print(f"Opening: {src}")
         documents.open(str(src))
@@ -524,11 +577,13 @@ def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
 
 
 def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
-                   add_prefix: bool = True):  # NEW param
+                   prefix: str = "MD_", suffix: str = ""):
     """
     Convert CATPart/CATProduct files to STEP (.stp) using pyCATIA.
-    If add_prefix is True, prepends 'MD_' to the output filename unless it
-    already starts with 'MD_'.
+    If prefix is non-empty, prepends it to the output filename unless it
+    already starts with that prefix.
+    If suffix is non-empty, appends it to the output stem unless it
+    already ends with that suffix.
     """
     from pycatia import catia
 
@@ -539,16 +594,17 @@ def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
 
     for path in file_paths:
         src = Path(path)
-        dest_dir = Path(output_folder) if output_folder else src.parent
+        dest_dir = Path(output_folder).resolve() if output_folder else src.parent.resolve()
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        stem = src.stem                                   # NEW
-        if add_prefix and not stem.startswith("MD_"):    # NEW
-            out_stem = f"MD_{stem}"                       # NEW
-        else:                                             # NEW
-            out_stem = stem                               # NEW
+        stem = src.stem
+        if prefix and not stem.startswith(prefix):
+            stem = f"{prefix}{stem}"
+        if suffix and not stem.endswith(suffix):
+            stem = f"{stem}{suffix}"
+        out_stem = stem
 
-        dest = dest_dir / f"{out_stem}.stp"              # NEW
+        dest = dest_dir / f"{out_stem}.stp"
 
         print(f"Opening: {src}")
         documents.open(str(src))
