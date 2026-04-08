@@ -172,10 +172,10 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
 
         convert_menu = file_menu.addMenu("Convert")
-        convert_part_action = QAction("Convert CATPart/CATProduct", self)
+        convert_part_action = QAction("从CATPart/CATProduct导出stp", self)
         convert_part_action.triggered.connect(self._open_convert_part_dialog)
         convert_menu.addAction(convert_part_action)
-        convert_drawing_action = QAction("Convert CATDrawing", self)
+        convert_drawing_action = QAction("从CATDrawing导出pdf", self)
         convert_drawing_action.triggered.connect(self._open_convert_drawing_dialog)
         convert_menu.addAction(convert_drawing_action)
 
@@ -240,7 +240,8 @@ class MainWindow(QMainWindow):
             conversion_fn=CATPart_to_STP,
             settings_key="CATPart",
             show_prefix_option=True,
-            prefix="MD_"
+            prefix="MD_",
+            note="暂时留空"
         )
         dialog.exec()
 
@@ -254,7 +255,8 @@ class MainWindow(QMainWindow):
             conversion_fn=CATDrawing_to_PDF,
             settings_key="CATDrawing",
             show_prefix_option=True,
-            prefix="DR_"
+            prefix="DR_",
+            note="如果用于导出的CATDrawing有多页，请将CATIA设置为\u201c将多页文档保存在单向量文件中\u201d（工具->选项->常规->兼容性->图形格式->导出（另存为））"
         )
         dialog.exec()
 
@@ -384,7 +386,7 @@ class ConvertDialog(QDialog):
     def __init__(self, parent=None, title="Convert", file_label="Selected files:",
                  file_filter="All Files (*)", no_files_msg="Please select at least one file.",
                  conversion_fn=None, settings_key="default",
-                 show_prefix_option=False, prefix=""):
+                 show_prefix_option=False, prefix="", note: str = ""):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setMinimumSize(520, 450)
@@ -497,6 +499,12 @@ class ConvertDialog(QDialog):
             self.prefix_edit     = None
             self.suffix_checkbox = None
             self.suffix_edit     = None
+
+        if note:
+            note_label = QLabel(note)
+            note_label.setWordWrap(True)
+            note_label.setStyleSheet("color: gray; font-size: 11px;")
+            layout.addWidget(note_label)
 
         action_row = QHBoxLayout()
         action_row.addStretch()
@@ -635,7 +643,12 @@ def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
     application.visible = True
     documents = application.documents
 
+    bulk_action = None  # "skip_all", "overwrite_all", or "cancel"
+
     for path in file_paths:
+        if bulk_action == "cancel":
+            break
+
         src = Path(path).resolve()
         dest_dir = Path(output_folder).resolve() if output_folder else src.parent.resolve()
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -648,13 +661,50 @@ def CATDrawing_to_PDF(file_paths: list[str], output_folder: str | None = None,
         out_stem = stem
 
         logger.info(f"Opening: {src}")
+        dest = dest_dir / f"{out_stem}.pdf"
+
+        if dest.exists():
+            if bulk_action == "skip_all":
+                print(f"  Skipped (skip all): {dest}")
+                continue
+            if bulk_action == "overwrite_all":
+                dest.unlink()
+            else:
+                msg = QMessageBox()
+                msg.setWindowTitle("File Already Exists")
+                msg.setText(f'"{dest.name}" already exists in the output folder.')
+                msg.setInformativeText(str(dest.parent))
+                msg.setIcon(QMessageBox.Icon.Warning)
+                skip_btn          = msg.addButton("Skip",         QMessageBox.ButtonRole.RejectRole)
+                skip_all_btn      = msg.addButton("Skip All",     QMessageBox.ButtonRole.RejectRole)
+                overwrite_btn     = msg.addButton("Overwrite",    QMessageBox.ButtonRole.AcceptRole)
+                overwrite_all_btn = msg.addButton("Overwrite All", QMessageBox.ButtonRole.AcceptRole)
+                cancel_btn        = msg.addButton("Cancel",       QMessageBox.ButtonRole.DestructiveRole)
+                msg.exec()
+                clicked = msg.clickedButton()
+                if clicked is cancel_btn:
+                    bulk_action = "cancel"
+                    break
+                elif clicked is skip_all_btn:
+                    bulk_action = "skip_all"
+                    print(f"  Skipped (skip all): {dest}")
+                    continue
+                elif clicked is skip_btn:
+                    print(f"  Skipped: {dest}")
+                    continue
+                elif clicked is overwrite_all_btn:
+                    bulk_action = "overwrite_all"
+                    dest.unlink()
+                else:  # overwrite_btn
+                    dest.unlink()
+
+        print(f"Opening: {src}")
         documents.open(str(src))
         from pycatia.drafting_interfaces.drawing_document import DrawingDocument
         drawing_doc = DrawingDocument(application.active_document.com_object)
         drawing = drawing_doc.drawing_root
         sheet_count = drawing.sheets.count
 
-        dest = dest_dir / f"{out_stem}.pdf"
         drawing_doc.export_data(str(dest), "pdf")
         if not dest.exists():
             logger.warning(f"  WARNING: export_data did not create {dest}")
@@ -681,7 +731,12 @@ def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
     application.visible = True
     documents = application.documents
 
+    bulk_action = None  # "skip_all", "overwrite_all", or "cancel"
+
     for path in file_paths:
+        if bulk_action == "cancel":
+            break
+
         src = Path(path)
         dest_dir = Path(output_folder).resolve() if output_folder else src.parent.resolve()
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -696,6 +751,42 @@ def CATPart_to_STP(file_paths: list[str], output_folder: str | None = None,
         dest = dest_dir / f"{out_stem}.stp"
 
         logger.info(f"Opening: {src}")
+        if dest.exists():
+            if bulk_action == "skip_all":
+                print(f"  Skipped (skip all): {dest}")
+                continue
+            if bulk_action == "overwrite_all":
+                dest.unlink()
+            else:
+                msg = QMessageBox()
+                msg.setWindowTitle("File Already Exists")
+                msg.setText(f'"{dest.name}" already exists in the output folder.')
+                msg.setInformativeText(str(dest.parent))
+                msg.setIcon(QMessageBox.Icon.Warning)
+                skip_btn          = msg.addButton("Skip",         QMessageBox.ButtonRole.RejectRole)
+                skip_all_btn      = msg.addButton("Skip All",     QMessageBox.ButtonRole.RejectRole)
+                overwrite_btn     = msg.addButton("Overwrite",    QMessageBox.ButtonRole.AcceptRole)
+                overwrite_all_btn = msg.addButton("Overwrite All", QMessageBox.ButtonRole.AcceptRole)
+                cancel_btn        = msg.addButton("Cancel",       QMessageBox.ButtonRole.DestructiveRole)
+                msg.exec()
+                clicked = msg.clickedButton()
+                if clicked is cancel_btn:
+                    bulk_action = "cancel"
+                    break
+                elif clicked is skip_all_btn:
+                    bulk_action = "skip_all"
+                    print(f"  Skipped (skip all): {dest}")
+                    continue
+                elif clicked is skip_btn:
+                    print(f"  Skipped: {dest}")
+                    continue
+                elif clicked is overwrite_all_btn:
+                    bulk_action = "overwrite_all"
+                    dest.unlink()
+                else:  # overwrite_btn
+                    dest.unlink()
+
+        print(f"Opening: {src}")
         documents.open(str(src))
         doc = application.active_document
         doc.export_data(str(dest), "stp")
