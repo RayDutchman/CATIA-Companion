@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QLabel, QMessageBox, QDialog, QPushButton, QListWidget, QFileDialog,
     QAbstractItemView, QRadioButton, QButtonGroup, QLineEdit, QGroupBox,
     QListWidgetItem, QComboBox, QCheckBox, QPlainTextEdit,
+    QTableWidget, QTableWidgetItem, QHeaderView,
 )
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt, QSettings, QObject, Signal
@@ -232,6 +233,12 @@ class MainWindow(QMainWindow):
         export_bom_action.triggered.connect(self._open_export_bom_dialog)
         export_menu.addAction(export_bom_action)
 
+        # --- Edit ---
+        edit_menu = menu_bar.addMenu("编辑")
+        bom_edit_action = QAction("BOM属性补全", self)
+        bom_edit_action.triggered.connect(self._open_bom_edit_dialog)
+        edit_menu.addAction(bom_edit_action)
+
         # --- Macro ---
         self._macro_menu = menu_bar.addMenu("宏")
         self._build_macro_menu()
@@ -390,6 +397,10 @@ class MainWindow(QMainWindow):
 
     def _open_export_bom_dialog(self):
         dialog = ExportBOMDialog(self)
+        dialog.exec()
+
+    def _open_bom_edit_dialog(self):
+        dialog = BomEditDialog(self)
         dialog.exec()
 
     def _copy_font_to_catia(self):
@@ -1662,6 +1673,533 @@ class FindDependenciesDialog(QDialog):
         text = self._result_view.toPlainText()
         if text:
             QApplication.clipboard().setText(text)
+
+
+# ---------------------------------------------------------------------------
+# BOM Edit (BOM属性补全) – constants, helpers, dialog
+# ---------------------------------------------------------------------------
+
+# Columns that are structural / derived – shown read-only in the edit table
+_BOM_READONLY_COLS = {"Level", "Type", "Part Number", "Quantity"}
+
+
+def _collect_bom_rows(file_path: str, columns: list[str],
+                      custom_columns: list[str]) -> list[dict]:
+    """
+    Open *file_path* in a running CATIA instance and return a list of row dicts
+    representing the hierarchical BOM (same traversal as export_bom_to_excel).
+    Each dict contains at least the keys from *columns*.
+    """
+    from pycatia import catia
+    from pycatia.product_structure_interfaces.product_document import ProductDocument
+    from pycatia import CatWorkModeType
+
+    DIRECT_ATTR_MAP = {
+        "Nomenclature": "nomenclature",
+        "Revision":     "revision",
+        "Definition":   "definition",
+        "Source":       "source",
+    }
+
+    def get_prop(product, name: str) -> str:
+        attr = DIRECT_ATTR_MAP.get(name)
+        if not attr:
+            return ""
+        targets = [product]
+        try:
+            targets.insert(0, product.reference_product)
+        except Exception:
+            pass
+        for target in targets:
+            try:
+                value = getattr(target, attr)
+                if value is not None:
+                    return str(value)
+            except Exception:
+                pass
+        return ""
+
+    def get_user_prop(product, name: str) -> str:
+        targets = [product]
+        try:
+            targets.insert(0, product.reference_product)
+        except Exception:
+            pass
+        for target in targets:
+            try:
+                prop = target.user_ref_properties.item(name)
+                value = prop.value
+                if value is not None and str(value).strip():
+                    return str(value)
+            except Exception:
+                pass
+        return ""
+
+    def traverse(product, rows: list, level: int):
+        try:
+            pn = product.part_number
+        except Exception:
+            name = product.name
+            pn = name.rsplit(".", 1)[0] if "." in name else name
+
+        try:
+            product.apply_work_mode(CatWorkModeType.DESIGN_MODE)
+        except Exception:
+            pass
+
+        row: dict = {"Level": level, "Part Number": pn}
+        try:
+            child_count = product.products.count
+            row["Type"] = "装配体" if child_count > 0 else "零件"
+        except Exception:
+            row["Type"] = ""
+
+        for col in columns:
+            if col in DIRECT_ATTR_MAP:
+                row[col] = get_prop(product, col)
+            elif col in custom_columns:
+                row[col] = get_user_prop(product, col)
+
+        rows.append(row)
+
+        try:
+            products = product.products
+            count = products.count
+            if count == 0:
+                return
+            children: dict = {}
+            for i in range(1, count + 1):
+                try:
+                    child = products.item(i)
+                    try:
+                        cpn = child.part_number
+                    except Exception:
+                        try:
+                            cpn = child.reference_product.part_number
+                        except Exception:
+                            n = child.name
+                            cpn = n.rsplit(".", 1)[0] if "." in n else n
+                except Exception:
+                    continue
+                if cpn not in children:
+                    children[cpn] = {"product": child, "qty": 0}
+                children[cpn]["qty"] += 1
+            for cpn, data in children.items():
+                child_rows: list = []
+                traverse(data["product"], child_rows, level + 1)
+                if child_rows:
+                    child_rows[0]["Quantity"] = data["qty"]
+                rows.extend(child_rows)
+        except Exception:
+            pass
+
+    caa = catia()
+    application = caa.application
+    application.visible = True
+    documents = application.documents
+
+    src = Path(file_path).resolve()
+    already_open: set[Path] = set()
+    for i in range(1, documents.count + 1):
+        try:
+            already_open.add(Path(documents.item(i).full_name).resolve())
+        except Exception:
+            pass
+
+    if src not in already_open:
+        documents.open(str(src))
+
+    # Find the target document
+    target_doc = None
+    for i in range(1, documents.count + 1):
+        try:
+            doc = documents.item(i)
+            if Path(doc.full_name).resolve() == src:
+                target_doc = doc
+                break
+        except Exception:
+            pass
+    if target_doc is None:
+        raise RuntimeError(f"无法在CATIA中找到文档：{src}")
+
+    product_doc = ProductDocument(target_doc.com_object)
+    root_product = product_doc.product
+    rows: list[dict] = []
+    traverse(root_product, rows, level=0)
+    return rows
+
+
+def _write_bom_to_catia(file_path: str, pn_data: dict[str, dict[str, str]],
+                        custom_columns: list[str]):
+    """
+    Traverse the product tree rooted at *file_path* and write back every editable
+    property stored in *pn_data* (keyed by Part Number) to CATIA via COM.
+    Saves all documents that were modified.
+    """
+    from pycatia import catia
+    from pycatia.product_structure_interfaces.product_document import ProductDocument
+    from pycatia import CatWorkModeType
+
+    WRITABLE_DIRECT = {
+        "Nomenclature": "nomenclature",
+        "Revision":     "revision",
+        "Definition":   "definition",
+        "Source":       "source",
+    }
+
+    def set_prop(product, name: str, value: str):
+        attr = WRITABLE_DIRECT.get(name)
+        if not attr:
+            return
+        targets: list = []
+        try:
+            targets.append(product.reference_product)
+        except Exception:
+            pass
+        targets.append(product)
+        for target in targets:
+            try:
+                setattr(target, attr, int(value) if name == "Source" else value)
+                return
+            except Exception:
+                continue
+
+    def set_user_prop(product, name: str, value: str):
+        targets: list = []
+        try:
+            targets.append(product.reference_product)
+        except Exception:
+            pass
+        targets.append(product)
+        for target in targets:
+            try:
+                target.user_ref_properties.item(name).value = value
+                return
+            except Exception:
+                continue
+
+    def traverse_write(product):
+        try:
+            pn = product.part_number
+        except Exception:
+            name = product.name
+            pn = name.rsplit(".", 1)[0] if "." in name else name
+
+        if pn in pn_data:
+            try:
+                product.apply_work_mode(CatWorkModeType.DESIGN_MODE)
+            except Exception:
+                pass
+            for col, value in pn_data[pn].items():
+                if col in _BOM_READONLY_COLS:
+                    continue
+                if col in WRITABLE_DIRECT:
+                    set_prop(product, col, value)
+                elif col in custom_columns:
+                    set_user_prop(product, col, value)
+
+        try:
+            count = product.products.count
+            for i in range(1, count + 1):
+                try:
+                    traverse_write(product.products.item(i))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    caa = catia()
+    application = caa.application
+    application.visible = True
+    documents = application.documents
+
+    src = Path(file_path).resolve()
+    already_open: set[Path] = set()
+    for i in range(1, documents.count + 1):
+        try:
+            already_open.add(Path(documents.item(i).full_name).resolve())
+        except Exception:
+            pass
+
+    if src not in already_open:
+        documents.open(str(src))
+
+    target_doc = None
+    for i in range(1, documents.count + 1):
+        try:
+            doc = documents.item(i)
+            if Path(doc.full_name).resolve() == src:
+                target_doc = doc
+                break
+        except Exception:
+            pass
+    if target_doc is None:
+        raise RuntimeError(f"无法在CATIA中找到文档：{src}")
+
+    product_doc = ProductDocument(target_doc.com_object)
+    root_product = product_doc.product
+    traverse_write(root_product)
+
+    # Save all documents that were opened as part of this operation
+    for i in range(1, documents.count + 1):
+        try:
+            doc = documents.item(i)
+            doc_path = Path(doc.full_name).resolve()
+            if doc_path not in already_open or doc_path == src:
+                doc.save()
+                logger.info(f"Saved: {doc_path}")
+        except Exception as e:
+            logger.warning(f"Failed to save document: {e}")
+
+    logger.info(f"Write-back complete for {src.name}")
+
+
+class BomEditDialog(QDialog):
+    """
+    Displays the BOM of a CATProduct in an editable table.
+
+    - Part Number, Level, Type, Quantity are read-only (structural / unique ID).
+    - All other columns are editable.
+    - Rows sharing the same Part Number are linked: editing one cell propagates
+      the new value to every other row with the same PN.
+    - Clicking "完成" writes the changes back to CATIA via COM.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("BOM属性补全")
+        self.setMinimumSize(900, 600)
+        self.resize(1100, 700)
+
+        # Share custom-column config with ExportBOMDialog
+        self._settings = QSettings("CATIACompanion", "ExportBOMDialog")
+        self._last_browse_dir = self._settings.value("last_browse_dir", "")
+
+        saved_custom = self._settings.value("custom_columns", [])
+        if isinstance(saved_custom, str):
+            saved_custom = [saved_custom]
+        self._custom_columns: list[str] = list(saved_custom)
+
+        self._columns: list[str] = list(BOM_ALL_COLUMNS) + self._custom_columns
+
+        # PN-keyed canonical data: {pn: {col: value}}
+        self._pn_data: dict[str, dict[str, str]] = {}
+        # All BOM rows in traversal order
+        self._rows: list[dict] = []
+        # Guard against re-entrant itemChanged handling
+        self._updating = False
+
+        # ── Layout ──────────────────────────────────────────────────────────
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        # File picker row
+        layout.addWidget(QLabel("CATProduct文件:"))
+        file_row = QHBoxLayout()
+        self._file_edit = QLineEdit()
+        self._file_edit.setPlaceholderText("选择一个CATProduct文件...")
+        self._file_edit.setReadOnly(True)
+        file_browse_btn = QPushButton("浏览...")
+        file_browse_btn.clicked.connect(self._browse_file)
+        self._load_btn = QPushButton("加载BOM")
+        self._load_btn.clicked.connect(self._load_bom)
+        file_row.addWidget(self._file_edit)
+        file_row.addWidget(file_browse_btn)
+        file_row.addWidget(self._load_btn)
+        layout.addLayout(file_row)
+
+        note = QLabel(
+            "Part Number 为唯一标识，不可编辑；Level / Type / Quantity 为结构属性，不可编辑。"
+            "相同 Part Number 的行会联动更新。请确保 CATIA 已启动。"
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(note)
+
+        # Editable table
+        self._table = QTableWidget(0, len(self._columns))
+        self._table.setHorizontalHeaderLabels(self._columns)
+        self._table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
+        self._table.horizontalHeader().setStretchLastSection(True)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setAlternatingRowColors(True)
+        self._table.itemChanged.connect(self._on_item_changed)
+        layout.addWidget(self._table)
+
+        # Bottom buttons
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        self._apply_btn = QPushButton("完成（写回CATIA）")
+        self._apply_btn.setDefault(True)
+        self._apply_btn.setEnabled(False)
+        self._apply_btn.clicked.connect(self._apply_changes)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(self._apply_btn)
+        btn_row.addWidget(cancel_btn)
+        layout.addLayout(btn_row)
+
+    # ── File picker ────────────────────────────────────────────────────────
+
+    def _browse_file(self):
+        file, _ = QFileDialog.getOpenFileName(
+            self, "选择CATProduct文件",
+            self._last_browse_dir,
+            "*.CATProduct (*.CATProduct);;All Files (*)"
+        )
+        if file:
+            self._file_edit.setText(file)
+            self._last_browse_dir = str(Path(file).parent)
+            self._settings.setValue("last_browse_dir", self._last_browse_dir)
+
+    # ── Load BOM ───────────────────────────────────────────────────────────
+
+    def _load_bom(self):
+        file_path = self._file_edit.text().strip()
+        if not file_path:
+            QMessageBox.warning(self, "未选择文件", "请先选择一个CATProduct文件。")
+            return
+        if not Path(file_path).exists():
+            QMessageBox.warning(self, "文件不存在", f"文件不存在：\n{file_path}")
+            return
+
+        self._load_btn.setEnabled(False)
+        self._load_btn.setText("加载中…")
+        QApplication.processEvents()
+
+        try:
+            rows = _collect_bom_rows(file_path, self._columns, self._custom_columns)
+        except Exception as e:
+            logger.error(f"Failed to load BOM for edit: {e}")
+            QMessageBox.critical(
+                self, "加载失败",
+                f"加载BOM时出错：\n{e}\n\n请确保CATIA已启动。"
+            )
+            self._load_btn.setEnabled(True)
+            self._load_btn.setText("加载BOM")
+            return
+
+        self._load_btn.setEnabled(True)
+        self._load_btn.setText("重新加载BOM")
+
+        self._rows = rows
+
+        # Build PN-keyed data (first occurrence of each PN defines canonical values)
+        self._pn_data = {}
+        for row in rows:
+            pn = str(row.get("Part Number", ""))
+            if pn and pn not in self._pn_data:
+                self._pn_data[pn] = {
+                    col: str(row.get(col, "")) for col in self._columns
+                }
+
+        self._populate_table()
+        self._apply_btn.setEnabled(True)
+
+    # ── Table population ───────────────────────────────────────────────────
+
+    def _populate_table(self):
+        self._updating = True
+        self._table.setRowCount(0)
+        self._table.setRowCount(len(self._rows))
+
+        pn_col = self._columns.index("Part Number") if "Part Number" in self._columns else -1
+
+        for row_idx, row_data in enumerate(self._rows):
+            pn = str(row_data.get("Part Number", ""))
+            for col_idx, col_name in enumerate(self._columns):
+                if col_name == "Level":
+                    value = str(row_data.get("Level", ""))
+                elif col_name == "Quantity":
+                    value = str(row_data.get("Quantity", "1"))
+                elif col_name in _BOM_READONLY_COLS:
+                    value = str(row_data.get(col_name, ""))
+                else:
+                    # Always read editable cells from the canonical pn_data
+                    value = str(self._pn_data.get(pn, {}).get(col_name, row_data.get(col_name, "")))
+
+                item = QTableWidgetItem(value)
+                if col_name in _BOM_READONLY_COLS:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    item.setForeground(self._table.palette().color(
+                        self._table.foregroundRole()
+                    ))
+                self._table.setItem(row_idx, col_idx, item)
+
+        self._updating = False
+
+    # ── Cell edit sync ─────────────────────────────────────────────────────
+
+    def _on_item_changed(self, item: QTableWidgetItem):
+        if self._updating:
+            return
+        col_idx = item.column()
+        row_idx = item.row()
+        col_name = self._columns[col_idx]
+
+        if col_name in _BOM_READONLY_COLS:
+            return
+
+        pn_col_idx = (
+            self._columns.index("Part Number")
+            if "Part Number" in self._columns
+            else -1
+        )
+        if pn_col_idx < 0:
+            return
+        pn_item = self._table.item(row_idx, pn_col_idx)
+        if not pn_item:
+            return
+        pn = pn_item.text()
+
+        new_value = item.text()
+
+        # Update canonical data
+        if pn in self._pn_data:
+            self._pn_data[pn][col_name] = new_value
+
+        # Propagate to all other rows with the same PN
+        self._updating = True
+        for r in range(self._table.rowCount()):
+            if r == row_idx:
+                continue
+            other_pn_item = self._table.item(r, pn_col_idx)
+            if other_pn_item and other_pn_item.text() == pn:
+                other_item = self._table.item(r, col_idx)
+                if other_item and other_item.text() != new_value:
+                    other_item.setText(new_value)
+        self._updating = False
+
+    # ── Write back ─────────────────────────────────────────────────────────
+
+    def _apply_changes(self):
+        file_path = self._file_edit.text().strip()
+        if not file_path:
+            QMessageBox.warning(self, "未选择文件", "请选择一个CATProduct文件。")
+            return
+
+        self._apply_btn.setEnabled(False)
+        self._apply_btn.setText("写回中…")
+        QApplication.processEvents()
+
+        try:
+            _write_bom_to_catia(file_path, self._pn_data, self._custom_columns)
+        except Exception as e:
+            logger.error(f"Failed to write BOM back to CATIA: {e}")
+            self._apply_btn.setEnabled(True)
+            self._apply_btn.setText("完成（写回CATIA）")
+            QMessageBox.critical(
+                self, "写回失败",
+                f"写回CATIA时出错：\n{e}\n\n请确保CATIA已启动。"
+            )
+            return
+
+        QMessageBox.information(self, "完成", "BOM属性已成功写回CATIA并保存！")
+        self.accept()
+
 
 # ---------------------------------------------------------------------------
 # Entry point
