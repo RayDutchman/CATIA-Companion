@@ -1828,22 +1828,20 @@ def _collect_bom_rows(file_path: str | None, columns: list[str],
             for i in range(1, count + 1):
                 try:
                     child = products.item(i)
-                    child_key = _get_product_filepath(child)
-                    if not child_key:
+                    try:
+                        cpn = child.part_number
+                    except Exception:
                         try:
-                            child_key = child.part_number
+                            cpn = child.reference_product.part_number
                         except Exception:
-                            try:
-                                child_key = child.reference_product.part_number
-                            except Exception:
-                                n = child.name
-                                child_key = n.rsplit(".", 1)[0] if "." in n else n
+                            n = child.name
+                            cpn = n.rsplit(".", 1)[0] if "." in n else n
                 except Exception:
                     continue
-                if child_key not in children:
-                    children[child_key] = {"product": child, "qty": 0}
-                children[child_key]["qty"] += 1
-            for _key, data in children.items():
+                if cpn not in children:
+                    children[cpn] = {"product": child, "qty": 0}
+                children[cpn]["qty"] += 1
+            for cpn, data in children.items():
                 child_rows: list = []
                 traverse(data["product"], child_rows, level + 1)
                 if child_rows:
@@ -1896,11 +1894,11 @@ def _collect_bom_rows(file_path: str | None, columns: list[str],
     return rows
 
 
-def _write_bom_to_catia(file_path: str | None, fp_data: dict[str, dict[str, str]],
+def _write_bom_to_catia(file_path: str | None, pn_data: dict[str, dict[str, str]],
                         custom_columns: list[str]):
     """
     Traverse the product tree and write back every editable property stored in
-    *fp_data* (keyed by file path) to CATIA via COM.
+    *pn_data* (keyed by original Part Number) to CATIA via COM.
 
     When *file_path* is None the currently active CATIA document is used and
     nothing is saved (the caller is responsible for any saving).
@@ -1950,14 +1948,18 @@ def _write_bom_to_catia(file_path: str | None, fp_data: dict[str, dict[str, str]
                 continue
 
     def traverse_write(product):
-        filepath = _get_product_filepath(product)
+        try:
+            pn = product.part_number
+        except Exception:
+            name = product.name
+            pn = name.rsplit(".", 1)[0] if "." in name else name
 
-        if filepath and filepath in fp_data:
+        if pn in pn_data:
             try:
                 product.apply_work_mode(CatWorkModeType.DESIGN_MODE)
             except Exception:
                 pass
-            for col, value in fp_data[filepath].items():
+            for col, value in pn_data[pn].items():
                 if col in _BOM_READONLY_COLS:
                     continue
                 if col == "Part Number":
@@ -2034,8 +2036,8 @@ class BomEditDialog(QDialog):
     - 零件编号 (Part Number) is editable with conflict checking.
     - All other columns are editable.  源 (Source) is a QComboBox (未知/自制/外购).
     - Level cells are indented with (level) leading spaces for hierarchy clarity.
-    - Rows sharing the same file path are linked: editing one cell propagates
-      the new value to every other row with the same file.
+    - Rows sharing the same Part Number are linked: editing one cell propagates
+      the new value to every other row with the same PN.
     - Clicking "完成" writes the changes back to CATIA via COM.
     """
 
@@ -2058,12 +2060,12 @@ class BomEditDialog(QDialog):
         extra = [c for c in self._custom_columns if c not in _BOM_EDIT_COLUMN_ORDER]
         self._columns: list[str] = _BOM_EDIT_COLUMN_ORDER + extra
 
-        # Filepath-keyed canonical data: {filepath: {internal_col: value}}
+        # PN-keyed canonical data: {original_pn: {internal_col: value}}
         # Source is stored as display label (未知/自制/外购).
-        self._fp_data: dict[str, dict[str, str]] = {}
+        self._pn_data: dict[str, dict[str, str]] = {}
         # Snapshot of values at last load/apply (for dirty-only write-back)
-        self._original_fp_data: dict[str, dict[str, str]] = {}
-        # Modified fields per filepath: {filepath: {col_name, ...}}
+        self._original_pn_data: dict[str, dict[str, str]] = {}
+        # Modified fields per original PN: {original_pn: {col_name, ...}}
         self._dirty: dict[str, set[str]] = {}
         # All BOM rows in traversal order
         self._rows: list[dict] = []
@@ -2097,9 +2099,9 @@ class BomEditDialog(QDialog):
         layout.addLayout(file_row)
 
         note = QLabel(
-            "文件名 为唯一标识，不可编辑；层级 / 类型 / 数量 为结构属性，不可编辑。"
+            "文件名 / 层级 / 类型 / 数量 为结构属性，不可编辑。"
             "零件编号可编辑但不能与其他行冲突。"
-            "相同文件的行会联动更新。请确保 CATIA 已启动。"
+            "相同零件编号的行会联动更新。请确保 CATIA 已启动。"
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: gray; font-size: 11px;")
@@ -2193,22 +2195,22 @@ class BomEditDialog(QDialog):
         self._rows = rows
         self._collapsed_rows.clear()
 
-        # Build filepath-keyed canonical data (first occurrence wins).
+        # Build PN-keyed canonical data (first occurrence wins).
         # Source is converted from CATIA integer string to display label.
-        self._fp_data = {}
+        self._pn_data = {}
         for row in rows:
-            fp = str(row.get("_filepath", ""))
-            if fp and fp not in self._fp_data:
+            pn = str(row.get("Part Number", ""))
+            if pn and pn not in self._pn_data:
                 data: dict[str, str] = {}
                 for col in self._columns:
                     val = str(row.get(col, ""))
                     if col == "Source":
                         val = _SOURCE_TO_DISPLAY.get(val, val)
                     data[col] = val
-                self._fp_data[fp] = data
+                self._pn_data[pn] = data
 
         # Snapshot original values for dirty-only write-back; clear stale dirty state
-        self._original_fp_data = copy.deepcopy(self._fp_data)
+        self._original_pn_data = copy.deepcopy(self._pn_data)
         self._dirty.clear()
 
         self._populate_table()
@@ -2229,7 +2231,7 @@ class BomEditDialog(QDialog):
         )
 
         for row_idx, row_data in enumerate(self._rows):
-            fp = str(row_data.get("_filepath", ""))
+            pn = str(row_data.get("Part Number", ""))
             level = row_data.get("Level", 0)
             unreadable = bool(row_data.get("_unreadable"))
 
@@ -2240,13 +2242,13 @@ class BomEditDialog(QDialog):
                     raw = str(row_data.get("Source", ""))
                     display_val = _SOURCE_TO_DISPLAY.get(raw, raw)
                     # Canonical value may already be a display label
-                    fp_val = self._fp_data.get(fp, {}).get("Source", display_val)
-                    if fp_val not in _SOURCE_OPTIONS:
-                        fp_val = _SOURCE_TO_DISPLAY.get(fp_val, _SOURCE_OPTIONS[0])
+                    pn_val = self._pn_data.get(pn, {}).get("Source", display_val)
+                    if pn_val not in _SOURCE_OPTIONS:
+                        pn_val = _SOURCE_TO_DISPLAY.get(pn_val, _SOURCE_OPTIONS[0])
 
                     combo = QComboBox()
                     combo.addItems(_SOURCE_OPTIONS)
-                    combo.setCurrentText(fp_val)
+                    combo.setCurrentText(pn_val)
                     combo.currentTextChanged.connect(
                         lambda text, r=row_idx: self._on_source_changed(r, text)
                     )
@@ -2262,15 +2264,17 @@ class BomEditDialog(QDialog):
                     value = str(row_data.get(col_name, ""))
                 else:
                     value = str(
-                        self._fp_data.get(fp, {}).get(col_name, row_data.get(col_name, ""))
+                        self._pn_data.get(pn, {}).get(col_name, row_data.get(col_name, ""))
                     )
 
                 item = QTableWidgetItem(value)
                 if col_name in _BOM_READONLY_COLS:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 # Show full path as tooltip on the Filename cell
-                if col_name == "Filename" and fp:
-                    item.setToolTip(fp)
+                if col_name == "Filename":
+                    fp = str(row_data.get("_filepath", ""))
+                    if fp:
+                        item.setToolTip(fp)
                 self._table.setItem(row_idx, col_idx, item)
 
             # Grey out and lock rows whose document could not be loaded
@@ -2349,33 +2353,33 @@ class BomEditDialog(QDialog):
             return
 
         # Determine the set of rows to propagate to: all selected rows (if the
-        # triggering row is among the selection) + all rows with the same filepath.
+        # triggering row is among the selection) + all rows with the same PN.
         selected_rows = {idx.row() for idx in self._table.selectedIndexes()}
         if row_idx in selected_rows:
             direct_rows = selected_rows
         else:
             direct_rows = {row_idx}
 
-        # Collect the filepaths of all directly affected rows
-        fps_to_update: set[str] = set()
+        # Collect the original PNs of all directly affected rows
+        pns_to_update: set[str] = set()
         for r in direct_rows:
-            fp = self._rows[r].get("_filepath", "")
-            if fp:
-                fps_to_update.add(fp)
+            pn = str(self._rows[r].get("Part Number", ""))
+            if pn:
+                pns_to_update.add(pn)
 
-        # Update canonical data for every affected filepath
-        for fp in fps_to_update:
-            if fp in self._fp_data:
-                self._fp_data[fp]["Source"] = text
-                self._dirty.setdefault(fp, set()).add("Source")
+        # Update canonical data for every affected PN
+        for pn in pns_to_update:
+            if pn in self._pn_data:
+                self._pn_data[pn]["Source"] = text
+                self._dirty.setdefault(pn, set()).add("Source")
 
-        # Sync all rows whose filepath is in the affected set
+        # Sync all rows whose original PN is in the affected set
         self._updating = True
         for r in range(self._table.rowCount()):
             if r == row_idx:
                 continue
-            other_fp = self._rows[r].get("_filepath", "")
-            if other_fp in fps_to_update:
+            other_pn = str(self._rows[r].get("Part Number", ""))
+            if other_pn in pns_to_update:
                 combo = self._table.cellWidget(r, src_col_idx)
                 if isinstance(combo, QComboBox) and combo.currentText() != text:
                     combo.blockSignals(True)
@@ -2397,71 +2401,66 @@ class BomEditDialog(QDialog):
             return
 
         new_value = item.text()
-        fp = self._rows[row_idx].get("_filepath", "")
+        pn = str(self._rows[row_idx].get("Part Number", ""))
 
         # ── Part Number conflict checking ────────────────────────────────
         if col_name == "Part Number":
-            # Check against current Part Numbers of other filepaths
-            for other_fp, data in self._fp_data.items():
-                if other_fp == fp:
+            # Check against current Part Numbers of other PNs
+            for other_pn, data in self._pn_data.items():
+                if other_pn == pn:
                     continue
-                if data.get("Part Number", "") == new_value:
+                if data.get("Part Number", other_pn) == new_value:
                     QMessageBox.warning(
                         self, "零件编号冲突",
-                        f"零件编号 \"{new_value}\" 与文件 "
-                        f"\"{Path(other_fp).name}\" 的当前零件编号冲突，"
+                        f"零件编号 \"{new_value}\" 与 "
+                        f"\"{other_pn}\" 的当前零件编号冲突，"
                         f"不允许修改。")
                     self._updating = True
                     item.setText(
-                        self._fp_data.get(fp, {}).get("Part Number", ""))
+                        self._pn_data.get(pn, {}).get("Part Number", pn))
                     self._updating = False
                     return
-            # Check against original Part Numbers of other filepaths
-            for other_fp, data in self._original_fp_data.items():
-                if other_fp == fp:
+            # Check against original Part Numbers of other PNs
+            for other_pn, data in self._original_pn_data.items():
+                if other_pn == pn:
                     continue
-                if data.get("Part Number", "") == new_value:
+                if data.get("Part Number", other_pn) == new_value:
                     QMessageBox.warning(
                         self, "零件编号冲突",
-                        f"零件编号 \"{new_value}\" 与文件 "
-                        f"\"{Path(other_fp).name}\" 的原始零件编号冲突，"
+                        f"零件编号 \"{new_value}\" 与 "
+                        f"\"{other_pn}\" 的原始零件编号冲突，"
                         f"不允许修改。")
                     self._updating = True
                     item.setText(
-                        self._fp_data.get(fp, {}).get("Part Number", ""))
+                        self._pn_data.get(pn, {}).get("Part Number", pn))
                     self._updating = False
                     return
 
         # Determine the set of rows to propagate to: all selected rows (if the
-        # edited row is among the selection) + all rows with the same filepath.
+        # edited row is among the selection) + all rows with the same PN.
         selected_rows = {idx.row() for idx in self._table.selectedIndexes()}
         if row_idx in selected_rows:
             direct_rows = selected_rows
         else:
             direct_rows = {row_idx}
 
-        # For Part Number, restrict propagation to same-filepath rows only
-        if col_name == "Part Number":
-            direct_rows = {r for r in direct_rows
-                           if self._rows[r].get("_filepath", "") == fp}
-
-        # Collect filepaths and update canonical data
-        fps_to_update: set[str] = set()
+        # Collect original PNs and update canonical data
+        pns_to_update: set[str] = set()
         for r in direct_rows:
-            r_fp = self._rows[r].get("_filepath", "")
-            if r_fp:
-                fps_to_update.add(r_fp)
-                if r_fp in self._fp_data:
-                    self._fp_data[r_fp][col_name] = new_value
-                    self._dirty.setdefault(r_fp, set()).add(col_name)
+            r_pn = str(self._rows[r].get("Part Number", ""))
+            if r_pn:
+                pns_to_update.add(r_pn)
+                if r_pn in self._pn_data:
+                    self._pn_data[r_pn][col_name] = new_value
+                    self._dirty.setdefault(r_pn, set()).add(col_name)
 
-        # Propagate to all rows whose filepath is in the affected set
+        # Propagate to all rows whose original PN is in the affected set
         self._updating = True
         for r in range(self._table.rowCount()):
             if r == row_idx:
                 continue
-            other_fp = self._rows[r].get("_filepath", "")
-            if other_fp in fps_to_update:
+            other_pn = str(self._rows[r].get("Part Number", ""))
+            if other_pn in pns_to_update:
                 other_item = self._table.item(r, col_idx)
                 if other_item and other_item.text() != new_value:
                     other_item.setText(new_value)
@@ -2484,15 +2483,15 @@ class BomEditDialog(QDialog):
                 QMessageBox.warning(self, "未选择文件", "请选择一个CATProduct文件。")
                 return
 
-        # Build filtered dict: only changed fields per filepath
+        # Build filtered dict: only changed fields per original PN
         dirty_data: dict[str, dict[str, str]] = {}
-        for fp, dirty_cols in self._dirty.items():
-            if fp not in self._fp_data:
+        for pn, dirty_cols in self._dirty.items():
+            if pn not in self._pn_data:
                 continue
-            changed = {col: self._fp_data[fp][col]
-                       for col in dirty_cols if col in self._fp_data[fp]}
+            changed = {col: self._pn_data[pn][col]
+                       for col in dirty_cols if col in self._pn_data[pn]}
             if changed:
-                dirty_data[fp] = changed
+                dirty_data[pn] = changed
 
         if not dirty_data:
             if close_on_success:
@@ -2518,13 +2517,13 @@ class BomEditDialog(QDialog):
             return
 
         # Sync original snapshot and clear dirty tracking for written fields
-        for fp, changed in dirty_data.items():
-            if fp in self._original_fp_data:
-                self._original_fp_data[fp].update(changed)
-            if fp in self._dirty:
-                self._dirty[fp] -= set(changed.keys())
-                if not self._dirty[fp]:
-                    del self._dirty[fp]
+        for pn, changed in dirty_data.items():
+            if pn in self._original_pn_data:
+                self._original_pn_data[pn].update(changed)
+            if pn in self._dirty:
+                self._dirty[pn] -= set(changed.keys())
+                if not self._dirty[pn]:
+                    del self._dirty[pn]
 
         self._save_btn.setEnabled(True)
         self._finish_btn.setEnabled(True)
