@@ -186,7 +186,6 @@ class MainWindow(QMainWindow):
             btn.setText(text)
             btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
             btn.setFixedWidth(90)
-            btn.setWordWrap(True)
             btn.clicked.connect(slot)
             return btn
 
