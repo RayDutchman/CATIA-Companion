@@ -2,6 +2,7 @@ import sys
 import os
 import shutil
 import subprocess
+import unicodedata
 import winreg
 import logging
 from logging.handlers import RotatingFileHandler
@@ -1346,12 +1347,13 @@ def export_bom_to_excel(file_paths: list[str | None], output_folder: str | None 
 
     A *None* entry in *file_paths* means "use the currently active CATIA document"
     without opening or closing anything.
+
+    Traversal is delegated to _collect_bom_rows to avoid code duplication.
     """
     import openpyxl
     from openpyxl.styles import Font, Alignment
     from pycatia import catia
     from pycatia.product_structure_interfaces.product_document import ProductDocument
-    from pycatia import CatWorkModeType
 
     if columns is None:
         columns = BOM_DEFAULT_COLUMNS
@@ -1363,126 +1365,7 @@ def export_bom_to_excel(file_paths: list[str | None], output_folder: str | None 
     application.visible = True
     documents = application.documents
 
-    DIRECT_ATTR_MAP = {
-        "Nomenclature": "nomenclature",
-        "Revision":     "revision",
-        "Definition":   "definition",
-        "Source":       "source",
-    }
-
-    def get_property(product, name: str) -> str:
-        attr = DIRECT_ATTR_MAP.get(name)
-        if not attr:
-            return ""
-        targets = [product]
-        try:
-            targets.insert(0, product.reference_product)
-        except Exception:
-            pass
-        for target in targets:
-            try:
-                value = getattr(target, attr)
-                if value:
-                    return str(value)
-            except Exception:
-                pass
-            try:
-                part = target.get_item("Part")
-                value = getattr(part, attr)
-                if value:
-                    return str(value)
-            except Exception:
-                pass
-        return ""
-
-    def get_user_property(product, name: str) -> str:
-        targets = [product]
-        try:
-            targets.insert(0, product.reference_product)
-        except Exception:
-            pass
-        for target in targets:
-            try:
-                user_props = target.user_ref_properties
-                prop = user_props.item(name)
-                value = prop.value
-                if value is not None and str(value).strip():
-                    return str(value)
-            except Exception:
-                pass
-            try:
-                part = target.get_item("Part")
-                user_props = part.user_ref_properties
-                prop = user_props.item(name)
-                value = prop.value
-                if value is not None and str(value).strip():
-                    return str(value)
-            except Exception:
-                pass
-        return ""
-
-    def traverse(product, rows: list, level: int):
-        try:
-            pn = product.part_number
-        except Exception:
-            name = product.name
-            pn = name.rsplit(".", 1)[0] if "." in name else name
-
-        try:
-            product.apply_work_mode(CatWorkModeType.DESIGN_MODE)
-        except Exception as e:
-            logger.warning(f"  {'  ' * level}  -> apply_work_mode failed: {e}")
-
-        row = {"Level": level, "Part Number": pn}
-        try:
-            child_count = product.products.count
-            row["Type"] = "装配体" if child_count > 0 else "零件"
-        except Exception as e:
-            logger.debug(f"Could not determine Type for {pn}: {e}")
-            row["Type"] = ""
-        logger.debug(f"  {'  ' * level}[Level {level}] {pn}")
-
-        for col in columns:
-            if col in DIRECT_ATTR_MAP:
-                row[col] = get_property(product, col)
-            elif col in custom_columns:
-                row[col] = get_user_property(product, col)
-
-        rows.append(row)
-
-        try:
-            products = product.products
-            count = products.count
-            if count == 0:
-                return
-            children = {}
-            for i in range(1, count + 1):
-                try:
-                    child = products.item(i)
-                    try:
-                        pn = child.part_number
-                    except Exception:
-                        try:
-                            pn = child.reference_product.part_number
-                        except Exception:
-                            name = child.name
-                            pn = name.rsplit(".", 1)[0] if "." in name else name
-                except Exception as e:
-                    logger.warning(f"  {'  ' * level}  -> Skipping child {i}: {e}")
-                    continue
-                if pn not in children:
-                    children[pn] = {"products": child, "qty": 0}
-                children[pn]["qty"] += 1
-            for pn, data in children.items():
-                child_rows = []
-                traverse(data["products"], child_rows, level + 1)
-                if child_rows:
-                    child_rows[0]["Quantity"] = data["qty"]
-                rows.extend(child_rows)
-        except Exception as e:
-            logger.warning(f"  {'  ' * level}  -> Exception accessing children: {e}")
-
-    def _write_sheet(ws, rows, columns):
+    def _write_sheet(ws, rows):
         center = Alignment(horizontal="center")
         for col_idx, col_name in enumerate(columns, start=1):
             cell = ws.cell(row=1, column=col_idx,
@@ -1498,6 +1381,9 @@ def export_bom_to_excel(file_paths: list[str | None], output_folder: str | None 
                     value = row.get("Quantity", 1)
                 elif col_name == "Type":
                     value = row.get("Type", "")
+                elif col_name == "Source":
+                    raw = str(row.get("Source", ""))
+                    value = _SOURCE_TO_DISPLAY.get(raw, raw)
                 else:
                     value = row.get(col_name, "")
                 cell = ws.cell(row=row_idx, column=col_idx, value=value)
@@ -1507,12 +1393,13 @@ def export_bom_to_excel(file_paths: list[str | None], output_folder: str | None 
         for col_idx, col_name in enumerate(columns, start=1):
             col_letter = ws.cell(row=1, column=col_idx).column_letter
             header = _BOM_COL_DISPLAY.get(col_name, col_name)
-            max_width = len(header)
+            min_w = _BOM_COL_MIN_WIDTH.get(col_name, 10)
+            max_width = max(_col_display_width(header), min_w)
             for row_idx in range(2, ws.max_row + 1):
                 cell_val = ws.cell(row=row_idx, column=col_idx).value
                 if cell_val is not None:
-                    max_width = max(max_width, len(str(cell_val)))
-            ws.column_dimensions[col_letter].width = max_width
+                    max_width = max(max_width, _col_display_width(str(cell_val)))
+            ws.column_dimensions[col_letter].width = max_width + 2
 
     for path in file_paths:
         if path is None:
@@ -1525,14 +1412,11 @@ def export_bom_to_excel(file_paths: list[str | None], output_folder: str | None 
             dest_dir = Path(output_folder).resolve() if output_folder else src_name.parent
             dest_dir.mkdir(parents=True, exist_ok=True)
             dest = dest_dir / f"{src_name.stem}_BOM.xlsx"
-            product_doc = ProductDocument(application.active_document.com_object)
-            root_product = product_doc.product
-            rows = []
-            traverse(root_product, rows, level=0)
+            rows = _collect_bom_rows(None, columns, custom_columns)
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "BOM"
-            _write_sheet(ws, rows, columns)
+            _write_sheet(ws, rows)
             wb.save(str(dest))
             logger.info(f"  BOM exported -> {dest}")
             logger.info("Done: active document\n")
@@ -1563,22 +1447,37 @@ def export_bom_to_excel(file_paths: list[str | None], output_folder: str | None 
                         f"文件仍处于打开状态，请关闭后重试。\n{dest}")
                     continue
 
-        logger.info(f"Opening: {src}")
-        documents.open(str(src))
-        product_doc = ProductDocument(application.active_document.com_object)
-        root_product = product_doc.product
+        # Snapshot of open documents before calling _collect_bom_rows so we
+        # can close any file that we opened ourselves.
+        already_open: set[Path] = set()
+        for i in range(1, documents.count + 1):
+            try:
+                already_open.add(Path(documents.item(i).full_name).resolve())
+            except Exception:
+                pass
 
-        rows = []
-        traverse(root_product, rows, level=0)
+        logger.info(f"Opening: {src}")
+        rows = _collect_bom_rows(str(src), columns, custom_columns)
 
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "BOM"
-        _write_sheet(ws, rows, columns)
+        _write_sheet(ws, rows)
 
         wb.save(str(dest))
         logger.info(f"  BOM exported -> {dest}")
-        product_doc.close()
+
+        # Close the document only if we were the one who opened it
+        if src not in already_open:
+            for i in range(1, documents.count + 1):
+                try:
+                    doc = documents.item(i)
+                    if Path(doc.full_name).resolve() == src:
+                        ProductDocument(doc.com_object).close()
+                        break
+                except Exception:
+                    pass
+
         logger.info(f"Done: {src.name}\n")
 
 
@@ -1782,6 +1681,25 @@ _SOURCE_OPTIONS: list[str] = ["未知", "自制", "外购"]
 
 # Reverse display map (Chinese → internal) for ExportBOMDialog list widgets
 _BOM_COL_DISPLAY_REVERSE: dict[str, str] = {v: k for k, v in _BOM_COL_DISPLAY.items()}
+
+# Minimum column widths (Excel character units) for standard BOM columns
+_BOM_COL_MIN_WIDTH: dict[str, int] = {
+    "Level":        6,
+    "Type":         10,
+    "Part Number":  20,
+    "Nomenclature": 20,
+    "Definition":   20,
+    "Revision":     10,
+    "Source":       8,
+    "Quantity":     8,
+}
+
+
+def _col_display_width(text: str) -> int:
+    """Return the approximate display width of *text* in Excel column-width units.
+    CJK/wide characters count as 2; all others count as 1."""
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1
+               for c in str(text))
 
 # Column order used in the BOM edit dialog (internal names)
 _BOM_EDIT_COLUMN_ORDER: list[str] = [
