@@ -1682,6 +1682,29 @@ class FindDependenciesDialog(QDialog):
 # Columns that are structural / derived – shown read-only in the edit table
 _BOM_READONLY_COLS = {"Level", "Type", "Part Number", "Quantity"}
 
+# Internal column name → Chinese display name
+_BOM_COL_DISPLAY: dict[str, str] = {
+    "Level":        "层级",
+    "Type":         "类型",
+    "Part Number":  "零件编号",
+    "Nomenclature": "术语",
+    "Definition":   "定义",
+    "Revision":     "版本",
+    "Source":       "源",
+    "Quantity":     "数量",
+}
+
+# Source: CATIA integer string ↔ Chinese label
+_SOURCE_TO_DISPLAY: dict[str, str] = {"0": "未知", "1": "自制", "2": "外购"}
+_SOURCE_FROM_DISPLAY: dict[str, str] = {"未知": "0", "自制": "1", "外购": "2"}
+_SOURCE_OPTIONS: list[str] = ["未知", "自制", "外购"]
+
+# Column order used in the BOM edit dialog (internal names)
+_BOM_EDIT_COLUMN_ORDER: list[str] = [
+    "Level", "Type", "Part Number", "Quantity",
+    "Nomenclature", "Revision", "Definition", "Source",
+]
+
 
 def _collect_bom_rows(file_path: str, columns: list[str],
                       custom_columns: list[str]) -> list[dict]:
@@ -1859,7 +1882,8 @@ def _write_bom_to_catia(file_path: str, pn_data: dict[str, dict[str, str]],
         targets.append(product)
         for target in targets:
             try:
-                setattr(target, attr, int(value) if name == "Source" else value)
+                setattr(target, attr, int(_SOURCE_FROM_DISPLAY.get(value, value))
+                        if name == "Source" else value)
                 return
             except Exception:
                 continue
@@ -1958,8 +1982,9 @@ class BomEditDialog(QDialog):
     """
     Displays the BOM of a CATProduct in an editable table.
 
-    - Part Number, Level, Type, Quantity are read-only (structural / unique ID).
-    - All other columns are editable.
+    - 零件编号 (Part Number), 层级 (Level), 类型 (Type), 数量 (Quantity) are read-only.
+    - All other columns are editable.  源 (Source) is a QComboBox (未知/自制/外购).
+    - Level cells are indented with (level) leading spaces for hierarchy clarity.
     - Rows sharing the same Part Number are linked: editing one cell propagates
       the new value to every other row with the same PN.
     - Clicking "完成" writes the changes back to CATIA via COM.
@@ -1980,13 +2005,16 @@ class BomEditDialog(QDialog):
             saved_custom = [saved_custom]
         self._custom_columns: list[str] = list(saved_custom)
 
-        self._columns: list[str] = list(BOM_ALL_COLUMNS) + self._custom_columns
+        # Internal column names in the desired display order
+        extra = [c for c in self._custom_columns if c not in _BOM_EDIT_COLUMN_ORDER]
+        self._columns: list[str] = _BOM_EDIT_COLUMN_ORDER + extra
 
-        # PN-keyed canonical data: {pn: {col: value}}
+        # PN-keyed canonical data: {pn: {internal_col: value}}
+        # Source is stored as display label (未知/自制/外购).
         self._pn_data: dict[str, dict[str, str]] = {}
         # All BOM rows in traversal order
         self._rows: list[dict] = []
-        # Guard against re-entrant itemChanged handling
+        # Guard against re-entrant change handling
         self._updating = False
 
         # ── Layout ──────────────────────────────────────────────────────────
@@ -2010,20 +2038,22 @@ class BomEditDialog(QDialog):
         layout.addLayout(file_row)
 
         note = QLabel(
-            "Part Number 为唯一标识，不可编辑；Level / Type / Quantity 为结构属性，不可编辑。"
-            "相同 Part Number 的行会联动更新。请确保 CATIA 已启动。"
+            "零件编号 为唯一标识，不可编辑；层级 / 类型 / 数量 为结构属性，不可编辑。"
+            "相同零件编号的行会联动更新。请确保 CATIA 已启动。"
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(note)
 
         # Editable table
+        display_headers = [_BOM_COL_DISPLAY.get(c, c) for c in self._columns]
         self._table = QTableWidget(0, len(self._columns))
-        self._table.setHorizontalHeaderLabels(self._columns)
+        self._table.setHorizontalHeaderLabels(display_headers)
         self._table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.ResizeToContents
         )
         self._table.horizontalHeader().setStretchLastSection(True)
+        self._table.verticalHeader().setDefaultSectionSize(24)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.itemChanged.connect(self._on_item_changed)
@@ -2087,14 +2117,19 @@ class BomEditDialog(QDialog):
 
         self._rows = rows
 
-        # Build PN-keyed data (first occurrence of each PN defines canonical values)
+        # Build PN-keyed canonical data (first occurrence wins).
+        # Source is converted from CATIA integer string to display label.
         self._pn_data = {}
         for row in rows:
             pn = str(row.get("Part Number", ""))
             if pn and pn not in self._pn_data:
-                self._pn_data[pn] = {
-                    col: str(row.get(col, "")) for col in self._columns
-                }
+                data: dict[str, str] = {}
+                for col in self._columns:
+                    val = str(row.get(col, ""))
+                    if col == "Source":
+                        val = _SOURCE_TO_DISPLAY.get(val, val)
+                    data[col] = val
+                self._pn_data[pn] = data
 
         self._populate_table()
         self._apply_btn.setEnabled(True)
@@ -2106,32 +2141,95 @@ class BomEditDialog(QDialog):
         self._table.setRowCount(0)
         self._table.setRowCount(len(self._rows))
 
-        pn_col = self._columns.index("Part Number") if "Part Number" in self._columns else -1
+        src_col_idx = (
+            self._columns.index("Source") if "Source" in self._columns else -1
+        )
+        pn_col_idx = (
+            self._columns.index("Part Number") if "Part Number" in self._columns else -1
+        )
 
         for row_idx, row_data in enumerate(self._rows):
             pn = str(row_data.get("Part Number", ""))
+            level = row_data.get("Level", 0)
+
             for col_idx, col_name in enumerate(self._columns):
+
+                # ── Source column → QComboBox ────────────────────────────
+                if col_name == "Source":
+                    raw = str(row_data.get("Source", ""))
+                    display_val = _SOURCE_TO_DISPLAY.get(raw, raw)
+                    # Canonical value may already be a display label
+                    pn_val = self._pn_data.get(pn, {}).get("Source", display_val)
+                    if pn_val not in _SOURCE_OPTIONS:
+                        pn_val = _SOURCE_TO_DISPLAY.get(pn_val, _SOURCE_OPTIONS[0])
+
+                    combo = QComboBox()
+                    combo.addItems(_SOURCE_OPTIONS)
+                    combo.setCurrentText(pn_val)
+                    combo.currentTextChanged.connect(
+                        lambda text, r=row_idx: self._on_source_changed(r, text)
+                    )
+                    self._table.setCellWidget(row_idx, col_idx, combo)
+                    continue
+
+                # ── All other columns → QTableWidgetItem ─────────────────
                 if col_name == "Level":
-                    value = str(row_data.get("Level", ""))
+                    value = " " * level + str(level)
                 elif col_name == "Quantity":
                     value = str(row_data.get("Quantity", "1"))
                 elif col_name in _BOM_READONLY_COLS:
                     value = str(row_data.get(col_name, ""))
                 else:
-                    # Always read editable cells from the canonical pn_data
-                    value = str(self._pn_data.get(pn, {}).get(col_name, row_data.get(col_name, "")))
+                    value = str(
+                        self._pn_data.get(pn, {}).get(col_name, row_data.get(col_name, ""))
+                    )
 
                 item = QTableWidgetItem(value)
                 if col_name in _BOM_READONLY_COLS:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    item.setForeground(self._table.palette().color(
-                        self._table.foregroundRole()
-                    ))
                 self._table.setItem(row_idx, col_idx, item)
 
         self._updating = False
 
-    # ── Cell edit sync ─────────────────────────────────────────────────────
+    # ── Source combobox change ─────────────────────────────────────────────
+
+    def _on_source_changed(self, row_idx: int, text: str):
+        if self._updating:
+            return
+
+        pn_col_idx = (
+            self._columns.index("Part Number") if "Part Number" in self._columns else -1
+        )
+        src_col_idx = (
+            self._columns.index("Source") if "Source" in self._columns else -1
+        )
+        if pn_col_idx < 0 or src_col_idx < 0:
+            return
+
+        pn_item = self._table.item(row_idx, pn_col_idx)
+        if not pn_item:
+            return
+        pn = pn_item.text()
+
+        # Update canonical data
+        if pn in self._pn_data:
+            self._pn_data[pn]["Source"] = text
+
+        # Sync all other rows with the same PN
+        self._updating = True
+        for r in range(self._table.rowCount()):
+            if r == row_idx:
+                continue
+            other_pn = self._table.item(r, pn_col_idx)
+            if other_pn and other_pn.text() == pn:
+                combo = self._table.cellWidget(r, src_col_idx)
+                if isinstance(combo, QComboBox) and combo.currentText() != text:
+                    combo.blockSignals(True)
+                    combo.setCurrentText(text)
+                    combo.blockSignals(False)
+        self._updating = False
+
+    # ── Regular cell edit sync ─────────────────────────────────────────────
 
     def _on_item_changed(self, item: QTableWidgetItem):
         if self._updating:
@@ -2140,7 +2238,8 @@ class BomEditDialog(QDialog):
         row_idx = item.row()
         col_name = self._columns[col_idx]
 
-        if col_name in _BOM_READONLY_COLS:
+        # Source is handled by _on_source_changed; read-only cols are skipped
+        if col_name in _BOM_READONLY_COLS or col_name == "Source":
             return
 
         pn_col_idx = (
