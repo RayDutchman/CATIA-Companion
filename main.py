@@ -1945,6 +1945,14 @@ def _write_bom_to_catia(file_path: str | None, pn_data: dict[str, dict[str, str]
                 target.user_ref_properties.item(name).value = value
                 return
             except Exception:
+                pass
+        # Property does not exist on any target – create it on the first
+        # available target (reference_product preferred).
+        for target in targets:
+            try:
+                target.user_ref_properties.create_string(name, value)
+                return
+            except Exception:
                 continue
 
     def traverse_write(product):
@@ -2056,9 +2064,22 @@ class BomEditDialog(QDialog):
             saved_custom = [saved_custom]
         self._custom_columns: list[str] = list(saved_custom)
 
-        # Internal column names in the desired display order
-        extra = [c for c in self._custom_columns if c not in _BOM_EDIT_COLUMN_ORDER]
-        self._columns: list[str] = _BOM_EDIT_COLUMN_ORDER + extra
+        # BomEditDialog-specific settings (visible preset columns)
+        self._edit_settings = QSettings("CATIACompanion", "BomEditDialog")
+        saved_visible = self._edit_settings.value("visible_preset_columns", [])
+        if isinstance(saved_visible, str):
+            saved_visible = [saved_visible]
+        self._visible_preset_cols: list[str] = [
+            c for c in saved_visible if c in BOM_PRESET_CUSTOM_COLUMNS
+        ]
+
+        # All custom columns (for data reading) = shared custom + all presets
+        self._all_custom_columns: list[str] = list(dict.fromkeys(
+            self._custom_columns + list(BOM_PRESET_CUSTOM_COLUMNS)
+        ))
+
+        # Internal column names in the desired display order (visible only)
+        self._columns: list[str] = self._build_visible_columns()
 
         # PN-keyed canonical data: {original_pn: {internal_col: value}}
         # Source is stored as display label (未知/自制/外购).
@@ -2107,6 +2128,19 @@ class BomEditDialog(QDialog):
         note.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(note)
 
+        # ── Preset custom column checkboxes ──────────────────────────────
+        preset_group = QGroupBox("自定义属性列（勾选以显示，属于user_ref_properties）")
+        preset_layout = QHBoxLayout(preset_group)
+        preset_layout.setSpacing(12)
+        self._preset_checkboxes: dict[str, QCheckBox] = {}
+        for col_name in BOM_PRESET_CUSTOM_COLUMNS:
+            cb = QCheckBox(col_name)
+            cb.setChecked(col_name in self._visible_preset_cols)
+            cb.toggled.connect(self._on_preset_col_toggled)
+            preset_layout.addWidget(cb)
+            self._preset_checkboxes[col_name] = cb
+        layout.addWidget(preset_group)
+
         # Editable table
         display_headers = [_BOM_COL_DISPLAY.get(c, c) for c in self._columns]
         self._table = QTableWidget(0, len(self._columns))
@@ -2146,6 +2180,38 @@ class BomEditDialog(QDialog):
         self._file_edit.setEnabled(not use_active)
         self._file_browse_btn.setEnabled(not use_active)
 
+    # ── Preset column helpers ──────────────────────────────────────────────
+
+    def _build_visible_columns(self) -> list[str]:
+        """Return the ordered list of visible columns for the table."""
+        # Base columns + visible preset columns + other non-preset custom columns
+        visible_preset = [c for c in BOM_PRESET_CUSTOM_COLUMNS
+                          if c in self._visible_preset_cols]
+        other_custom = [c for c in self._custom_columns
+                        if c not in _BOM_EDIT_COLUMN_ORDER
+                        and c not in BOM_PRESET_CUSTOM_COLUMNS]
+        return _BOM_EDIT_COLUMN_ORDER + visible_preset + other_custom
+
+    def _on_preset_col_toggled(self):
+        """Handle toggling of a preset custom column checkbox."""
+        self._visible_preset_cols = [
+            name for name, cb in self._preset_checkboxes.items()
+            if cb.isChecked()
+        ]
+        self._edit_settings.setValue(
+            "visible_preset_columns", self._visible_preset_cols
+        )
+
+        # Rebuild visible columns and update table
+        self._columns = self._build_visible_columns()
+        display_headers = [_BOM_COL_DISPLAY.get(c, c) for c in self._columns]
+        self._table.setColumnCount(len(self._columns))
+        self._table.setHorizontalHeaderLabels(display_headers)
+
+        if self._rows:
+            self._populate_table()
+            self._table.resizeColumnsToContents()
+
     # ── File picker ────────────────────────────────────────────────────────
 
     def _browse_file(self):
@@ -2178,7 +2244,15 @@ class BomEditDialog(QDialog):
         QApplication.processEvents()
 
         try:
-            rows = _collect_bom_rows(file_path, self._columns, self._custom_columns)
+            # Read ALL custom columns (including all presets) so toggling
+            # visibility later doesn't require a CATIA reload.
+            all_read_cols = list(dict.fromkeys(
+                _BOM_EDIT_COLUMN_ORDER +
+                [c for c in self._all_custom_columns
+                 if c not in _BOM_EDIT_COLUMN_ORDER]
+            ))
+            rows = _collect_bom_rows(file_path, all_read_cols,
+                                     self._all_custom_columns)
         except Exception as e:
             logger.error(f"Failed to load BOM for edit: {e}")
             QMessageBox.critical(
@@ -2197,12 +2271,19 @@ class BomEditDialog(QDialog):
 
         # Build PN-keyed canonical data (first occurrence wins).
         # Source is converted from CATIA integer string to display label.
+        # Store values for ALL columns (including hidden preset columns)
+        # so that toggling visibility later is instant.
+        all_data_cols = list(dict.fromkeys(
+            _BOM_EDIT_COLUMN_ORDER +
+            [c for c in self._all_custom_columns
+             if c not in _BOM_EDIT_COLUMN_ORDER]
+        ))
         self._pn_data = {}
         for row in rows:
             pn = str(row.get("Part Number", ""))
             if pn and pn not in self._pn_data:
                 data: dict[str, str] = {}
-                for col in self._columns:
+                for col in all_data_cols:
                     val = str(row.get(col, ""))
                     if col == "Source":
                         val = _SOURCE_TO_DISPLAY.get(val, val)
@@ -2223,6 +2304,12 @@ class BomEditDialog(QDialog):
 
     def _populate_table(self):
         self._updating = True
+
+        # Sync table columns with current visible column list
+        display_headers = [_BOM_COL_DISPLAY.get(c, c) for c in self._columns]
+        self._table.setColumnCount(len(self._columns))
+        self._table.setHorizontalHeaderLabels(display_headers)
+
         self._table.setRowCount(0)
         self._table.setRowCount(len(self._rows))
 
@@ -2505,7 +2592,7 @@ class BomEditDialog(QDialog):
         QApplication.processEvents()
 
         try:
-            _write_bom_to_catia(file_path, dirty_data, self._custom_columns)
+            _write_bom_to_catia(file_path, dirty_data, self._all_custom_columns)
         except Exception as e:
             logger.error(f"Failed to write BOM back to CATIA: {e}")
             self._save_btn.setEnabled(True)
