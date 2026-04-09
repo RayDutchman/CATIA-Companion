@@ -94,7 +94,7 @@ Released    {APP_DATE}
 # Part template properties
 # ---------------------------------------------------------------------------
 
-PART_TEMPLATE_PROPERTIES = ["物料编码", "物料名称", "中文名称", "规格型号", "物料来源", "数据状态", "存货类别", "质量", "备注"]
+PART_TEMPLATE_PROPERTIES = ["物料编码", "物料名称", "规格型号", "物料来源", "数据状态", "存货类别", "质量", "备注"]
 
 
 # ---------------------------------------------------------------------------
@@ -1018,7 +1018,7 @@ def stamp_part_template(file_paths: list[str], output_folder: str | None = None)
 
 BOM_ALL_COLUMNS       = ["Level", "Type", "Part Number", "Nomenclature", "Definition", "Revision", "Source", "Quantity"]
 BOM_DEFAULT_COLUMNS   = ["Level", "Type", "Part Number", "Nomenclature", "Definition", "Revision", "Source", "Quantity"]
-BOM_PRESET_CUSTOM_COLUMNS = ["物料编码", "物料名称", "中文名称", "规格型号", "物料来源", "数据状态", "存货类别", "质量", "备注"]
+BOM_PRESET_CUSTOM_COLUMNS = ["物料编码", "物料名称", "规格型号", "物料来源", "数据状态", "存货类别", "质量", "备注"]
 
 
 class ExportBOMDialog(QDialog):
@@ -1629,7 +1629,7 @@ _BOM_COL_DISPLAY: dict[str, str] = {
     "Type":         "类型",
     "Filename":     "文件名",
     "Part Number":  "零件编号",
-    "Nomenclature": "术语",
+    "Nomenclature": "术语（中文名称）",
     "Definition":   "定义",
     "Revision":     "版本",
     "Source":       "源",
