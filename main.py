@@ -726,6 +726,7 @@ class ConvertDialog(QDialog):
             self._conversion_fn(files, output_folder, prefix=prefix_value, suffix=suffix_value)
         else:
             self._conversion_fn(files, output_folder)
+        QMessageBox.information(self, "导出成功", f"已成功导出 {len(files)} 个文件。")
         self.accept()
 
 
@@ -1331,6 +1332,7 @@ class ExportBOMDialog(QDialog):
                 return
         export_bom_to_excel([file_path], output_folder, columns=selected_cols,
                             custom_columns=self._custom_columns)
+        QMessageBox.information(self, "导出成功", "BOM已成功导出为Excel文件。")
         self.accept()
 
 
@@ -1988,18 +1990,7 @@ def _write_bom_to_catia(file_path: str | None, pn_data: dict[str, dict[str, str]
     root_product = product_doc.product
     traverse_write(root_product)
 
-    # Save all documents that were opened as part of this operation
-    for i in range(1, documents.count + 1):
-        try:
-            doc = documents.item(i)
-            doc_path = Path(doc.full_name).resolve()
-            if doc_path not in already_open or doc_path == src:
-                doc.save()
-                logger.info(f"Saved: {doc_path}")
-        except Exception as e:
-            logger.warning(f"Failed to save document: {e}")
-
-    logger.info(f"Write-back complete for {src.name}")
+    logger.info(f"Write-back complete for {src.name} (not saved; user must save manually in CATIA)")
 
 
 class BomEditDialog(QDialog):
@@ -2477,18 +2468,12 @@ class BomEditDialog(QDialog):
         self._finish_btn.setEnabled(True)
 
         if close_on_success:
-            if file_path is None:
-                QMessageBox.information(self, "完成",
-                    "BOM属性已成功写回CATIA（活动文档未保存，如需保存请在CATIA中手动保存）。")
-            else:
-                QMessageBox.information(self, "完成", "BOM属性已成功写回CATIA并保存！")
+            QMessageBox.information(self, "完成",
+                "BOM属性已成功写回CATIA，请在CATIA中手动保存文件。")
             self.accept()
         else:
-            if file_path is None:
-                QMessageBox.information(self, "应用成功",
-                    "BOM属性已成功写回CATIA（活动文档未保存，如需保存请在CATIA中手动保存）。")
-            else:
-                QMessageBox.information(self, "应用成功", "BOM属性已成功写回CATIA并保存！")
+            QMessageBox.information(self, "应用成功",
+                "BOM属性已成功写回CATIA，请在CATIA中手动保存文件。")
 
     def _apply_changes(self):
         """Write modified properties back to CATIA and keep the dialog open."""
