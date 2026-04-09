@@ -1135,37 +1135,23 @@ class ExportBOMDialog(QDialog):
         col_layout.addLayout(selected_layout)
         col_outer.addLayout(col_layout)
 
-        add_custom_row = QHBoxLayout()
+        add_preset_row = QHBoxLayout()
         self.preset_combo = QComboBox()
-        self.preset_combo.addItem("— Presets —")
+        self.preset_combo.addItem("— 添加自定义属性列 —")
         for p in BOM_PRESET_CUSTOM_COLUMNS:
             self.preset_combo.addItem(p)
         self.preset_combo.currentIndexChanged.connect(self._on_preset_selected)
-        add_custom_row.addWidget(self.preset_combo)
-
-        self.custom_col_edit = QLineEdit()
-        self.custom_col_edit.setPlaceholderText("自定义CATIA属性名...")
-        self.custom_col_edit.returnPressed.connect(self._add_custom_column)
-        add_custom_row.addWidget(self.custom_col_edit)
-
-        add_custom_btn = QPushButton("添加")
-        add_custom_btn.clicked.connect(self._add_custom_column)
-        add_custom_row.addWidget(add_custom_btn)
-
-        self.delete_custom_btn = QPushButton("删除自定义")
-        self.delete_custom_btn.clicked.connect(self._delete_custom_column)
-        self.delete_custom_btn.setEnabled(False)
-        add_custom_row.addWidget(self.delete_custom_btn)
-
-        col_outer.addLayout(add_custom_row)
+        add_preset_row.addWidget(self.preset_combo)
+        col_outer.addLayout(add_preset_row)
         layout.addWidget(col_group)
-
-        self.avail_list.itemSelectionChanged.connect(self._on_avail_selection_changed)
 
         saved = self._settings.value("selected_columns", BOM_DEFAULT_COLUMNS)
         if isinstance(saved, str):
             saved = [saved]
-        all_known = BOM_ALL_COLUMNS + self._custom_columns
+        all_known = BOM_ALL_COLUMNS + list(BOM_PRESET_CUSTOM_COLUMNS) + [
+            c for c in self._custom_columns
+            if c not in BOM_ALL_COLUMNS and c not in BOM_PRESET_CUSTOM_COLUMNS
+        ]
         for col in saved:
             if col in all_known:
                 self.selected_list.addItem(self._make_col_item(col))
@@ -1232,10 +1218,23 @@ class ExportBOMDialog(QDialog):
         if index <= 0:
             return
         label = self.preset_combo.itemText(index)
-        self.custom_col_edit.setText(label)
         self.preset_combo.blockSignals(True)
         self.preset_combo.setCurrentIndex(0)
         self.preset_combo.blockSignals(False)
+        # Check if already present in either list
+        all_existing = (
+            [self._item_internal(self.avail_list.item(i))
+             for i in range(self.avail_list.count())] +
+            [self._item_internal(self.selected_list.item(i))
+             for i in range(self.selected_list.count())]
+        )
+        if label in all_existing:
+            QMessageBox.warning(self, "列名重复", f"'{label}' 已存在。")
+            return
+        self.selected_list.addItem(self._make_col_item(label))
+        if label not in self._custom_columns:
+            self._custom_columns.append(label)
+            self._settings.setValue("custom_columns", self._custom_columns)
 
     def _add_column(self):
         for item in self.avail_list.selectedItems():
@@ -1262,47 +1261,6 @@ class ExportBOMDialog(QDialog):
             item = self.selected_list.takeItem(row)
             self.selected_list.insertItem(row + 1, item)
             self.selected_list.setCurrentRow(row + 1)
-
-    def _add_custom_column(self):
-        label = self.custom_col_edit.text().strip()
-        if not label:
-            return
-        all_existing = (
-            [self._item_internal(self.avail_list.item(i))
-             for i in range(self.avail_list.count())] +
-            [self._item_internal(self.selected_list.item(i))
-             for i in range(self.selected_list.count())]
-        )
-        if label in all_existing:
-            QMessageBox.warning(self, "列名重复", f"'{label}' 已存在。")
-            return
-        self.selected_list.addItem(self._make_col_item(label))
-        self._custom_columns.append(label)
-        self._settings.setValue("custom_columns", self._custom_columns)
-        self.custom_col_edit.clear()
-
-    def _delete_custom_column(self):
-        selected = self.avail_list.selectedItems()
-        to_delete = [item for item in selected
-                     if self._item_internal(item) in self._custom_columns]
-        if not to_delete:
-            return
-        names = ", ".join(f"'{self._item_internal(item)}'" for item in to_delete)
-        reply = QMessageBox.question(self, "删除自定义列",
-            f"确认永久删除 {names}？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-        for item in to_delete:
-            self._custom_columns.remove(self._item_internal(item))
-            self.avail_list.takeItem(self.avail_list.row(item))
-        self._settings.setValue("custom_columns", self._custom_columns)
-
-    def _on_avail_selection_changed(self):
-        selected = self.avail_list.selectedItems()
-        has_custom = any(self._item_internal(item) in self._custom_columns
-                         for item in selected)
-        self.delete_custom_btn.setEnabled(has_custom)
 
     def _confirm(self):
         use_active = self.radio_active.isChecked()
