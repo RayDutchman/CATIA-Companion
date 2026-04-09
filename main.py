@@ -202,10 +202,19 @@ class MainWindow(QMainWindow):
 
         # --- File ---
         file_menu = menu_bar.addMenu("文件")
-        file_menu.addAction(QAction("新建", self))
-        file_menu.addAction(QAction("打开...", self))
-        file_menu.addAction(QAction("保存", self))
-        file_menu.addAction(QAction("另存为...", self))
+        _stub = lambda: QMessageBox.information(self, "提示", "功能尚未实现")
+        new_action = QAction("新建", self)
+        new_action.triggered.connect(_stub)
+        file_menu.addAction(new_action)
+        open_action = QAction("打开...", self)
+        open_action.triggered.connect(_stub)
+        file_menu.addAction(open_action)
+        save_action = QAction("保存", self)
+        save_action.triggered.connect(_stub)
+        file_menu.addAction(save_action)
+        save_as_action = QAction("另存为...", self)
+        save_as_action.triggered.connect(_stub)
+        file_menu.addAction(save_as_action)
         file_menu.addSeparator()
         quit_action = QAction("退出", self)
         quit_action.triggered.connect(self.close)
@@ -223,14 +232,9 @@ class MainWindow(QMainWindow):
         export_bom_action.triggered.connect(self._open_export_bom_dialog)
         export_menu.addAction(export_bom_action)
 
-        # --- Edit ---
-        edit_menu = menu_bar.addMenu("编辑")
-        edit_menu.addAction(QAction("撤销", self))
-        edit_menu.addAction(QAction("重做", self))
-        edit_menu.addSeparator()
-        edit_menu.addAction(QAction("剪切", self))
-        edit_menu.addAction(QAction("复制", self))
-        edit_menu.addAction(QAction("粘贴", self))
+        # --- Macro ---
+        self._macro_menu = menu_bar.addMenu("宏")
+        self._build_macro_menu()
 
         # --- Tools ---
         tools_menu = menu_bar.addMenu("工具")
@@ -269,13 +273,90 @@ class MainWindow(QMainWindow):
 
         # --- Help ---
         help_menu = menu_bar.addMenu("帮助")
-        help_menu.addAction(QAction("文档", self))
+        doc_action = QAction("文档", self)
+        doc_action.triggered.connect(lambda: QMessageBox.information(self, "提示", "功能尚未实现"))
+        help_menu.addAction(doc_action)
         about_action = QAction("关于 CATIA Companion", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
 
     def _show_about(self):
         QMessageBox.about(self, f"About {APP_NAME}", ABOUT_TEXT)
+
+    # ------------------------------------------------------------------
+    # Macro menu helpers
+    # ------------------------------------------------------------------
+
+    _MACRO_EXTENSIONS = {".catvbs", ".catscript"}
+
+    def _macros_dir(self) -> Path:
+        return resource_path("macros")
+
+    def _build_macro_menu(self):
+        """Populate (or repopulate) the 宏 menu from the macros/ folder."""
+        self._macro_menu.clear()
+
+        macros_dir = self._macros_dir()
+        macro_files: list[Path] = []
+        if macros_dir.is_dir():
+            macro_files = sorted(
+                f for f in macros_dir.iterdir()
+                if f.is_file() and f.suffix.lower() in self._MACRO_EXTENSIONS
+            )
+
+        if macro_files:
+            for macro_path in macro_files:
+                action = QAction(macro_path.name, self)
+                action.triggered.connect(lambda checked=False, p=macro_path: self._run_macro(p))
+                self._macro_menu.addAction(action)
+            self._macro_menu.addSeparator()
+        else:
+            placeholder = QAction("（未找到宏文件）", self)
+            placeholder.setEnabled(False)
+            self._macro_menu.addAction(placeholder)
+            self._macro_menu.addSeparator()
+
+        open_folder_action = QAction("打开宏文件夹", self)
+        open_folder_action.triggered.connect(self._open_macros_folder)
+        self._macro_menu.addAction(open_folder_action)
+
+        refresh_action = QAction("刷新宏列表", self)
+        refresh_action.triggered.connect(self._build_macro_menu)
+        self._macro_menu.addAction(refresh_action)
+
+    def _open_macros_folder(self):
+        macros_dir = self._macros_dir()
+        macros_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(macros_dir))
+            else:
+                subprocess.Popen(
+                    ["xdg-open", str(macros_dir)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+        except Exception as e:
+            QMessageBox.warning(self, "无法打开文件夹", f"无法打开宏文件夹：\n{macros_dir}\n\n{e}")
+
+    def _run_macro(self, macro_path: Path):
+        """Run a CATIA macro file (.catvbs / .CATScript) via CATIA COM."""
+        if not macro_path.exists():
+            QMessageBox.warning(self, "文件不存在", f"宏文件不存在：\n{macro_path}")
+            return
+        try:
+            from pycatia import catia as _catia
+            caa = _catia()
+            app = caa.application
+            # catScriptLibraryTypeDirectory = 1
+            app.com_object.SystemService.ExecuteScript(
+                str(macro_path.parent), 1, macro_path.name, "CATMain", []
+            )
+            logger.info(f"Macro executed: {macro_path.name}")
+        except Exception as e:
+            logger.error(f"Failed to run macro {macro_path.name}: {e}")
+            QMessageBox.critical(self, "宏执行失败",
+                f"运行宏时出错：\n{macro_path.name}\n\n{e}\n\n请确保CATIA已启动。")
 
     def _open_convert_part_dialog(self):
         dialog = ConvertDialog(
@@ -921,8 +1002,8 @@ def stamp_part_template(file_paths: list[str], output_folder: str | None = None)
 # Export BOM Dialog
 # ---------------------------------------------------------------------------
 
-BOM_ALL_COLUMNS       = ["Level", "Part Number", "Type", "Nomenclature", "Definition", "Revision", "Source", "Quantity"]
-BOM_DEFAULT_COLUMNS   = ["Level", "Part Number", "Type", "Nomenclature", "Definition", "Revision", "Source", "Quantity"]
+BOM_ALL_COLUMNS       = ["Level", "Type", "Part Number", "Nomenclature", "Definition", "Revision", "Source", "Quantity"]
+BOM_DEFAULT_COLUMNS   = ["Level", "Type", "Part Number", "Nomenclature", "Definition", "Revision", "Source", "Quantity"]
 BOM_PRESET_CUSTOM_COLUMNS = ["物料编码", "物料名称", "中文名称", "规格型号", "物料来源", "数据状态", "存货类别", "质量", "备注"]
 
 
