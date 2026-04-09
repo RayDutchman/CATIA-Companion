@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QLabel, QMessageBox, QDialog, QPushButton, QListWidget, QFileDialog,
     QAbstractItemView, QRadioButton, QButtonGroup, QLineEdit, QGroupBox,
     QListWidgetItem, QComboBox, QCheckBox, QPlainTextEdit,
-    QToolBar, QToolButton
 )
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt, QSettings, QObject, Signal
@@ -96,60 +95,43 @@ PART_TEMPLATE_PROPERTIES = ["物料编码", "物料名称", "中文名称", "规
 
 
 # ---------------------------------------------------------------------------
-# Main Window
+# Default window geometry
 # ---------------------------------------------------------------------------
 
-class MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("CATIA Companion")
-        self.resize(300, 500)
-        self._setup_menu_bar()
-        self._setup_toolbar()
+DEFAULT_WIDTH  = 260
+DEFAULT_HEIGHT = 500
 
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
 
-        label = QLabel("欢迎使用 CATIA Companion")
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(label)
+# ---------------------------------------------------------------------------
+# Log Window
+# ---------------------------------------------------------------------------
 
-        # Log panel container (hidden by default)
-        self._log_panel_widget = QWidget()
-        log_panel_layout = QVBoxLayout(self._log_panel_widget)
-        log_panel_layout.setContentsMargins(0, 0, 0, 0)
-        log_panel_layout.setSpacing(4)
+class LogWindow(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent, Qt.WindowType.Window)
+        self.setWindowTitle("CATIA Companion – Log")
+        self.resize(600, 400)
 
-        # Log display area
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
         self._log_view = QPlainTextEdit()
         self._log_view.setReadOnly(True)
         self._log_view.setStyleSheet(
             "background-color: #1e1e1e; color: #d4d4d4;"
             " font-family: Consolas, 'Courier New', monospace; font-size: 9pt;"
         )
-        self._log_view.setMinimumHeight(150)
-        log_panel_layout.addWidget(self._log_view)
+        layout.addWidget(self._log_view)
 
-        # Open Log File button
         open_log_btn = QPushButton("打开日志文件")
         open_log_btn.clicked.connect(self._open_log_file)
-        log_panel_layout.addWidget(open_log_btn)
+        layout.addWidget(open_log_btn)
 
-        # Log file path label
         log_path_label = QLabel(f"Log: {_log_file}")
         log_path_label.setStyleSheet("color: gray; font-size: 9pt;")
         log_path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        log_panel_layout.addWidget(log_path_label)
-
-        layout.addWidget(self._log_panel_widget)
-        self._log_panel_widget.setVisible(False)
-
-        _log_emitter.message_logged.connect(self._append_log)
-
-        self.statusBar().showMessage("就绪")
+        layout.addWidget(log_path_label)
 
     def _append_log(self, message: str):
         self._log_view.appendPlainText(message)
@@ -171,29 +153,49 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "无法打开日志文件",
                 f"无法打开日志文件：\n{_log_file}\n\n{e}")
 
-    def _toggle_log_panel(self):
-        self._log_panel_widget.setVisible(not self._log_panel_widget.isVisible())
+    def closeEvent(self, event):
+        # Hide instead of destroying, so log history is preserved
+        event.ignore()
+        self.hide()
+        # Uncheck the menu action in the main window
+        parent = self.parent()
+        if parent and hasattr(parent, "_show_log_action"):
+            parent._show_log_action.setChecked(False)
 
-    def _setup_toolbar(self):
-        toolbar = QToolBar("主工具栏")
-        toolbar.setMovable(False)
-        toolbar.setFloatable(False)
-        toolbar.setOrientation(Qt.Orientation.Vertical)
-        self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, toolbar)
 
-        def _make_tool_button(text: str, slot) -> QToolButton:
-            btn = QToolButton()
-            btn.setText(text)
-            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-            btn.setFixedWidth(90)
-            btn.clicked.connect(slot)
-            return btn
+# ---------------------------------------------------------------------------
+# Main Window
+# ---------------------------------------------------------------------------
 
-        toolbar.addWidget(_make_tool_button("从CATDrawing\n导出pdf", self._open_convert_drawing_dialog))
-        toolbar.addWidget(_make_tool_button("从CATPart/\nCATProduct\n导出stp", self._open_convert_part_dialog))
-        toolbar.addWidget(_make_tool_button("从CATProduct\n导出BOM", self._open_export_bom_dialog))
-        toolbar.addWidget(_make_tool_button("刷写零件\n模板", self._open_stamp_part_template_dialog))
-        toolbar.addWidget(_make_tool_button("查找所有\n依赖项", self._open_find_dependencies_dialog))
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("CATIA Companion")
+        self.resize(DEFAULT_WIDTH, DEFAULT_HEIGHT)
+        self._setup_menu_bar()
+
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        label = QLabel("欢迎使用 CATIA Companion")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(label)
+
+        # Separate log window (hidden by default)
+        self._log_window = LogWindow(self)
+        _log_emitter.message_logged.connect(self._log_window._append_log)
+
+        self.statusBar().showMessage("就绪")
+
+    def _toggle_log_window(self, checked: bool):
+        if checked:
+            self._log_window.show()
+            self._log_window.raise_()
+        else:
+            self._log_window.hide()
 
     def _setup_menu_bar(self):
         menu_bar = self.menuBar()
@@ -257,12 +259,13 @@ class MainWindow(QMainWindow):
         zoom_out_action.triggered.connect(lambda: QMessageBox.information(self, "提示", "功能尚未实现"))
         view_menu.addAction(zoom_out_action)
         zoom_reset_action = QAction("重置缩放", self)
-        zoom_reset_action.triggered.connect(lambda: QMessageBox.information(self, "提示", "功能尚未实现"))
+        zoom_reset_action.triggered.connect(lambda: self.resize(DEFAULT_WIDTH, DEFAULT_HEIGHT))
         view_menu.addAction(zoom_reset_action)
         view_menu.addSeparator()
-        toggle_log_action = QAction("切换Log显示", self)
-        toggle_log_action.triggered.connect(self._toggle_log_panel)
-        view_menu.addAction(toggle_log_action)
+        self._show_log_action = QAction("显示Log", self)
+        self._show_log_action.setCheckable(True)
+        self._show_log_action.toggled.connect(self._toggle_log_window)
+        view_menu.addAction(self._show_log_action)
 
         # --- Help ---
         help_menu = menu_bar.addMenu("帮助")
@@ -279,7 +282,7 @@ class MainWindow(QMainWindow):
             parent=self,
             title="将CATPart/CATProduct导出为STP",
             file_label="已选CATPart/CATProduct文件:",
-            file_filter="CATIA Part/Product Files (*.CATPart *.CATProduct);;All Files (*)",
+            file_filter="*.CATPart *.CATProduct (*.CATPart *.CATProduct);;All Files (*)",
             no_files_msg="请至少选择一个CATPart或CATProduct文件。",
             conversion_fn=CATPart_to_STP,
             settings_key="CATPart",
@@ -294,7 +297,7 @@ class MainWindow(QMainWindow):
             parent=self,
             title="将CATDrawing导出为PDF",
             file_label="已选CATDrawing文件:",
-            file_filter="CATDrawing Files (*.CATDrawing);;All Files (*)",
+            file_filter="*.CATDrawing (*.CATDrawing);;All Files (*)",
             no_files_msg="请至少选择一个CATDrawing文件。",
             conversion_fn=CATDrawing_to_PDF,
             settings_key="CATDrawing",
@@ -414,7 +417,7 @@ class MainWindow(QMainWindow):
             parent=self,
             title="刷写零件模板",
             file_label="已选CATPart文件:",
-            file_filter="CATIA Part Files (*.CATPart);;All Files (*)",
+            file_filter="*.CATPart (*.CATPart);;All Files (*)",
             no_files_msg="请至少选择一个CATPart文件。",
             conversion_fn=stamp_part_template,
             settings_key="StampPartTemplate"
@@ -1079,7 +1082,7 @@ class ExportBOMDialog(QDialog):
 
     def _browse_file(self):
         file, _ = QFileDialog.getOpenFileName(self, "选择CATProduct文件",
-            self._last_browse_dir, "CATProduct Files (*.CATProduct);;All Files (*)")
+            self._last_browse_dir, "*.CATProduct (*.CATProduct);;All Files (*)")
         if file:
             self.file_edit.setText(file)
             self._last_browse_dir = str(Path(file).parent)
@@ -1410,44 +1413,64 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
 # Find Dependencies function
 # ---------------------------------------------------------------------------
 
-def find_dependencies(target_path: str, search_dir: str, recursive: bool = True,
-                      progress_callback=None) -> list[str]:
+def find_dependencies(target_path: str, progress_callback=None) -> list[str]:
     """
-    Scan search_dir for CATIA files that are referenced by target_path.
-    Uses binary string matching (no CATIA COM required).
+    Find all files that target_path depends on via CATIA COM.
+
+    Opens the target file in a running CATIA instance; CATIA automatically
+    loads all referenced documents.  The function collects the full paths of
+    every newly-opened document, then closes them before returning.
     """
-    target = Path(target_path)
-    search = Path(search_dir)
+    from pycatia import catia
 
-    try:
-        target_bytes = target.read_bytes()
-    except Exception as e:
-        logger.error(f"Cannot read target file: {e}")
-        return []
+    target = Path(target_path).resolve()
 
-    pattern = "**/*" if recursive else "*"
-    extensions = {".CATPart", ".CATProduct", ".CATDrawing"}
+    caa = catia()
+    application = caa.application
+    application.visible = True
+    documents = application.documents
 
-    results = []
-    candidates = [f for ext in extensions
-                  for f in search.glob(f"{pattern}{ext}") if f.is_file()]
+    # Snapshot of documents already open before we do anything
+    already_open: set[Path] = set()
+    for i in range(1, documents.count + 1):
+        try:
+            already_open.add(Path(documents.item(i).full_name).resolve())
+        except Exception:
+            pass
 
-    for i, candidate in enumerate(candidates):
-        if progress_callback:
-            progress_callback(i, len(candidates), str(candidate))
+    logger.info(f"Opening target for dependency scan: {target}")
+    if progress_callback:
+        progress_callback("正在打开文件，请稍候…")
 
-        # Skip the target file itself
-        if candidate.resolve() == target.resolve():
-            continue
+    documents.open(str(target))
 
-        # Check if candidate filename appears in target binary content
-        name_bytes = candidate.name.encode("utf-8")
-        stem_bytes = candidate.stem.encode("utf-8")
+    # Collect every document CATIA opened as a side-effect
+    results: list[str] = []
+    newly_opened: set[Path] = set()
 
-        if name_bytes in target_bytes or stem_bytes in target_bytes:
-            results.append(str(candidate))
-            logger.info(f"  Dependency found: {candidate}")
+    for i in range(1, documents.count + 1):
+        try:
+            doc = documents.item(i)
+            doc_path = Path(doc.full_name).resolve()
+            if doc_path == target or doc_path in already_open:
+                continue
+            newly_opened.add(doc_path)
+            results.append(str(doc_path))
+            logger.info(f"  Dependency: {doc_path}")
+        except Exception as e:
+            logger.debug(f"  Could not read document {i}: {e}")
 
+    # Close all documents we opened (target last)
+    for i in range(documents.count, 0, -1):
+        try:
+            doc = documents.item(i)
+            doc_path = Path(doc.full_name).resolve()
+            if doc_path in newly_opened or doc_path == target:
+                doc.close()
+        except Exception:
+            pass
+
+    logger.info(f"Dependency scan complete: {len(results)} found for {target.name}")
     return results
 
 
@@ -1459,7 +1482,7 @@ class FindDependenciesDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("查找所有依赖项")
-        self.setMinimumSize(540, 520)
+        self.setMinimumSize(540, 420)
 
         self._settings = QSettings("CATIACompanion", "FindDependenciesDialog")
 
@@ -1480,22 +1503,10 @@ class FindDependenciesDialog(QDialog):
         target_row.addWidget(target_browse_btn)
         layout.addLayout(target_row)
 
-        # Search directory
-        layout.addWidget(QLabel("搜索范围（文件夹）:"))
-        search_row = QHBoxLayout()
-        self._search_edit = QLineEdit()
-        self._search_edit.setReadOnly(True)
-        self._search_edit.setPlaceholderText("选择搜索文件夹...")
-        self._search_edit.setText(self._settings.value("last_search_dir", ""))
-        search_browse_btn = QPushButton("浏览...")
-        search_browse_btn.clicked.connect(self._browse_search_dir)
-        search_row.addWidget(self._search_edit)
-        search_row.addWidget(search_browse_btn)
-        layout.addLayout(search_row)
-
-        self._recursive_cb = QCheckBox("包含子文件夹")
-        self._recursive_cb.setChecked(True)
-        layout.addWidget(self._recursive_cb)
+        note = QLabel("通过CATIA COM打开文件并自动收集所有引用文档，请确保CATIA已运行。")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(note)
 
         # Action buttons
         action_row = QHBoxLayout()
@@ -1525,21 +1536,13 @@ class FindDependenciesDialog(QDialog):
         start_dir = str(Path(last).parent) if last else ""
         file, _ = QFileDialog.getOpenFileName(
             self, "选择目标CATIA文件", start_dir,
-            "CATIA Files (*.CATPart *.CATProduct *.CATDrawing);;All Files (*)")
+            "*.CATPart *.CATProduct *.CATDrawing (*.CATPart *.CATProduct *.CATDrawing);;All Files (*)")
         if file:
             self._target_edit.setText(file)
             self._settings.setValue("last_target", file)
 
-    def _browse_search_dir(self):
-        last = self._settings.value("last_search_dir", "")
-        folder = QFileDialog.getExistingDirectory(self, "选择搜索文件夹", last)
-        if folder:
-            self._search_edit.setText(folder)
-            self._settings.setValue("last_search_dir", folder)
-
     def _start_search(self):
         target = self._target_edit.text().strip()
-        search_dir = self._search_edit.text().strip()
 
         if not target:
             QMessageBox.warning(self, "未选择目标文件", "请先选择一个目标CATIA文件。")
@@ -1547,25 +1550,23 @@ class FindDependenciesDialog(QDialog):
         if not Path(target).exists():
             QMessageBox.warning(self, "文件不存在", f"目标文件不存在：\n{target}")
             return
-        if not search_dir:
-            QMessageBox.warning(self, "未选择搜索范围", "请先选择一个搜索文件夹。")
-            return
-        if not Path(search_dir).is_dir():
-            QMessageBox.warning(self, "文件夹不存在", f"搜索文件夹不存在：\n{search_dir}")
-            return
 
-        recursive = self._recursive_cb.isChecked()
         self._search_btn.setEnabled(False)
-        self._result_view.clear()
-        self._result_view.appendPlainText("正在搜索...")
+        self._result_view.setPlainText("正在通过CATIA COM搜索依赖项，请稍候…")
         QApplication.processEvents()
 
-        def progress_callback(i, total, current_path):
-            self._result_view.setPlainText(f"正在扫描 ({i + 1}/{total}):\n{current_path}")
+        def progress_callback(msg: str):
+            self._result_view.setPlainText(msg)
             QApplication.processEvents()
 
-        results = find_dependencies(target, search_dir, recursive=recursive,
-                                    progress_callback=progress_callback)
+        try:
+            results = find_dependencies(target, progress_callback=progress_callback)
+        except Exception as e:
+            self._search_btn.setEnabled(True)
+            QMessageBox.critical(self, "搜索失败",
+                f"通过CATIA COM搜索依赖项时出错：\n{e}\n\n请确保CATIA已启动。")
+            self._result_view.setPlainText(f"搜索失败：{e}")
+            return
 
         self._search_btn.setEnabled(True)
 
@@ -1580,7 +1581,6 @@ class FindDependenciesDialog(QDialog):
         text = self._result_view.toPlainText()
         if text:
             QApplication.clipboard().setText(text)
-
 
 # ---------------------------------------------------------------------------
 # Entry point
