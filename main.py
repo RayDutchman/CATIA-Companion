@@ -11,7 +11,8 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QMessageBox, QDialog, QPushButton, QListWidget, QFileDialog,
     QAbstractItemView, QRadioButton, QButtonGroup, QLineEdit, QGroupBox,
-    QListWidgetItem, QComboBox, QCheckBox, QPlainTextEdit
+    QListWidgetItem, QComboBox, QCheckBox, QPlainTextEdit,
+    QToolBar, QToolButton
 )
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt, QSettings, QObject, Signal
@@ -102,8 +103,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("CATIA Companion")
-        self.resize(600, 400)
+        self.resize(300, 500)
         self._setup_menu_bar()
+        self._setup_toolbar()
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -115,6 +117,12 @@ class MainWindow(QMainWindow):
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(label)
 
+        # Log panel container (hidden by default)
+        self._log_panel_widget = QWidget()
+        log_panel_layout = QVBoxLayout(self._log_panel_widget)
+        log_panel_layout.setContentsMargins(0, 0, 0, 0)
+        log_panel_layout.setSpacing(4)
+
         # Log display area
         self._log_view = QPlainTextEdit()
         self._log_view.setReadOnly(True)
@@ -123,18 +131,21 @@ class MainWindow(QMainWindow):
             " font-family: Consolas, 'Courier New', monospace; font-size: 9pt;"
         )
         self._log_view.setMinimumHeight(150)
-        layout.addWidget(self._log_view)
+        log_panel_layout.addWidget(self._log_view)
 
         # Open Log File button
         open_log_btn = QPushButton("打开日志文件")
         open_log_btn.clicked.connect(self._open_log_file)
-        layout.addWidget(open_log_btn)
+        log_panel_layout.addWidget(open_log_btn)
 
         # Log file path label
         log_path_label = QLabel(f"Log: {_log_file}")
         log_path_label.setStyleSheet("color: gray; font-size: 9pt;")
         log_path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        layout.addWidget(log_path_label)
+        log_panel_layout.addWidget(log_path_label)
+
+        layout.addWidget(self._log_panel_widget)
+        self._log_panel_widget.setVisible(False)
 
         _log_emitter.message_logged.connect(self._append_log)
 
@@ -160,6 +171,31 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "无法打开日志文件",
                 f"无法打开日志文件：\n{_log_file}\n\n{e}")
 
+    def _toggle_log_panel(self):
+        self._log_panel_widget.setVisible(not self._log_panel_widget.isVisible())
+
+    def _setup_toolbar(self):
+        toolbar = QToolBar("主工具栏")
+        toolbar.setMovable(False)
+        toolbar.setFloatable(False)
+        toolbar.setOrientation(Qt.Orientation.Vertical)
+        self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, toolbar)
+
+        def _make_tool_button(text: str, slot) -> QToolButton:
+            btn = QToolButton()
+            btn.setText(text)
+            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+            btn.setFixedWidth(90)
+            btn.setWordWrap(True)
+            btn.clicked.connect(slot)
+            return btn
+
+        toolbar.addWidget(_make_tool_button("从CATDrawing\n导出pdf", self._open_convert_drawing_dialog))
+        toolbar.addWidget(_make_tool_button("从CATPart/\nCATProduct\n导出stp", self._open_convert_part_dialog))
+        toolbar.addWidget(_make_tool_button("从CATProduct\n导出BOM", self._open_export_bom_dialog))
+        toolbar.addWidget(_make_tool_button("刷写零件\n模板", self._open_stamp_part_template_dialog))
+        toolbar.addWidget(_make_tool_button("查找所有\n依赖项", self._open_find_dependencies_dialog))
+
     def _setup_menu_bar(self):
         menu_bar = self.menuBar()
 
@@ -170,23 +206,21 @@ class MainWindow(QMainWindow):
         file_menu.addAction(QAction("保存", self))
         file_menu.addAction(QAction("另存为...", self))
         file_menu.addSeparator()
-
-        convert_menu = file_menu.addMenu("转换")
-        convert_part_action = QAction("从CATPart/CATProduct导出stp", self)
-        convert_part_action.triggered.connect(self._open_convert_part_dialog)
-        convert_menu.addAction(convert_part_action)
-        convert_drawing_action = QAction("从CATDrawing导出pdf", self)
-        convert_drawing_action.triggered.connect(self._open_convert_drawing_dialog)
-        convert_menu.addAction(convert_drawing_action)
-
-        export_bom_action = QAction("从CATProduct导出BOM", self)
-        export_bom_action.triggered.connect(self._open_export_bom_dialog)
-        file_menu.addAction(export_bom_action)
-
-        file_menu.addSeparator()
         quit_action = QAction("退出", self)
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
+
+        # --- Export ---
+        export_menu = menu_bar.addMenu("导出")
+        convert_drawing_action = QAction("从CATDrawing导出pdf", self)
+        convert_drawing_action.triggered.connect(self._open_convert_drawing_dialog)
+        export_menu.addAction(convert_drawing_action)
+        convert_part_action = QAction("从CATPart/CATProduct导出stp", self)
+        convert_part_action.triggered.connect(self._open_convert_part_dialog)
+        export_menu.addAction(convert_part_action)
+        export_bom_action = QAction("从CATProduct导出BOM", self)
+        export_bom_action.triggered.connect(self._open_export_bom_dialog)
+        export_menu.addAction(export_bom_action)
 
         # --- Edit ---
         edit_menu = menu_bar.addMenu("编辑")
@@ -211,14 +245,25 @@ class MainWindow(QMainWindow):
         stamp_action = QAction("刷写零件模板", self)
         stamp_action.triggered.connect(self._open_stamp_part_template_dialog)
         tools_menu.addAction(stamp_action)
+        find_deps_action = QAction("查找所有依赖项", self)
+        find_deps_action.triggered.connect(self._open_find_dependencies_dialog)
+        tools_menu.addAction(find_deps_action)
 
         # --- View ---
         view_menu = menu_bar.addMenu("视图")
-        view_menu.addAction(QAction("放大", self))
-        view_menu.addAction(QAction("缩小", self))
-        view_menu.addAction(QAction("重置缩放", self))
+        zoom_in_action = QAction("放大", self)
+        zoom_in_action.triggered.connect(lambda: QMessageBox.information(self, "提示", "功能尚未实现"))
+        view_menu.addAction(zoom_in_action)
+        zoom_out_action = QAction("缩小", self)
+        zoom_out_action.triggered.connect(lambda: QMessageBox.information(self, "提示", "功能尚未实现"))
+        view_menu.addAction(zoom_out_action)
+        zoom_reset_action = QAction("重置缩放", self)
+        zoom_reset_action.triggered.connect(lambda: QMessageBox.information(self, "提示", "功能尚未实现"))
+        view_menu.addAction(zoom_reset_action)
         view_menu.addSeparator()
-        view_menu.addAction(QAction("切换状态栏", self))
+        toggle_log_action = QAction("切换Log显示", self)
+        toggle_log_action.triggered.connect(self._toggle_log_panel)
+        view_menu.addAction(toggle_log_action)
 
         # --- Help ---
         help_menu = menu_bar.addMenu("帮助")
@@ -375,6 +420,10 @@ class MainWindow(QMainWindow):
             conversion_fn=stamp_part_template,
             settings_key="StampPartTemplate"
         )
+        dialog.exec()
+
+    def _open_find_dependencies_dialog(self):
+        dialog = FindDependenciesDialog(self)
         dialog.exec()
 
 
@@ -1356,6 +1405,182 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
         logger.info(f"  BOM exported -> {dest}")
         product_doc.close()
         logger.info(f"Done: {src.name}\n")
+
+
+# ---------------------------------------------------------------------------
+# Find Dependencies function
+# ---------------------------------------------------------------------------
+
+def find_dependencies(target_path: str, search_dir: str, recursive: bool = True,
+                      progress_callback=None) -> list[str]:
+    """
+    Scan search_dir for CATIA files that are referenced by target_path.
+    Uses binary string matching (no CATIA COM required).
+    """
+    target = Path(target_path)
+    search = Path(search_dir)
+
+    try:
+        target_bytes = target.read_bytes()
+    except Exception as e:
+        logger.error(f"Cannot read target file: {e}")
+        return []
+
+    pattern = "**/*" if recursive else "*"
+    extensions = {".CATPart", ".CATProduct", ".CATDrawing"}
+
+    results = []
+    candidates = [f for ext in extensions
+                  for f in search.glob(f"{pattern}{ext}") if f.is_file()]
+
+    for i, candidate in enumerate(candidates):
+        if progress_callback:
+            progress_callback(i, len(candidates), str(candidate))
+
+        # Skip the target file itself
+        if candidate.resolve() == target.resolve():
+            continue
+
+        # Check if candidate filename appears in target binary content
+        name_bytes = candidate.name.encode("utf-8")
+        stem_bytes = candidate.stem.encode("utf-8")
+
+        if name_bytes in target_bytes or stem_bytes in target_bytes:
+            results.append(str(candidate))
+            logger.info(f"  Dependency found: {candidate}")
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Find Dependencies Dialog
+# ---------------------------------------------------------------------------
+
+class FindDependenciesDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("查找所有依赖项")
+        self.setMinimumSize(540, 520)
+
+        self._settings = QSettings("CATIACompanion", "FindDependenciesDialog")
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        # Target file
+        layout.addWidget(QLabel("目标CATIA文件（CATPart / CATProduct / CATDrawing）:"))
+        target_row = QHBoxLayout()
+        self._target_edit = QLineEdit()
+        self._target_edit.setReadOnly(True)
+        self._target_edit.setPlaceholderText("选择目标CATIA文件...")
+        self._target_edit.setText(self._settings.value("last_target", ""))
+        target_browse_btn = QPushButton("浏览...")
+        target_browse_btn.clicked.connect(self._browse_target)
+        target_row.addWidget(self._target_edit)
+        target_row.addWidget(target_browse_btn)
+        layout.addLayout(target_row)
+
+        # Search directory
+        layout.addWidget(QLabel("搜索范围（文件夹）:"))
+        search_row = QHBoxLayout()
+        self._search_edit = QLineEdit()
+        self._search_edit.setReadOnly(True)
+        self._search_edit.setPlaceholderText("选择搜索文件夹...")
+        self._search_edit.setText(self._settings.value("last_search_dir", ""))
+        search_browse_btn = QPushButton("浏览...")
+        search_browse_btn.clicked.connect(self._browse_search_dir)
+        search_row.addWidget(self._search_edit)
+        search_row.addWidget(search_browse_btn)
+        layout.addLayout(search_row)
+
+        self._recursive_cb = QCheckBox("包含子文件夹")
+        self._recursive_cb.setChecked(True)
+        layout.addWidget(self._recursive_cb)
+
+        # Action buttons
+        action_row = QHBoxLayout()
+        self._search_btn = QPushButton("开始搜索")
+        self._search_btn.setDefault(True)
+        self._search_btn.clicked.connect(self._start_search)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(self.reject)
+        action_row.addWidget(self._search_btn)
+        action_row.addWidget(cancel_btn)
+        action_row.addStretch()
+        layout.addLayout(action_row)
+
+        # Results area
+        layout.addWidget(QLabel("找到的依赖项："))
+        self._result_view = QPlainTextEdit()
+        self._result_view.setReadOnly(True)
+        self._result_view.setMinimumHeight(150)
+        layout.addWidget(self._result_view)
+
+        copy_btn = QPushButton("复制结果")
+        copy_btn.clicked.connect(self._copy_results)
+        layout.addWidget(copy_btn)
+
+    def _browse_target(self):
+        last = self._settings.value("last_target", "")
+        start_dir = str(Path(last).parent) if last else ""
+        file, _ = QFileDialog.getOpenFileName(
+            self, "选择目标CATIA文件", start_dir,
+            "CATIA Files (*.CATPart *.CATProduct *.CATDrawing);;All Files (*)")
+        if file:
+            self._target_edit.setText(file)
+            self._settings.setValue("last_target", file)
+
+    def _browse_search_dir(self):
+        last = self._settings.value("last_search_dir", "")
+        folder = QFileDialog.getExistingDirectory(self, "选择搜索文件夹", last)
+        if folder:
+            self._search_edit.setText(folder)
+            self._settings.setValue("last_search_dir", folder)
+
+    def _start_search(self):
+        target = self._target_edit.text().strip()
+        search_dir = self._search_edit.text().strip()
+
+        if not target:
+            QMessageBox.warning(self, "未选择目标文件", "请先选择一个目标CATIA文件。")
+            return
+        if not Path(target).exists():
+            QMessageBox.warning(self, "文件不存在", f"目标文件不存在：\n{target}")
+            return
+        if not search_dir:
+            QMessageBox.warning(self, "未选择搜索范围", "请先选择一个搜索文件夹。")
+            return
+        if not Path(search_dir).is_dir():
+            QMessageBox.warning(self, "文件夹不存在", f"搜索文件夹不存在：\n{search_dir}")
+            return
+
+        recursive = self._recursive_cb.isChecked()
+        self._search_btn.setEnabled(False)
+        self._result_view.clear()
+        self._result_view.appendPlainText("正在搜索...")
+        QApplication.processEvents()
+
+        def progress_callback(i, total, current_path):
+            self._result_view.setPlainText(f"正在扫描 ({i + 1}/{total}):\n{current_path}")
+            QApplication.processEvents()
+
+        results = find_dependencies(target, search_dir, recursive=recursive,
+                                    progress_callback=progress_callback)
+
+        self._search_btn.setEnabled(True)
+
+        if results:
+            summary = f"搜索完成，共找到 {len(results)} 个依赖项：\n\n"
+            summary += "\n".join(results)
+        else:
+            summary = "搜索完成，未找到任何依赖项。"
+        self._result_view.setPlainText(summary)
+
+    def _copy_results(self):
+        text = self._result_view.toPlainText()
+        if text:
+            QApplication.clipboard().setText(text)
 
 
 # ---------------------------------------------------------------------------
