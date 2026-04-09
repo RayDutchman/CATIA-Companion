@@ -1037,16 +1037,29 @@ class ExportBOMDialog(QDialog):
         layout.setSpacing(10)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        layout.addWidget(QLabel("CATProduct文件:"))
+        # ── Source selection (active doc vs file) ─────────────────────────
+        src_group = QGroupBox("数据来源")
+        src_layout = QVBoxLayout(src_group)
+        self._src_btn_group = QButtonGroup(self)
+        self.radio_active = QRadioButton("使用当前CATIA活动文档")
+        self.radio_file   = QRadioButton("选择文件:")
+        self.radio_file.setChecked(True)
+        self._src_btn_group.addButton(self.radio_active)
+        self._src_btn_group.addButton(self.radio_file)
+        src_layout.addWidget(self.radio_active)
         file_row = QHBoxLayout()
+        file_row.addWidget(self.radio_file)
         self.file_edit = QLineEdit()
         self.file_edit.setPlaceholderText("选择一个CATProduct文件...")
         self.file_edit.setReadOnly(True)
         file_browse_btn = QPushButton("浏览...")
         file_browse_btn.clicked.connect(self._browse_file)
+        self._file_browse_btn = file_browse_btn
         file_row.addWidget(self.file_edit)
         file_row.addWidget(file_browse_btn)
-        layout.addLayout(file_row)
+        src_layout.addLayout(file_row)
+        self.radio_active.toggled.connect(self._toggle_source_row)
+        layout.addWidget(src_group)
 
         output_group = QGroupBox("输出文件夹")
         output_layout = QVBoxLayout(output_group)
@@ -1152,10 +1165,10 @@ class ExportBOMDialog(QDialog):
         all_known = BOM_ALL_COLUMNS + self._custom_columns
         for col in saved:
             if col in all_known:
-                self.selected_list.addItem(QListWidgetItem(col))
+                self.selected_list.addItem(self._make_col_item(col))
         for col in all_known:
             if col not in saved:
-                self.avail_list.addItem(QListWidgetItem(col))
+                self.avail_list.addItem(self._make_col_item(col))
 
         action_row = QHBoxLayout()
         action_row.addStretch()
@@ -1168,9 +1181,33 @@ class ExportBOMDialog(QDialog):
         action_row.addWidget(cancel_btn)
         layout.addLayout(action_row)
 
+    # ── Helpers ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _make_col_item(internal_name: str) -> QListWidgetItem:
+        """Create a QListWidgetItem showing the Chinese display name but
+        storing the internal name in UserRole."""
+        item = QListWidgetItem(_BOM_COL_DISPLAY.get(internal_name, internal_name))
+        item.setData(Qt.ItemDataRole.UserRole, internal_name)
+        return item
+
+    @staticmethod
+    def _item_internal(item: QListWidgetItem) -> str:
+        """Return the internal column name stored in a list item."""
+        data = item.data(Qt.ItemDataRole.UserRole)
+        return data if data else item.text()
+
     def _toggle_folder_row(self, checked):
         self.folder_edit.setEnabled(checked)
         self.folder_browse_btn.setEnabled(checked)
+
+    def _toggle_source_row(self, active_checked: bool):
+        self.file_edit.setEnabled(not active_checked)
+        self._file_browse_btn.setEnabled(not active_checked)
+        # When using active doc, "same directory" is meaningless unless
+        # a custom output folder is set
+        if active_checked and self.radio_same.isChecked():
+            self.radio_custom.setChecked(True)
 
     def _browse_file(self):
         file, _ = QFileDialog.getOpenFileName(self, "选择CATProduct文件",
@@ -1199,13 +1236,15 @@ class ExportBOMDialog(QDialog):
 
     def _add_column(self):
         for item in self.avail_list.selectedItems():
+            internal = self._item_internal(item)
             self.avail_list.takeItem(self.avail_list.row(item))
-            self.selected_list.addItem(QListWidgetItem(item.text()))
+            self.selected_list.addItem(self._make_col_item(internal))
 
     def _remove_column(self):
         for item in self.selected_list.selectedItems():
+            internal = self._item_internal(item)
             self.selected_list.takeItem(self.selected_list.row(item))
-            self.avail_list.addItem(QListWidgetItem(item.text()))
+            self.avail_list.addItem(self._make_col_item(internal))
 
     def _move_up(self):
         row = self.selected_list.currentRow()
@@ -1226,55 +1265,67 @@ class ExportBOMDialog(QDialog):
         if not label:
             return
         all_existing = (
-            [self.avail_list.item(i).text() for i in range(self.avail_list.count())] +
-            [self.selected_list.item(i).text() for i in range(self.selected_list.count())]
+            [self._item_internal(self.avail_list.item(i))
+             for i in range(self.avail_list.count())] +
+            [self._item_internal(self.selected_list.item(i))
+             for i in range(self.selected_list.count())]
         )
         if label in all_existing:
             QMessageBox.warning(self, "列名重复", f"'{label}' 已存在。")
             return
-        self.selected_list.addItem(QListWidgetItem(label))
+        self.selected_list.addItem(self._make_col_item(label))
         self._custom_columns.append(label)
         self._settings.setValue("custom_columns", self._custom_columns)
         self.custom_col_edit.clear()
 
     def _delete_custom_column(self):
         selected = self.avail_list.selectedItems()
-        to_delete = [item for item in selected if item.text() in self._custom_columns]
+        to_delete = [item for item in selected
+                     if self._item_internal(item) in self._custom_columns]
         if not to_delete:
             return
-        names = ", ".join(f"'{item.text()}'" for item in to_delete)
+        names = ", ".join(f"'{self._item_internal(item)}'" for item in to_delete)
         reply = QMessageBox.question(self, "删除自定义列",
             f"确认永久删除 {names}？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
             return
         for item in to_delete:
-            self._custom_columns.remove(item.text())
+            self._custom_columns.remove(self._item_internal(item))
             self.avail_list.takeItem(self.avail_list.row(item))
         self._settings.setValue("custom_columns", self._custom_columns)
 
     def _on_avail_selection_changed(self):
         selected = self.avail_list.selectedItems()
-        has_custom = any(item.text() in self._custom_columns for item in selected)
+        has_custom = any(self._item_internal(item) in self._custom_columns
+                         for item in selected)
         self.delete_custom_btn.setEnabled(has_custom)
 
     def _confirm(self):
-        file_path = self.file_edit.text().strip()
-        if not file_path:
-            QMessageBox.warning(self, "未选择文件", "请选择一个CATProduct文件。")
-            return
-        selected_cols = [self.selected_list.item(i).text()
+        use_active = self.radio_active.isChecked()
+        if use_active:
+            file_path = None
+        else:
+            file_path = self.file_edit.text().strip()
+            if not file_path:
+                QMessageBox.warning(self, "未选择文件", "请选择一个CATProduct文件。")
+                return
+
+        # Collect selected columns as internal names; save internal names to QSettings
+        selected_cols = [self._item_internal(self.selected_list.item(i))
                          for i in range(self.selected_list.count())]
         if not selected_cols:
             QMessageBox.warning(self, "未选择列", "请至少选择一列进行导出。")
             return
         self._settings.setValue("selected_columns", selected_cols)
-        if self.radio_same.isChecked():
+
+        if self.radio_same.isChecked() and not use_active:
             output_folder = None
         else:
             output_folder = self.folder_edit.text().strip()
             if not output_folder:
-                QMessageBox.warning(self, "未选择输出文件夹", "请选择一个输出文件夹。")
+                QMessageBox.warning(self, "未选择输出文件夹",
+                                    "请选择一个输出文件夹（使用活动文档时需指定）。")
                 return
         export_bom_to_excel([file_path], output_folder, columns=selected_cols,
                             custom_columns=self._custom_columns)
@@ -1285,13 +1336,16 @@ class ExportBOMDialog(QDialog):
 # BOM export function
 # ---------------------------------------------------------------------------
 
-def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
+def export_bom_to_excel(file_paths: list[str | None], output_folder: str | None = None,
                         columns: list[str] | None = None,
                         custom_columns: list[str] | None = None):
     """
     Export a hierarchical BOM from CATProduct files to Excel (.xlsx).
     Custom columns are read from CATIA user-defined properties (UserRefProperties).
     Each product is switched to DESIGN_MODE before reading properties.
+
+    A *None* entry in *file_paths* means "use the currently active CATIA document"
+    without opening or closing anything.
     """
     import openpyxl
     from openpyxl.styles import Font, Alignment
@@ -1428,7 +1482,62 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
         except Exception as e:
             logger.warning(f"  {'  ' * level}  -> Exception accessing children: {e}")
 
+    def _write_sheet(ws, rows, columns):
+        center = Alignment(horizontal="center")
+        for col_idx, col_name in enumerate(columns, start=1):
+            cell = ws.cell(row=1, column=col_idx,
+                           value=_BOM_COL_DISPLAY.get(col_name, col_name))
+            cell.font = Font(bold=True)
+
+        for row_idx, row in enumerate(rows, start=2):
+            level = row.get("Level", 0)
+            for col_idx, col_name in enumerate(columns, start=1):
+                if col_name == "Level":
+                    value = level
+                elif col_name == "Quantity":
+                    value = row.get("Quantity", 1)
+                elif col_name == "Type":
+                    value = row.get("Type", "")
+                else:
+                    value = row.get(col_name, "")
+                cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                if col_name in ("Level", "Quantity", "Type"):
+                    cell.alignment = center
+
+        for col_idx, col_name in enumerate(columns, start=1):
+            col_letter = ws.cell(row=1, column=col_idx).column_letter
+            header = _BOM_COL_DISPLAY.get(col_name, col_name)
+            max_width = len(header)
+            for row_idx in range(2, ws.max_row + 1):
+                cell_val = ws.cell(row=row_idx, column=col_idx).value
+                if cell_val is not None:
+                    max_width = max(max_width, len(str(cell_val)))
+            ws.column_dimensions[col_letter].width = max_width
+
     for path in file_paths:
+        if path is None:
+            # Use the active document without opening or closing
+            try:
+                active_full = application.active_document.full_name
+            except Exception as e:
+                raise RuntimeError("无法获取当前CATIA活动文档，请确保CATIA已打开CATProduct。") from e
+            src_name = Path(active_full)
+            dest_dir = Path(output_folder).resolve() if output_folder else src_name.parent
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / f"{src_name.stem}_BOM.xlsx"
+            product_doc = ProductDocument(application.active_document.com_object)
+            root_product = product_doc.product
+            rows = []
+            traverse(root_product, rows, level=0)
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "BOM"
+            _write_sheet(ws, rows, columns)
+            wb.save(str(dest))
+            logger.info(f"  BOM exported -> {dest}")
+            logger.info("Done: active document\n")
+            continue
+
         src = Path(path).resolve()
         dest_dir = Path(output_folder).resolve() if output_folder else src.parent
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -1465,35 +1574,7 @@ def export_bom_to_excel(file_paths: list[str], output_folder: str | None = None,
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "BOM"
-        center = Alignment(horizontal="center")
-
-        for col_idx, col_name in enumerate(columns, start=1):
-            cell = ws.cell(row=1, column=col_idx, value=col_name)
-            cell.font = Font(bold=True)
-
-        for row_idx, row in enumerate(rows, start=2):
-            level = row.get("Level", 0)
-            for col_idx, col_name in enumerate(columns, start=1):
-                if col_name == "Level":
-                    value = level
-                elif col_name == "Quantity":
-                    value = row.get("Quantity", 1)
-                elif col_name == "Type":
-                    value = row.get("Type", "")
-                else:
-                    value = row.get(col_name, "")
-                cell = ws.cell(row=row_idx, column=col_idx, value=value)
-                if col_name in ("Level", "Quantity", "Type"):
-                    cell.alignment = center
-
-        for col_idx, col_name in enumerate(columns, start=1):
-            col_letter = ws.cell(row=1, column=col_idx).column_letter
-            max_width = len(col_name)
-            for row_idx in range(2, ws.max_row + 1):
-                cell_val = ws.cell(row=row_idx, column=col_idx).value
-                if cell_val is not None:
-                    max_width = max(max_width, len(str(cell_val)))
-            ws.column_dimensions[col_letter].width = max_width
+        _write_sheet(ws, rows, columns)
 
         wb.save(str(dest))
         logger.info(f"  BOM exported -> {dest}")
@@ -1699,6 +1780,9 @@ _SOURCE_TO_DISPLAY: dict[str, str] = {"0": "未知", "1": "自制", "2": "外购
 _SOURCE_FROM_DISPLAY: dict[str, str] = {"未知": "0", "自制": "1", "外购": "2"}
 _SOURCE_OPTIONS: list[str] = ["未知", "自制", "外购"]
 
+# Reverse display map (Chinese → internal) for ExportBOMDialog list widgets
+_BOM_COL_DISPLAY_REVERSE: dict[str, str] = {v: k for k, v in _BOM_COL_DISPLAY.items()}
+
 # Column order used in the BOM edit dialog (internal names)
 _BOM_EDIT_COLUMN_ORDER: list[str] = [
     "Level", "Type", "Part Number", "Quantity",
@@ -1706,12 +1790,13 @@ _BOM_EDIT_COLUMN_ORDER: list[str] = [
 ]
 
 
-def _collect_bom_rows(file_path: str, columns: list[str],
+def _collect_bom_rows(file_path: str | None, columns: list[str],
                       custom_columns: list[str]) -> list[dict]:
     """
-    Open *file_path* in a running CATIA instance and return a list of row dicts
-    representing the hierarchical BOM (same traversal as export_bom_to_excel).
-    Each dict contains at least the keys from *columns*.
+    Return a list of row dicts representing the hierarchical BOM.
+
+    *file_path* may be None, in which case the currently active CATIA document
+    is used without opening or closing any file.
     """
     from pycatia import catia
     from pycatia.product_structure_interfaces.product_document import ProductDocument
@@ -1821,6 +1906,14 @@ def _collect_bom_rows(file_path: str, columns: list[str],
     application.visible = True
     documents = application.documents
 
+    if file_path is None:
+        # Use the currently active CATIA document without opening/closing
+        product_doc = ProductDocument(application.active_document.com_object)
+        root_product = product_doc.product
+        rows: list[dict] = []
+        traverse(root_product, rows, level=0)
+        return rows
+
     src = Path(file_path).resolve()
     already_open: set[Path] = set()
     for i in range(1, documents.count + 1):
@@ -1852,12 +1945,15 @@ def _collect_bom_rows(file_path: str, columns: list[str],
     return rows
 
 
-def _write_bom_to_catia(file_path: str, pn_data: dict[str, dict[str, str]],
+def _write_bom_to_catia(file_path: str | None, pn_data: dict[str, dict[str, str]],
                         custom_columns: list[str]):
     """
-    Traverse the product tree rooted at *file_path* and write back every editable
-    property stored in *pn_data* (keyed by Part Number) to CATIA via COM.
-    Saves all documents that were modified.
+    Traverse the product tree and write back every editable property stored in
+    *pn_data* (keyed by Part Number) to CATIA via COM.
+
+    When *file_path* is None the currently active CATIA document is used and
+    nothing is saved (the caller is responsible for any saving).
+    Otherwise the file is opened if necessary and all modified documents are saved.
     """
     from pycatia import catia
     from pycatia.product_structure_interfaces.product_document import ProductDocument
@@ -1936,6 +2032,14 @@ def _write_bom_to_catia(file_path: str, pn_data: dict[str, dict[str, str]],
     application = caa.application
     application.visible = True
     documents = application.documents
+
+    if file_path is None:
+        # Use the active document; do not open or save anything
+        product_doc = ProductDocument(application.active_document.com_object)
+        root_product = product_doc.product
+        traverse_write(root_product)
+        logger.info("Write-back complete for active document (not saved)")
+        return
 
     src = Path(file_path).resolve()
     already_open: set[Path] = set()
@@ -2022,18 +2126,22 @@ class BomEditDialog(QDialog):
         layout.setSpacing(10)
         layout.setContentsMargins(16, 16, 16, 16)
 
+        # ── Source selection (active doc vs file) ─────────────────────────
+        self._use_active_chk = QCheckBox("使用当前CATIA活动文档（不选择文件）")
+        self._use_active_chk.toggled.connect(self._toggle_file_row)
+        layout.addWidget(self._use_active_chk)
+
         # File picker row
-        layout.addWidget(QLabel("CATProduct文件:"))
         file_row = QHBoxLayout()
         self._file_edit = QLineEdit()
         self._file_edit.setPlaceholderText("选择一个CATProduct文件...")
         self._file_edit.setReadOnly(True)
-        file_browse_btn = QPushButton("浏览...")
-        file_browse_btn.clicked.connect(self._browse_file)
+        self._file_browse_btn = QPushButton("浏览...")
+        self._file_browse_btn.clicked.connect(self._browse_file)
         self._load_btn = QPushButton("加载BOM")
         self._load_btn.clicked.connect(self._load_bom)
         file_row.addWidget(self._file_edit)
-        file_row.addWidget(file_browse_btn)
+        file_row.addWidget(self._file_browse_btn)
         file_row.addWidget(self._load_btn)
         layout.addLayout(file_row)
 
@@ -2049,12 +2157,13 @@ class BomEditDialog(QDialog):
         display_headers = [_BOM_COL_DISPLAY.get(c, c) for c in self._columns]
         self._table = QTableWidget(0, len(self._columns))
         self._table.setHorizontalHeaderLabels(display_headers)
-        self._table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents
-        )
-        self._table.horizontalHeader().setStretchLastSection(True)
+        hdr = self._table.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        hdr.setStretchLastSection(True)
+        hdr.setSectionsMovable(True)
         self._table.verticalHeader().setDefaultSectionSize(24)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.setAlternatingRowColors(True)
         self._table.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self._table)
@@ -2072,6 +2181,12 @@ class BomEditDialog(QDialog):
         btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
 
+    # ── Source toggle ───────────────────────────────────────────────────────
+
+    def _toggle_file_row(self, use_active: bool):
+        self._file_edit.setEnabled(not use_active)
+        self._file_browse_btn.setEnabled(not use_active)
+
     # ── File picker ────────────────────────────────────────────────────────
 
     def _browse_file(self):
@@ -2088,13 +2203,16 @@ class BomEditDialog(QDialog):
     # ── Load BOM ───────────────────────────────────────────────────────────
 
     def _load_bom(self):
-        file_path = self._file_edit.text().strip()
-        if not file_path:
-            QMessageBox.warning(self, "未选择文件", "请先选择一个CATProduct文件。")
-            return
-        if not Path(file_path).exists():
-            QMessageBox.warning(self, "文件不存在", f"文件不存在：\n{file_path}")
-            return
+        if self._use_active_chk.isChecked():
+            file_path = None
+        else:
+            file_path = self._file_edit.text().strip()
+            if not file_path:
+                QMessageBox.warning(self, "未选择文件", "请先选择一个CATProduct文件。")
+                return
+            if not Path(file_path).exists():
+                QMessageBox.warning(self, "文件不存在", f"文件不存在：\n{file_path}")
+                return
 
         self._load_btn.setEnabled(False)
         self._load_btn.setText("加载中…")
@@ -2132,6 +2250,8 @@ class BomEditDialog(QDialog):
                 self._pn_data[pn] = data
 
         self._populate_table()
+        # Auto-size columns to content after initial load; user can resize manually after
+        self._table.resizeColumnsToContents()
         self._apply_btn.setEnabled(True)
 
     # ── Table population ───────────────────────────────────────────────────
@@ -2206,22 +2326,33 @@ class BomEditDialog(QDialog):
         if pn_col_idx < 0 or src_col_idx < 0:
             return
 
-        pn_item = self._table.item(row_idx, pn_col_idx)
-        if not pn_item:
-            return
-        pn = pn_item.text()
+        # Determine the set of rows to propagate to: all selected rows (if the
+        # triggering row is among the selection) + all rows with the same PN.
+        selected_rows = {idx.row() for idx in self._table.selectedIndexes()}
+        if row_idx in selected_rows:
+            direct_rows = selected_rows
+        else:
+            direct_rows = {row_idx}
 
-        # Update canonical data
-        if pn in self._pn_data:
-            self._pn_data[pn]["Source"] = text
+        # Collect the PNs of all directly affected rows
+        pns_to_update: set[str] = set()
+        for r in direct_rows:
+            pn_item = self._table.item(r, pn_col_idx)
+            if pn_item:
+                pns_to_update.add(pn_item.text())
 
-        # Sync all other rows with the same PN
+        # Update canonical data for every affected PN
+        for pn in pns_to_update:
+            if pn in self._pn_data:
+                self._pn_data[pn]["Source"] = text
+
+        # Sync all rows whose PN is in the affected set
         self._updating = True
         for r in range(self._table.rowCount()):
             if r == row_idx:
                 continue
             other_pn = self._table.item(r, pn_col_idx)
-            if other_pn and other_pn.text() == pn:
+            if other_pn and other_pn.text() in pns_to_update:
                 combo = self._table.cellWidget(r, src_col_idx)
                 if isinstance(combo, QComboBox) and combo.currentText() != text:
                     combo.blockSignals(True)
@@ -2249,24 +2380,34 @@ class BomEditDialog(QDialog):
         )
         if pn_col_idx < 0:
             return
-        pn_item = self._table.item(row_idx, pn_col_idx)
-        if not pn_item:
-            return
-        pn = pn_item.text()
 
         new_value = item.text()
 
-        # Update canonical data
-        if pn in self._pn_data:
-            self._pn_data[pn][col_name] = new_value
+        # Determine the set of rows to propagate to: all selected rows (if the
+        # edited row is among the selection) + all rows with the same PN.
+        selected_rows = {idx.row() for idx in self._table.selectedIndexes()}
+        if row_idx in selected_rows:
+            direct_rows = selected_rows
+        else:
+            direct_rows = {row_idx}
 
-        # Propagate to all other rows with the same PN
+        # Collect the PNs of all directly affected rows and update canonical data
+        pns_to_update: set[str] = set()
+        for r in direct_rows:
+            pn_item = self._table.item(r, pn_col_idx)
+            if pn_item:
+                pn = pn_item.text()
+                pns_to_update.add(pn)
+                if pn in self._pn_data:
+                    self._pn_data[pn][col_name] = new_value
+
+        # Propagate to all rows whose PN is in the affected set
         self._updating = True
         for r in range(self._table.rowCount()):
             if r == row_idx:
                 continue
             other_pn_item = self._table.item(r, pn_col_idx)
-            if other_pn_item and other_pn_item.text() == pn:
+            if other_pn_item and other_pn_item.text() in pns_to_update:
                 other_item = self._table.item(r, col_idx)
                 if other_item and other_item.text() != new_value:
                     other_item.setText(new_value)
@@ -2275,10 +2416,13 @@ class BomEditDialog(QDialog):
     # ── Write back ─────────────────────────────────────────────────────────
 
     def _apply_changes(self):
-        file_path = self._file_edit.text().strip()
-        if not file_path:
-            QMessageBox.warning(self, "未选择文件", "请选择一个CATProduct文件。")
-            return
+        if self._use_active_chk.isChecked():
+            file_path = None
+        else:
+            file_path = self._file_edit.text().strip()
+            if not file_path:
+                QMessageBox.warning(self, "未选择文件", "请选择一个CATProduct文件。")
+                return
 
         self._apply_btn.setEnabled(False)
         self._apply_btn.setText("写回中…")
@@ -2296,7 +2440,10 @@ class BomEditDialog(QDialog):
             )
             return
 
-        QMessageBox.information(self, "完成", "BOM属性已成功写回CATIA并保存！")
+        if file_path is None:
+            QMessageBox.information(self, "完成", "BOM属性已成功写回CATIA（活动文档未保存，如需保存请在CATIA中手动保存）。")
+        else:
+            QMessageBox.information(self, "完成", "BOM属性已成功写回CATIA并保存！")
         self.accept()
 
 
