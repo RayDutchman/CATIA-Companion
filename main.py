@@ -1,5 +1,6 @@
 import sys
 import os
+import copy
 import shutil
 import subprocess
 import unicodedata
@@ -15,7 +16,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem, QComboBox, QCheckBox, QPlainTextEdit,
     QTableWidget, QTableWidgetItem, QHeaderView,
 )
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QColor
 from PySide6.QtCore import Qt, QSettings, QObject, Signal
 
 # ---------------------------------------------------------------------------
@@ -1768,12 +1769,13 @@ def _collect_bom_rows(file_path: str | None, columns: list[str],
             name = product.name
             pn = name.rsplit(".", 1)[0] if "." in name else name
 
+        _readable = True
         try:
             product.apply_work_mode(CatWorkModeType.DESIGN_MODE)
         except Exception:
-            pass
+            _readable = False
 
-        row: dict = {"Level": level, "Part Number": pn}
+        row: dict = {"Level": level, "Part Number": pn, "_unreadable": not _readable}
         try:
             child_count = product.products.count
             row["Type"] = "装配体" if child_count > 0 else "零件"
@@ -2034,10 +2036,16 @@ class BomEditDialog(QDialog):
         # PN-keyed canonical data: {pn: {internal_col: value}}
         # Source is stored as display label (未知/自制/外购).
         self._pn_data: dict[str, dict[str, str]] = {}
+        # Snapshot of values at last load/apply (for dirty-only write-back)
+        self._original_pn_data: dict[str, dict[str, str]] = {}
+        # Modified fields per PN: {pn: {col_name, ...}}
+        self._dirty: dict[str, set[str]] = {}
         # All BOM rows in traversal order
         self._rows: list[dict] = []
         # Guard against re-entrant change handling
         self._updating = False
+        # Row indices of collapsed assembly rows
+        self._collapsed_rows: set[int] = set()
 
         # ── Layout ──────────────────────────────────────────────────────────
         layout = QVBoxLayout(self)
@@ -2084,18 +2092,23 @@ class BomEditDialog(QDialog):
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.setAlternatingRowColors(True)
         self._table.itemChanged.connect(self._on_item_changed)
+        self._table.cellClicked.connect(self._on_cell_clicked)
         layout.addWidget(self._table)
 
         # Bottom buttons
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        self._apply_btn = QPushButton("完成（写回CATIA）")
-        self._apply_btn.setDefault(True)
-        self._apply_btn.setEnabled(False)
-        self._apply_btn.clicked.connect(self._apply_changes)
+        self._save_btn = QPushButton("应用（写回CATIA）")
+        self._save_btn.setEnabled(False)
+        self._save_btn.clicked.connect(self._apply_changes)
+        self._finish_btn = QPushButton("完成（写回CATIA）")
+        self._finish_btn.setDefault(True)
+        self._finish_btn.setEnabled(False)
+        self._finish_btn.clicked.connect(self._finish_and_close)
         cancel_btn = QPushButton("取消")
         cancel_btn.clicked.connect(self.reject)
-        btn_row.addWidget(self._apply_btn)
+        btn_row.addWidget(self._save_btn)
+        btn_row.addWidget(self._finish_btn)
         btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
 
@@ -2152,6 +2165,7 @@ class BomEditDialog(QDialog):
         self._load_btn.setText("重新加载BOM")
 
         self._rows = rows
+        self._collapsed_rows.clear()
 
         # Build PN-keyed canonical data (first occurrence wins).
         # Source is converted from CATIA integer string to display label.
@@ -2167,10 +2181,15 @@ class BomEditDialog(QDialog):
                     data[col] = val
                 self._pn_data[pn] = data
 
+        # Snapshot original values for dirty-only write-back; clear stale dirty state
+        self._original_pn_data = copy.deepcopy(self._pn_data)
+        self._dirty.clear()
+
         self._populate_table()
         # Auto-size columns to content after initial load; user can resize manually after
         self._table.resizeColumnsToContents()
-        self._apply_btn.setEnabled(True)
+        self._save_btn.setEnabled(True)
+        self._finish_btn.setEnabled(True)
 
     # ── Table population ───────────────────────────────────────────────────
 
@@ -2189,6 +2208,7 @@ class BomEditDialog(QDialog):
         for row_idx, row_data in enumerate(self._rows):
             pn = str(row_data.get("Part Number", ""))
             level = row_data.get("Level", 0)
+            unreadable = bool(row_data.get("_unreadable"))
 
             for col_idx, col_name in enumerate(self._columns):
 
@@ -2212,7 +2232,7 @@ class BomEditDialog(QDialog):
 
                 # ── All other columns → QTableWidgetItem ─────────────────
                 if col_name == "Level":
-                    value = " " * level + str(level)
+                    value = self._level_cell_text(row_idx)
                 elif col_name == "Quantity":
                     value = str(row_data.get("Quantity", "1"))
                 elif col_name in _BOM_READONLY_COLS:
@@ -2227,9 +2247,70 @@ class BomEditDialog(QDialog):
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self._table.setItem(row_idx, col_idx, item)
 
+            # Grey out and lock rows whose document could not be loaded
+            if unreadable:
+                grey = QColor(160, 160, 160)
+                bg = QColor(245, 245, 245)
+                for ci in range(len(self._columns)):
+                    it = self._table.item(row_idx, ci)
+                    if it:
+                        it.setForeground(grey)
+                        it.setBackground(bg)
+                        it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    w = self._table.cellWidget(row_idx, ci)
+                    if isinstance(w, QComboBox):
+                        w.setEnabled(False)
+
         self._updating = False
 
-    # ── Source combobox change ─────────────────────────────────────────────
+    # ── Collapse / expand helpers ───────────────────────────────────────────
+
+    def _row_has_children(self, row_idx: int) -> bool:
+        """Return True if the next row exists and has a deeper level."""
+        if row_idx + 1 >= len(self._rows):
+            return False
+        return (self._rows[row_idx + 1].get("Level", 0) >
+                self._rows[row_idx].get("Level", 0))
+
+    def _level_cell_text(self, row_idx: int) -> str:
+        """Return the text to display in the Level cell, including fold indicator."""
+        level = self._rows[row_idx].get("Level", 0)
+        if self._row_has_children(row_idx):
+            indicator = "▶ " if row_idx in self._collapsed_rows else "▼ "
+        else:
+            indicator = "  "
+        return "  " * level + indicator + str(level)
+
+    def _update_row_visibility(self):
+        """Show/hide rows based on which ancestor assembly rows are collapsed."""
+        hide_depth_stack: list[int] = []
+        for r, row_data in enumerate(self._rows):
+            level = row_data.get("Level", 0)
+            # Pop ancestors that are no longer parents of the current row
+            while hide_depth_stack and hide_depth_stack[-1] >= level:
+                hide_depth_stack.pop()
+            should_hide = bool(hide_depth_stack)
+            self._table.setRowHidden(r, should_hide)
+            if not should_hide and r in self._collapsed_rows:
+                hide_depth_stack.append(level)
+
+    def _on_cell_clicked(self, row: int, col: int):
+        """Toggle collapse/expand when the Level cell of an assembly row is clicked."""
+        if "Level" not in self._columns:
+            return
+        level_col = self._columns.index("Level")
+        if col != level_col or not self._row_has_children(row):
+            return
+        if row in self._collapsed_rows:
+            self._collapsed_rows.discard(row)
+        else:
+            self._collapsed_rows.add(row)
+        # Refresh the indicator text on the clicked cell
+        item = self._table.item(row, level_col)
+        if item:
+            item.setText(self._level_cell_text(row))
+        self._update_row_visibility()
+
 
     def _on_source_changed(self, row_idx: int, text: str):
         if self._updating:
@@ -2263,6 +2344,7 @@ class BomEditDialog(QDialog):
         for pn in pns_to_update:
             if pn in self._pn_data:
                 self._pn_data[pn]["Source"] = text
+                self._dirty.setdefault(pn, set()).add("Source")
 
         # Sync all rows whose PN is in the affected set
         self._updating = True
@@ -2318,6 +2400,7 @@ class BomEditDialog(QDialog):
                 pns_to_update.add(pn)
                 if pn in self._pn_data:
                     self._pn_data[pn][col_name] = new_value
+                    self._dirty.setdefault(pn, set()).add(col_name)
 
         # Propagate to all rows whose PN is in the affected set
         self._updating = True
@@ -2333,7 +2416,13 @@ class BomEditDialog(QDialog):
 
     # ── Write back ─────────────────────────────────────────────────────────
 
-    def _apply_changes(self):
+    def _write_back(self, *, close_on_success: bool):
+        """Build a dirty-only data set, write it to CATIA, then optionally close.
+
+        Only fields that were actually changed since the last load/apply are
+        written, which avoids redundant COM round-trips and makes write-back
+        significantly faster for large assemblies.
+        """
         if self._use_active_chk.isChecked():
             file_path = None
         else:
@@ -2342,27 +2431,72 @@ class BomEditDialog(QDialog):
                 QMessageBox.warning(self, "未选择文件", "请选择一个CATProduct文件。")
                 return
 
-        self._apply_btn.setEnabled(False)
-        self._apply_btn.setText("写回中…")
+        # Build filtered dict: only changed fields per PN
+        dirty_data: dict[str, dict[str, str]] = {}
+        for pn, dirty_cols in self._dirty.items():
+            if pn not in self._pn_data:
+                continue
+            changed = {col: self._pn_data[pn][col]
+                       for col in dirty_cols if col in self._pn_data[pn]}
+            if changed:
+                dirty_data[pn] = changed
+
+        if not dirty_data:
+            if close_on_success:
+                self.accept()
+            else:
+                QMessageBox.information(self, "无更改", "没有检测到任何修改，无需写回。")
+            return
+
+        self._save_btn.setEnabled(False)
+        self._finish_btn.setEnabled(False)
         QApplication.processEvents()
 
         try:
-            _write_bom_to_catia(file_path, self._pn_data, self._custom_columns)
+            _write_bom_to_catia(file_path, dirty_data, self._custom_columns)
         except Exception as e:
             logger.error(f"Failed to write BOM back to CATIA: {e}")
-            self._apply_btn.setEnabled(True)
-            self._apply_btn.setText("完成（写回CATIA）")
+            self._save_btn.setEnabled(True)
+            self._finish_btn.setEnabled(True)
             QMessageBox.critical(
                 self, "写回失败",
                 f"写回CATIA时出错：\n{e}\n\n请确保CATIA已启动。"
             )
             return
 
-        if file_path is None:
-            QMessageBox.information(self, "完成", "BOM属性已成功写回CATIA（活动文档未保存，如需保存请在CATIA中手动保存）。")
+        # Sync original snapshot and clear dirty tracking for written fields
+        for pn, changed in dirty_data.items():
+            if pn in self._original_pn_data:
+                self._original_pn_data[pn].update(changed)
+            if pn in self._dirty:
+                self._dirty[pn] -= set(changed.keys())
+                if not self._dirty[pn]:
+                    del self._dirty[pn]
+
+        self._save_btn.setEnabled(True)
+        self._finish_btn.setEnabled(True)
+
+        if close_on_success:
+            if file_path is None:
+                QMessageBox.information(self, "完成",
+                    "BOM属性已成功写回CATIA（活动文档未保存，如需保存请在CATIA中手动保存）。")
+            else:
+                QMessageBox.information(self, "完成", "BOM属性已成功写回CATIA并保存！")
+            self.accept()
         else:
-            QMessageBox.information(self, "完成", "BOM属性已成功写回CATIA并保存！")
-        self.accept()
+            if file_path is None:
+                QMessageBox.information(self, "应用成功",
+                    "BOM属性已成功写回CATIA（活动文档未保存，如需保存请在CATIA中手动保存）。")
+            else:
+                QMessageBox.information(self, "应用成功", "BOM属性已成功写回CATIA并保存！")
+
+    def _apply_changes(self):
+        """Write modified properties back to CATIA and keep the dialog open."""
+        self._write_back(close_on_success=False)
+
+    def _finish_and_close(self):
+        """Write modified properties back to CATIA and close the dialog."""
+        self._write_back(close_on_success=True)
 
 
 # ---------------------------------------------------------------------------
