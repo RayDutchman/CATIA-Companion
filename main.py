@@ -1594,7 +1594,7 @@ class FindDependenciesDialog(QDialog):
 _BOM_READONLY_COLS = {"Level", "Type", "Filename", "Quantity"}
 
 # Allowed characters in a Part Number (used for edit validation and file rename)
-_PN_VALID_RE = re.compile(r'^[A-Za-z0-9_\- ]*$')
+_PN_VALID_RE = re.compile(r'^[A-Za-z0-9_ -]*$')
 
 # Internal column name → Chinese display name
 _BOM_COL_DISPLAY: dict[str, str] = {
