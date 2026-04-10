@@ -117,6 +117,9 @@ def collect_bom_rows(
         try:
             child_count = product.products.count
             if filepath and filepath == parent_filepath:
+                # The child shares the same backing file as its parent, which
+                # means it is an embedded sub-assembly (部件) rather than a
+                # standalone product (产品) or leaf part (零件).
                 row["Type"] = "部件"
             elif child_count > 0:
                 row["Type"] = "产品"

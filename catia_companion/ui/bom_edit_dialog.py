@@ -645,6 +645,14 @@ class BomEditDialog(QDialog):
 
             except Exception as e:
                 if target_existed_before and Path(fp).exists():
+                    # The target file already existed before SaveAs and the source
+                    # file is still intact.  This most likely means the user clicked
+                    # "No" when CATIA asked whether to overwrite – treat as a
+                    # user-initiated skip and move on silently.
+                    logger.info(
+                        f"SaveAs skipped for {Path(fp).name} "
+                        "(target already existed; user likely declined overwrite)"
+                    )
                     continue
                 QMessageBox.warning(
                     self, "另存为失败", f"文件「{Path(fp).name}」另存为失败：\n{e}"

@@ -22,8 +22,8 @@ from PySide6.QtCore import Qt
 from catia_companion.constants import (
     APP_NAME,
     ABOUT_TEXT,
-    DEFAULT_WIDTH,
-    DEFAULT_HEIGHT,
+    MAIN_WINDOW_DEFAULT_WIDTH,
+    MAIN_WINDOW_DEFAULT_HEIGHT,
 )
 from catia_companion.utils import resource_path, detect_catia_root
 from catia_companion.logging_setup import log_signal_emitter
@@ -46,7 +46,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_NAME)
-        self.resize(DEFAULT_WIDTH, DEFAULT_HEIGHT)
+        self.resize(MAIN_WINDOW_DEFAULT_WIDTH, MAIN_WINDOW_DEFAULT_HEIGHT)
 
         self._log_window = LogWindow(self)
         log_signal_emitter.message_logged.connect(self._log_window.append_log)
@@ -141,9 +141,9 @@ class MainWindow(QMainWindow):
 
         # File
         file_menu  = bar.addMenu("文件")
-        _stub      = lambda: QMessageBox.information(self, "提示", "功能尚未实现")
-        for label, slot in (("新建", _stub), ("打开...", _stub),
-                             ("保存", _stub), ("另存为...", _stub)):
+        _not_implemented = lambda: QMessageBox.information(self, "提示", "功能尚未实现")
+        for label, slot in (("新建", _not_implemented), ("打开...", _not_implemented),
+                             ("保存", _not_implemented), ("另存为...", _not_implemented)):
             file_menu.addAction(QAction(label, self, triggered=slot))
         file_menu.addSeparator()
         file_menu.addAction(QAction("退出", self, triggered=self.close))
@@ -196,7 +196,7 @@ class MainWindow(QMainWindow):
         ))
         view_menu.addAction(QAction(
             "重置缩放", self,
-            triggered=lambda: self.resize(DEFAULT_WIDTH, DEFAULT_HEIGHT),
+            triggered=lambda: self.resize(MAIN_WINDOW_DEFAULT_WIDTH, MAIN_WINDOW_DEFAULT_HEIGHT),
         ))
         view_menu.addSeparator()
         self._show_log_action = QAction("显示Log", self)

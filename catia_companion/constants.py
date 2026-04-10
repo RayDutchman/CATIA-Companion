@@ -35,8 +35,11 @@ Released    {APP_DATE}
 # Default window geometry
 # ---------------------------------------------------------------------------
 
-DEFAULT_WIDTH  = 320
-DEFAULT_HEIGHT = 500
+MAIN_WINDOW_DEFAULT_WIDTH  = 320
+MAIN_WINDOW_DEFAULT_HEIGHT = 500
+
+# Relative path to the QSS stylesheet (used by main.py entry point)
+STYLESHEET_RELATIVE_PATH = "catia_companion/ui/style.qss"
 
 # ---------------------------------------------------------------------------
 # Part template properties

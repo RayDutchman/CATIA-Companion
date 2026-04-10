@@ -12,6 +12,7 @@ import catia_companion.logging_setup  # noqa: F401
 
 from PySide6.QtWidgets import QApplication
 from catia_companion.utils import resource_path
+from catia_companion.constants import STYLESHEET_RELATIVE_PATH
 from catia_companion.ui.main_window import MainWindow
 
 
@@ -20,7 +21,7 @@ def main() -> None:
     app.setApplicationName("CATIA Companion")
 
     # Apply the unified QSS stylesheet
-    qss_path = resource_path("catia_companion/ui/style.qss")
+    qss_path = resource_path(STYLESHEET_RELATIVE_PATH)
     if qss_path.exists():
         app.setStyleSheet(qss_path.read_text(encoding="utf-8"))
 
