@@ -284,8 +284,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "文件不存在", f"宏文件不存在：\n{macro_path}")
             return
         try:
-            from pycatia import catia as _catia
-            caa = _catia()
+            from catia_companion.catia.connection import connect_to_catia
+            caa = connect_to_catia()
             app = caa.application
             app.com_object.SystemService.ExecuteScript(
                 str(macro_path.parent), 1, macro_path.name, "CATMain", []

@@ -71,6 +71,18 @@ BOM_PRESET_CUSTOM_COLUMNS: list[str] = [
 ]
 
 # ---------------------------------------------------------------------------
+# CATIA COM connection
+# ---------------------------------------------------------------------------
+
+# ProgIDs to try when connecting to CATIA V5, in order of preference.
+# GetActiveObject is attempted before Dispatch for each ProgID so that an
+# already-running CATIA session is always reused instead of launching a new one.
+CATIA_COM_PROGIDS: list[str] = [
+    "CATIA.Application",   # Standard CATIA V5 ProgID (all releases)
+    "CNEXT.Application",   # Alternative used by some CATIA V5 configurations
+]
+
+# ---------------------------------------------------------------------------
 # BOM edit / display constants
 # ---------------------------------------------------------------------------
 

@@ -29,10 +29,10 @@ def find_dependencies(
         Optional ``callable(str)`` invoked with a status message while the
         search is running.
     """
-    from pycatia import catia
+    from catia_companion.catia.connection import connect_to_catia
 
     target      = Path(target_path).resolve()
-    caa         = catia()
+    caa         = connect_to_catia()
     application = caa.application
     application.visible = True
     documents   = application.documents

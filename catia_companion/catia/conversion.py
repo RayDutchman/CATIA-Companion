@@ -55,10 +55,10 @@ def convert_drawing_to_pdf(
     stem already starts with it.  If *suffix* is non-empty it is appended
     unless the stem already ends with it.
     """
-    from pycatia import catia
+    from catia_companion.catia.connection import connect_to_catia
     from pycatia.drafting_interfaces.drawing_document import DrawingDocument
 
-    caa = catia()
+    caa = connect_to_catia()
     application = caa.application
     application.visible = True
     documents = application.documents
@@ -130,9 +130,9 @@ def convert_part_to_step(
     stem already starts with it.  If *suffix* is non-empty it is appended
     unless the stem already ends with it.
     """
-    from pycatia import catia
+    from catia_companion.catia.connection import connect_to_catia
 
-    caa = catia()
+    caa = connect_to_catia()
     application = caa.application
     application.visible = True
     documents = application.documents

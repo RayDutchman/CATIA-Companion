@@ -24,11 +24,11 @@ def apply_part_template(
     generic :class:`~catia_companion.ui.convert_dialog.FileConvertDialog` but
     is otherwise unused (parts are saved in place).
     """
-    from pycatia import catia
+    from catia_companion.catia.connection import connect_to_catia
     from pycatia.mec_mod_interfaces.part_document import PartDocument
     from PySide6.QtWidgets import QMessageBox
 
-    caa = catia()
+    caa = connect_to_catia()
     application = caa.application
     application.visible = True
     documents = application.documents
