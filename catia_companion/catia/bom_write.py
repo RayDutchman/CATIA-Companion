@@ -7,6 +7,7 @@ Provides:
 """
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from catia_companion.constants import (
@@ -21,6 +22,7 @@ def write_bom_to_catia(
     file_path: str | None,
     pn_data: dict[str, dict[str, str]],
     custom_columns: list[str],
+    progress_callback: Callable[[int], None] | None = None,
 ) -> None:
     """Write edited BOM properties back to CATIA via COM.
 
@@ -35,6 +37,9 @@ def write_bom_to_catia(
     custom_columns:
         Column names that are user-defined properties (written via
         ``UserRefProperties``).
+    progress_callback:
+        Optional callable invoked with the current node count after each node
+        is visited during the traversal.  May raise an exception to abort.
     """
     from pycatia import catia, CatWorkModeType
     from pycatia.product_structure_interfaces.product_document import ProductDocument
@@ -90,6 +95,8 @@ def write_bom_to_catia(
             except Exception:
                 continue
 
+    _total_count: list[int] = [0]
+
     def _traverse_write(product) -> None:
         try:
             pn = product.part_number
@@ -117,6 +124,10 @@ def write_bom_to_catia(
                     _set_prop(product, col, value)
                 elif col in custom_columns:
                     _set_user_prop(product, col, value)
+
+        _total_count[0] += 1
+        if progress_callback is not None:
+            progress_callback(_total_count[0])
 
         try:
             count = product.products.count

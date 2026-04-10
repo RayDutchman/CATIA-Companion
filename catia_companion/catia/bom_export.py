@@ -26,7 +26,7 @@ def export_bom_to_excel(
     output_folder: str | None = None,
     columns: list[str] | None = None,
     custom_columns: list[str] | None = None,
-    progress_callback: Callable[[int, int], None] | None = None,
+    row_progress_callback: Callable[[int], None] | None = None,
 ) -> None:
     """Export a hierarchical BOM from CATProduct files to Excel (.xlsx).
 
@@ -42,9 +42,10 @@ def export_bom_to_excel(
         :data:`~catia_companion.constants.BOM_DEFAULT_COLUMNS`.
     custom_columns:
         Column names that are user-defined properties.
-    progress_callback:
-        Optional callable invoked as ``progress_callback(file_index, total_files)``
-        after each file's BOM is collected.  May raise an exception to abort.
+    row_progress_callback:
+        Optional callable invoked as ``row_progress_callback(count)`` with the
+        running node count after each row is collected.  Matches the signature
+        of the BOM-load progress callback so both operations can share UI code.
     """
     import openpyxl
     from openpyxl.styles import Font, Alignment
@@ -117,7 +118,8 @@ def export_bom_to_excel(
             dest_dir.mkdir(parents=True, exist_ok=True)
             dest = dest_dir / f"{src_name.stem}_BOM.xlsx"
 
-            rows = collect_bom_rows(None, columns, custom_columns)
+            rows = collect_bom_rows(None, columns, custom_columns,
+                                     row_progress_callback)
             wb   = openpyxl.Workbook()
             ws   = wb.active
             ws.title = "BOM"
@@ -125,8 +127,6 @@ def export_bom_to_excel(
             wb.save(str(dest))
             logger.info(f"  BOM exported -> {dest}")
             logger.info("Done: active document\n")
-            if progress_callback is not None:
-                progress_callback(file_idx, total_files)
             continue
 
         src      = Path(path).resolve()
@@ -167,7 +167,8 @@ def export_bom_to_excel(
                 pass
 
         logger.info(f"Opening: {src}")
-        rows = collect_bom_rows(str(src), columns, custom_columns)
+        rows = collect_bom_rows(str(src), columns, custom_columns,
+                                row_progress_callback)
 
         wb       = openpyxl.Workbook()
         ws       = wb.active
@@ -188,5 +189,3 @@ def export_bom_to_excel(
                     pass
 
         logger.info(f"Done: {src.name}\n")
-        if progress_callback is not None:
-            progress_callback(file_idx, total_files)

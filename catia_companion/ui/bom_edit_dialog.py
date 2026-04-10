@@ -745,9 +745,22 @@ class BomEditDialog(QDialog):
         self._finish_btn.setEnabled(False)
         QApplication.processEvents()
 
+        progress = QProgressDialog("正在写回CATIA，请稍候…", None, 0, 0, self)
+        progress.setWindowTitle("写回CATIA")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(300)
+        progress.setValue(0)
+
+        def _on_node_written(count: int) -> None:
+            progress.setLabelText(f"正在写回CATIA，请稍候… 已处理 {count} 个节点")
+            progress.repaint()
+            QApplication.processEvents()
+
         try:
-            write_bom_to_catia(file_path, dirty_data, self._all_custom_columns)
+            write_bom_to_catia(file_path, dirty_data, self._all_custom_columns,
+                               _on_node_written)
         except Exception as e:
+            progress.close()
             logger.error(f"Failed to write BOM back to CATIA: {e}")
             self._save_btn.setEnabled(True)
             self._finish_btn.setEnabled(True)
@@ -756,6 +769,8 @@ class BomEditDialog(QDialog):
                 f"写回CATIA时出错：\n{e}\n\n请确保CATIA已启动。",
             )
             return
+        finally:
+            progress.close()
 
         for pn, changed in dirty_data.items():
             if pn in self._snapshot_data:
