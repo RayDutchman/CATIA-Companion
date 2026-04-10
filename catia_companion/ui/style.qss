@@ -1,0 +1,85 @@
+/* CATIA Companion – unified QSS stylesheet */
+
+/* ── Global ── */
+QWidget {
+    font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+    font-size: 9pt;
+}
+
+/* ── Group boxes ── */
+QGroupBox {
+    border: 1px solid #c0c0c0;
+    border-radius: 4px;
+    margin-top: 10px;
+    padding: 6px 8px 6px 8px;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 0 4px;
+    left: 8px;
+    color: #444;
+}
+
+/* ── Buttons ── */
+QPushButton {
+    background-color: #f0f0f0;
+    border: 1px solid #bbb;
+    border-radius: 4px;
+    padding: 4px 12px;
+    min-height: 22px;
+}
+QPushButton:hover {
+    background-color: #e0ecff;
+    border-color: #4a90d9;
+}
+QPushButton:pressed {
+    background-color: #c8ddf5;
+}
+QPushButton:default {
+    border-color: #4a90d9;
+    font-weight: bold;
+}
+QPushButton:disabled {
+    color: #aaa;
+    background-color: #f5f5f5;
+    border-color: #ddd;
+}
+
+/* ── Table ── */
+QTableWidget {
+    gridline-color: #d8d8d8;
+    selection-background-color: #cce0ff;
+    selection-color: #000;
+    alternate-background-color: #f8f9fb;
+}
+QHeaderView::section {
+    background-color: #e8edf2;
+    border: none;
+    border-right: 1px solid #c8cdd4;
+    border-bottom: 1px solid #c8cdd4;
+    padding: 3px 6px;
+    font-weight: bold;
+}
+
+/* ── Line edit ── */
+QLineEdit {
+    border: 1px solid #bbb;
+    border-radius: 3px;
+    padding: 2px 5px;
+}
+QLineEdit:read-only {
+    background-color: #f5f5f5;
+}
+
+/* ── ComboBox ── */
+QComboBox {
+    border: 1px solid #bbb;
+    border-radius: 3px;
+    padding: 2px 5px;
+}
+
+/* ── Status bar ── */
+QStatusBar {
+    color: #555;
+}
