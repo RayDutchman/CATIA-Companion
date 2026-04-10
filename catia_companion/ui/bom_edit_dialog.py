@@ -152,6 +152,7 @@ class BomEditDialog(QDialog):
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hdr.setStretchLastSection(True)
         hdr.setSectionsMovable(True)
+        hdr.setFixedHeight(28)
         self._table.verticalHeader().setDefaultSectionSize(24)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -162,6 +163,12 @@ class BomEditDialog(QDialog):
 
         # Bottom buttons
         btn_row = QHBoxLayout()
+
+        autofit_btn = QPushButton("自适应列宽")
+        autofit_btn.setToolTip("根据内容自动调整所有列的宽度")
+        autofit_btn.clicked.connect(self._autofit_columns)
+        btn_row.addWidget(autofit_btn)
+
         self._rename_btn = QPushButton("按零件编号将文件改名")
         self._rename_btn.setEnabled(False)
         self._rename_btn.clicked.connect(self._rename_by_part_number)
@@ -190,6 +197,17 @@ class BomEditDialog(QDialog):
     def _toggle_file_row(self, use_active: bool) -> None:
         self._file_edit.setEnabled(not use_active)
         self._file_browse_btn.setEnabled(not use_active)
+
+    # ── Table helpers ─────────────────────────────────────────────────────────
+
+    def _autofit_columns(self) -> None:
+        """Resize all columns to fit their content, with a minimum width."""
+        self._table.resizeColumnsToContents()
+        # Enforce a reasonable minimum width
+        min_width = 60
+        for col in range(self._table.columnCount()):
+            if self._table.columnWidth(col) < min_width:
+                self._table.setColumnWidth(col, min_width)
 
     # ── Preset column helpers ─────────────────────────────────────────────────
 

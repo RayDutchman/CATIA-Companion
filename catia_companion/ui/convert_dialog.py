@@ -4,6 +4,9 @@ Generic file-conversion dialog.
 Provides:
 - FileConvertDialog – a reusable dialog for "pick files → run conversion function"
   workflows.  Used for drawing-to-PDF, part-to-STEP, and template stamping.
+
+Supports drag & drop of files onto the file list and shows a QProgressBar
+during conversion.
 """
 
 import logging
@@ -12,9 +15,9 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QFileDialog,
     QAbstractItemView, QRadioButton, QButtonGroup, QLineEdit, QGroupBox,
-    QCheckBox, QPushButton, QMessageBox,
+    QCheckBox, QPushButton, QMessageBox, QProgressBar, QApplication,
 )
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import Qt, QSettings
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +84,8 @@ class FileConvertDialog(QDialog):
 
         self._file_list = QListWidget()
         self._file_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        # Enable drag & drop – users can drop files directly onto the list
+        self.setAcceptDrops(True)
         # Restore previously saved file list
         saved_files: list = self._settings.value("saved_files", []) or []
         if isinstance(saved_files, str):
@@ -180,17 +185,61 @@ class FileConvertDialog(QDialog):
             note_label.setStyleSheet("color: gray; font-size: 11px;")
             layout.addWidget(note_label)
 
+        # ── Progress bar (hidden until conversion starts) ─────────────────
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setTextVisible(True)
+        self._progress_bar.setVisible(False)
+        layout.addWidget(self._progress_bar)
+
         # ── Action buttons ──────────────────────────────────────────────────
         action_row  = QHBoxLayout()
-        confirm_btn = QPushButton("确认")
-        confirm_btn.setDefault(True)
+        self._confirm_btn = QPushButton("确认")
+        self._confirm_btn.setDefault(True)
         cancel_btn  = QPushButton("取消")
-        confirm_btn.clicked.connect(self._confirm)
+        self._confirm_btn.clicked.connect(self._confirm)
         cancel_btn.clicked.connect(self.reject)
         action_row.addStretch()
-        action_row.addWidget(confirm_btn)
+        action_row.addWidget(self._confirm_btn)
         action_row.addWidget(cancel_btn)
         layout.addLayout(action_row)
+
+    # ── Drag & drop support ─────────────────────────────────────────────────
+
+    def _accepted_extensions(self) -> set[str]:
+        """Parse the file_filter to extract accepted file extensions."""
+        import re
+        exts: set[str] = set()
+        for m in re.finditer(r"\*(\.\w+)", self._file_filter):
+            exts.add(m.group(1).lower())
+        return exts
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        accepted = self._accepted_extensions()
+        existing = {self._file_list.item(i).text()
+                    for i in range(self._file_list.count())}
+        added = 0
+        for url in event.mimeData().urls():
+            path = url.toLocalFile()
+            if not path:
+                continue
+            # Accept the file if the filter is a wildcard or the extension matches
+            if accepted and Path(path).suffix.lower() not in accepted:
+                continue
+            if path not in existing:
+                self._file_list.addItem(path)
+                existing.add(path)
+                added += 1
+        if added:
+            self._persist_file_list()
+        event.acceptProposedAction()
 
     # ── File list management ─────────────────────────────────────────────────
 
@@ -256,23 +305,52 @@ class FileConvertDialog(QDialog):
                 QMessageBox.warning(self, "未选择输出文件夹", "请选择一个输出文件夹。")
                 return
 
+        # Show progress bar and disable confirm button during conversion
+        total = len(files)
+        self._progress_bar.setRange(0, total)
+        self._progress_bar.setValue(0)
+        self._progress_bar.setVisible(True)
+        self._confirm_btn.setEnabled(False)
+
+        success_count = 0
+        for i, file_path in enumerate(files):
+            self._progress_bar.setValue(i)
+            self._progress_bar.setFormat(
+                f"正在转换 ({i + 1}/{total}): {Path(file_path).name}"
+            )
+            QApplication.processEvents()
+
+            try:
+                if self._prefix_checkbox is not None:
+                    prefix_value = (
+                        self._prefix_edit.text() if self._prefix_checkbox.isChecked() else ""
+                    )
+                    suffix_value = (
+                        self._suffix_edit.text() if self._suffix_checkbox.isChecked() else ""
+                    )
+                    self._conversion_fn(
+                        [file_path], output_folder,
+                        prefix=prefix_value, suffix=suffix_value,
+                    )
+                else:
+                    self._conversion_fn([file_path], output_folder)
+                success_count += 1
+            except Exception as e:
+                logger.error("Conversion failed for %s: %s", file_path, e)
+
+        # Persist prefix/suffix settings after conversion
         if self._prefix_checkbox is not None:
-            prefix_value = (
-                self._prefix_edit.text() if self._prefix_checkbox.isChecked() else ""
-            )
-            suffix_value = (
-                self._suffix_edit.text() if self._suffix_checkbox.isChecked() else ""
-            )
             self._settings.setValue("add_prefix",   self._prefix_checkbox.isChecked())
             self._settings.setValue("prefix_value", self._prefix_edit.text())
             self._settings.setValue("add_suffix",   self._suffix_checkbox.isChecked())
             self._settings.setValue("suffix_value", self._suffix_edit.text())
-            self._conversion_fn(files, output_folder,
-                                prefix=prefix_value, suffix=suffix_value)
-        else:
-            self._conversion_fn(files, output_folder)
+
+        self._progress_bar.setValue(total)
+        self._progress_bar.setFormat(f"完成 ({success_count}/{total})")
+        self._confirm_btn.setEnabled(True)
 
         QMessageBox.information(
-            self, "导出成功", f"已成功导出 {len(files)} 个文件。"
+            self, "导出完成",
+            f"已成功导出 {success_count} / {total} 个文件。",
         )
         self.accept()
