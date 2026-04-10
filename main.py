@@ -2506,41 +2506,36 @@ class BomEditDialog(QDialog):
 
     # ── Write back ─────────────────────────────────────────────────────────
 
-    def _ask_keep_original(self, old_name: str, new_name: str) -> str:
-        """Ask user whether to keep the original file when renaming.
-
-        Returns one of: 'keep', 'keep_all', 'delete', 'delete_all', 'cancel'.
-        """
-        msg = QMessageBox(self)
-        msg.setWindowTitle("是否保留原文件")
-        msg.setText(
-            f"即将将文件\n「{old_name}」\n改名为\n「{new_name}」\n\n是否希望保留原文件？"
-        )
-        keep_btn     = msg.addButton("保留",     QMessageBox.ButtonRole.YesRole)
-        keep_all_btn = msg.addButton("全部保留", QMessageBox.ButtonRole.YesRole)
-        del_btn      = msg.addButton("删除",     QMessageBox.ButtonRole.NoRole)
-        del_all_btn  = msg.addButton("全部删除", QMessageBox.ButtonRole.NoRole)
-        msg.addButton("取消", QMessageBox.ButtonRole.RejectRole)
-        msg.exec()
-        clicked = msg.clickedButton()
-        if clicked is keep_btn:
-            return "keep"
-        if clicked is keep_all_btn:
-            return "keep_all"
-        if clicked is del_btn:
-            return "delete"
-        if clicked is del_all_btn:
-            return "delete_all"
-        return "cancel"
-
     def _rename_by_part_number(self):
-        """Rename CATIA files on disk so each file's stem matches its Part Number.
+        """Save each CATIA file under a new name matching its Part Number.
 
-        For each file whose stem differs from its current Part Number the user is
-        asked whether to keep the original file (copy) or delete it (rename).
-        Invalid Part Numbers are reported and skipped so the user can fix them.
+        Uses CATIA's SaveAs COM method so that CATIA remains aware of the new
+        file location.  The original file is left on disk (standard SaveAs
+        behaviour).  Invalid Part Numbers are reported and skipped.
+
+        Aborts early if there are unsaved BOM edits, prompting the user to
+        write them back first so that the Part Number in CATIA matches what
+        the table shows.
         """
-        # Build a deduplicated list of (filepath, current_pn) pairs that need renaming
+        # ── Pre-flight: ensure dirty changes have been written back ──────────
+        if self._dirty:
+            ret = QMessageBox.question(
+                self, "存在未回传的修改",
+                "检测到BOM属性尚未写回CATIA。\n\n"
+                "必须先将修改写回CATIA，才能确保零件编号与CATIA文件一致。\n\n"
+                "是否立即执行写回？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return
+            self._write_back(close_on_success=False)
+            # _write_back already shows an error dialog on failure, so a
+            # non-empty _dirty here means write-back was not fully successful;
+            # abort silently to avoid renaming with stale Part Numbers.
+            if self._dirty:
+                return
+
+        # ── Build deduplicated list of (filepath, target_pn) pairs ──────────
         to_rename: list[tuple[str, str]] = []
         seen_fps: set[str] = set()
         for row in self._rows:
@@ -2557,7 +2552,6 @@ class BomEditDialog(QDialog):
             QMessageBox.information(self, "无需改名", "所有文件名已与零件编号一致。")
             return
 
-        keep_all: bool | None = None  # None = ask each time; True/False = decided
         renamed_count = 0
 
         for fp, pn in to_rename:
@@ -2584,29 +2578,42 @@ class BomEditDialog(QDialog):
                 )
                 continue
 
-            # Decide whether to keep the original
-            if keep_all is None:
-                choice = self._ask_keep_original(Path(fp).name, pn + ext)
-                if choice == "cancel":
-                    break
-                elif choice == "keep_all":
-                    keep_all = True
-                    do_keep = True
-                elif choice == "delete_all":
-                    keep_all = False
-                    do_keep = False
-                elif choice == "keep":
-                    do_keep = True
-                else:  # "delete"
-                    do_keep = False
-            else:
-                do_keep = keep_all
-
+            # ── Perform SaveAs via CATIA COM ─────────────────────────────────
             try:
-                if do_keep:
-                    shutil.copy2(fp, new_fp)
-                else:
-                    os.rename(fp, new_fp)
+                from pycatia import catia as _pycatia
+                caa = _pycatia()
+                application = caa.application
+                application.visible = True
+                documents = application.documents
+
+                src = Path(fp).resolve()
+
+                def _find_doc(docs, path: Path):
+                    """Return the first open document whose full_name resolves to path."""
+                    for i in range(1, docs.count + 1):
+                        try:
+                            d = docs.item(i)
+                            if Path(d.full_name).resolve() == path:
+                                return d
+                        except Exception:
+                            pass
+                    return None
+
+                # Open the document in CATIA if it is not already open
+                target_doc = _find_doc(documents, src)
+                if target_doc is None:
+                    documents.open(str(src))
+                    target_doc = _find_doc(documents, src)
+
+                if target_doc is None:
+                    QMessageBox.warning(
+                        self, "无法找到文档",
+                        f"无法在CATIA中找到或打开文档：\n{fp}"
+                    )
+                    continue
+
+                target_doc.com_object.SaveAs(new_fp)
+
                 # Update in-memory rows to reflect the new path and filename
                 for row in self._rows:
                     if str(row.get("_filepath", "")) == fp:
@@ -2614,11 +2621,11 @@ class BomEditDialog(QDialog):
                         row["Filename"] = pn
                 renamed_count += 1
             except Exception as e:
-                QMessageBox.warning(self, "改名失败", f"改名失败：\n{e}")
+                QMessageBox.warning(self, "另存为失败", f"文件「{Path(fp).name}」另存为失败：\n{e}")
 
         if renamed_count > 0:
             QMessageBox.information(
-                self, "改名完成", f"已成功改名 {renamed_count} 个文件。"
+                self, "改名完成", f"已成功将 {renamed_count} 个文件通过CATIA另存为功能改名。"
             )
             self._populate_table()
 
