@@ -631,8 +631,8 @@ class BomEditDialog(QDialog):
             target_existed_before = Path(new_fp).exists()
 
             try:
-                from catia_companion.catia.connection import connect_to_catia
-                caa         = connect_to_catia()
+                from pycatia import catia as _pycatia
+                caa         = _pycatia()
                 application = caa.application
                 application.visible = True
                 documents   = application.documents

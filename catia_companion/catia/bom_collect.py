@@ -50,8 +50,7 @@ def collect_bom_rows(
         Column names that are user-defined properties (read via
         ``UserRefProperties``).
     """
-    from catia_companion.catia.connection import connect_to_catia
-    from pycatia import CatWorkModeType
+    from pycatia import catia, CatWorkModeType
     from pycatia.product_structure_interfaces.product_document import ProductDocument
 
     DIRECT_ATTR_MAP: dict[str, str] = {
@@ -175,7 +174,7 @@ def collect_bom_rows(
             pass
 
     # ── CATIA connection ────────────────────────────────────────────────────
-    caa         = connect_to_catia()
+    caa         = catia()
     application = caa.application
     application.visible = True
     documents   = application.documents

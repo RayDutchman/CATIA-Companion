@@ -43,7 +43,7 @@ def export_bom_to_excel(
     """
     import openpyxl
     from openpyxl.styles import Font, Alignment
-    from catia_companion.catia.connection import connect_to_catia
+    from pycatia import catia
     from pycatia.product_structure_interfaces.product_document import ProductDocument
 
     if columns is None:
@@ -51,7 +51,7 @@ def export_bom_to_excel(
     if custom_columns is None:
         custom_columns = []
 
-    caa         = connect_to_catia()
+    caa         = catia()
     application = caa.application
     application.visible = True
     documents   = application.documents

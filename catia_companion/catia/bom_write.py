@@ -36,8 +36,7 @@ def write_bom_to_catia(
         Column names that are user-defined properties (written via
         ``UserRefProperties``).
     """
-    from catia_companion.catia.connection import connect_to_catia
-    from pycatia import CatWorkModeType
+    from pycatia import catia, CatWorkModeType
     from pycatia.product_structure_interfaces.product_document import ProductDocument
 
     WRITABLE_DIRECT: dict[str, str] = {
@@ -130,7 +129,7 @@ def write_bom_to_catia(
             pass
 
     # ── CATIA connection ────────────────────────────────────────────────────
-    caa         = connect_to_catia()
+    caa         = catia()
     application = caa.application
     application.visible = True
     documents   = application.documents
