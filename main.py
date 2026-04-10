@@ -1738,7 +1738,12 @@ def _collect_bom_rows(file_path: str | None, columns: list[str],
         }
         try:
             child_count = product.products.count
-            row["Type"] = "装配体" if child_count > 0 else "零件"
+            if child_count > 0:
+                row["Type"] = "装配体"
+            elif filepath and Path(filepath).suffix.lower() == ".catproduct":
+                row["Type"] = "部件"
+            else:
+                row["Type"] = "零件"
         except Exception:
             row["Type"] = ""
 
@@ -2619,6 +2624,7 @@ class BomEditDialog(QDialog):
                     )
                     continue
 
+                target_existed_before = Path(new_fp).exists()
                 target_doc.com_object.SaveAs(new_fp)
 
                 # Delete the original file if requested and SaveAs produced a
@@ -2636,6 +2642,11 @@ class BomEditDialog(QDialog):
                         row["Filename"] = pn
                 renamed_count += 1
             except Exception as e:
+                # If the target already existed before the call and the source
+                # file is still intact, the user most likely clicked "No" when
+                # CATIA asked whether to overwrite – treat this as a silent skip.
+                if target_existed_before and Path(fp).exists():
+                    continue
                 QMessageBox.warning(self, "另存为失败", f"文件「{Path(fp).name}」另存为失败：\n{e}")
 
         if renamed_count > 0:
