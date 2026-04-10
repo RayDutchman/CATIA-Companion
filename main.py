@@ -2565,7 +2565,7 @@ class BomEditDialog(QDialog):
 
         renamed_count = 0
 
-        for fp, pn in to_rename:
+        for fp, pn in reversed(to_rename):
             # Validity check – skip and warn if PN contains illegal characters
             if not _PN_VALID_RE.fullmatch(pn):
                 QMessageBox.warning(
