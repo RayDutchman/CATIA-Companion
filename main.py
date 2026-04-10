@@ -1714,7 +1714,7 @@ def _collect_bom_rows(file_path: str | None, columns: list[str],
                 pass
         return ""
 
-    def traverse(product, rows: list, level: int):
+    def traverse(product, rows: list, level: int, parent_filepath: str = ""):
         try:
             pn = product.part_number
         except Exception:
@@ -1738,8 +1738,8 @@ def _collect_bom_rows(file_path: str | None, columns: list[str],
         }
         try:
             child_count = product.products.count
-            if not filepath:
-                # No backing file – this is an in-product component (部件)
+            if filepath and filepath == parent_filepath:
+                # Shares the parent's file → embedded component (部件)
                 row["Type"] = "部件"
             elif child_count > 0:
                 row["Type"] = "装配体"
@@ -1780,7 +1780,7 @@ def _collect_bom_rows(file_path: str | None, columns: list[str],
                 children[cpn]["qty"] += 1
             for cpn, data in children.items():
                 child_rows: list = []
-                traverse(data["product"], child_rows, level + 1)
+                traverse(data["product"], child_rows, level + 1, parent_filepath=filepath)
                 if child_rows:
                     child_rows[0]["Quantity"] = data["qty"]
                 rows.extend(child_rows)
