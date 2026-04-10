@@ -2510,8 +2510,12 @@ class BomEditDialog(QDialog):
         """Save each CATIA file under a new name matching its Part Number.
 
         Uses CATIA's SaveAs COM method so that CATIA remains aware of the new
-        file location.  The original file is left on disk (standard SaveAs
-        behaviour).  Invalid Part Numbers are reported and skipped.
+        file location.  If the target file already exists CATIA itself will
+        prompt the user whether to overwrite.  Invalid Part Numbers are
+        reported and skipped.
+
+        Before renaming the user is asked whether to delete the original file
+        after each successful SaveAs.
 
         Aborts early if there are unsaved BOM edits, prompting the user to
         write them back first so that the Part Number in CATIA matches what
@@ -2552,6 +2556,13 @@ class BomEditDialog(QDialog):
             QMessageBox.information(self, "无需改名", "所有文件名已与零件编号一致。")
             return
 
+        # ── Ask whether to delete original files after SaveAs ───────────────
+        delete_old = QMessageBox.question(
+            self, "是否删除旧文件",
+            "另存为完成后，是否删除旧文件？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        ) == QMessageBox.StandardButton.Yes
+
         renamed_count = 0
 
         for fp, pn in to_rename:
@@ -2570,13 +2581,6 @@ class BomEditDialog(QDialog):
 
             ext = Path(fp).suffix
             new_fp = str(Path(fp).parent / (pn + ext))
-
-            if Path(new_fp).exists() and new_fp != fp:
-                QMessageBox.warning(
-                    self, "目标文件已存在",
-                    f"目标文件 「{pn + ext}」 已存在，跳过。"
-                )
-                continue
 
             # ── Perform SaveAs via CATIA COM ─────────────────────────────────
             try:
@@ -2613,6 +2617,14 @@ class BomEditDialog(QDialog):
                     continue
 
                 target_doc.com_object.SaveAs(new_fp)
+
+                # Delete the original file if requested and SaveAs produced a
+                # different path (avoid deleting when old == new).
+                if delete_old and Path(fp).resolve() != Path(new_fp).resolve():
+                    try:
+                        os.remove(fp)
+                    except Exception as del_err:
+                        logger.warning(f"Failed to delete old file {fp}: {del_err}")
 
                 # Update in-memory rows to reflect the new path and filename
                 for row in self._rows:
