@@ -1742,7 +1742,7 @@ def _collect_bom_rows(file_path: str | None, columns: list[str],
                 # Shares the parent's file → embedded component (部件)
                 row["Type"] = "部件"
             elif child_count > 0:
-                row["Type"] = "装配体"
+                row["Type"] = "产品"
             else:
                 row["Type"] = "零件"
         except Exception:
@@ -2036,6 +2036,8 @@ class BomEditDialog(QDialog):
         self._updating = False
         # Row indices of collapsed assembly rows
         self._collapsed_rows: set[int] = set()
+        # True once BOM has been successfully loaded at least once
+        self._bom_loaded = False
 
         # ── Layout ──────────────────────────────────────────────────────────
         layout = QVBoxLayout(self)
@@ -2240,9 +2242,22 @@ class BomEditDialog(QDialog):
         self._original_pn_data = copy.deepcopy(self._pn_data)
         self._dirty.clear()
 
+        # Save current column widths before repopulating (empty on first load)
+        saved_widths = [
+            self._table.columnWidth(i)
+            for i in range(self._table.columnCount())
+        ] if self._bom_loaded else []
+
         self._populate_table()
-        # Auto-size columns to content after initial load; user can resize manually after
-        self._table.resizeColumnsToContents()
+        # Auto-size columns to content only on first load;
+        # on subsequent reloads, restore the widths the user has set.
+        if not self._bom_loaded:
+            self._table.resizeColumnsToContents()
+            self._bom_loaded = True
+        else:
+            for i, w in enumerate(saved_widths):
+                if i < self._table.columnCount():
+                    self._table.setColumnWidth(i, w)
         self._save_btn.setEnabled(True)
         self._finish_btn.setEnabled(True)
         self._rename_btn.setEnabled(True)
