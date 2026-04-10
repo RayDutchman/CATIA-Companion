@@ -15,6 +15,8 @@ a = Analysis(
     datas=[
         ('ISO.xml', '.'),
         ('ChangFangSong.ttf', '.'),
+        ('catia_companion/ui/style.qss', 'catia_companion/ui'),
+        ('catia_companion', 'catia_companion'),
     ],
     hiddenimports=[],
     hookspath=[],
