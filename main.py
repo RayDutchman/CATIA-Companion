@@ -1,5 +1,6 @@
 import sys
 import os
+import re
 import copy
 import shutil
 import subprocess
@@ -1134,15 +1135,6 @@ class ExportBOMDialog(QDialog):
         selected_layout.addWidget(self.selected_list)
         col_layout.addLayout(selected_layout)
         col_outer.addLayout(col_layout)
-
-        add_preset_row = QHBoxLayout()
-        self.preset_combo = QComboBox()
-        self.preset_combo.addItem("— 添加自定义属性列 —")
-        for p in BOM_PRESET_CUSTOM_COLUMNS:
-            self.preset_combo.addItem(p)
-        self.preset_combo.currentIndexChanged.connect(self._on_preset_selected)
-        add_preset_row.addWidget(self.preset_combo)
-        col_outer.addLayout(add_preset_row)
         layout.addWidget(col_group)
 
         saved = self._settings.value("selected_columns", BOM_DEFAULT_COLUMNS)
@@ -1213,28 +1205,6 @@ class ExportBOMDialog(QDialog):
             self.folder_edit.setText(folder)
             self._last_output_dir = folder
             self._settings.setValue("last_output_dir", folder)
-
-    def _on_preset_selected(self, index: int):
-        if index <= 0:
-            return
-        label = self.preset_combo.itemText(index)
-        self.preset_combo.blockSignals(True)
-        self.preset_combo.setCurrentIndex(0)
-        self.preset_combo.blockSignals(False)
-        # Check if already present in either list
-        all_existing = (
-            [self._item_internal(self.avail_list.item(i))
-             for i in range(self.avail_list.count())] +
-            [self._item_internal(self.selected_list.item(i))
-             for i in range(self.selected_list.count())]
-        )
-        if label in all_existing:
-            QMessageBox.warning(self, "列名重复", f"'{label}' 已存在。")
-            return
-        self.selected_list.addItem(self._make_col_item(label))
-        if label not in self._custom_columns:
-            self._custom_columns.append(label)
-            self._settings.setValue("custom_columns", self._custom_columns)
 
     def _add_column(self):
         for item in self.avail_list.selectedItems():
@@ -1623,6 +1593,9 @@ class FindDependenciesDialog(QDialog):
 # Columns that are structural / derived – shown read-only in the edit table
 _BOM_READONLY_COLS = {"Level", "Type", "Filename", "Quantity"}
 
+# Allowed characters in a Part Number (used for edit validation and file rename)
+_PN_VALID_RE = re.compile(r'^[A-Za-z0-9_\- ]*$')
+
 # Internal column name → Chinese display name
 _BOM_COL_DISPLAY: dict[str, str] = {
     "Level":        "层级",
@@ -1759,7 +1732,7 @@ def _collect_bom_rows(file_path: str | None, columns: list[str],
         row: dict = {
             "Level": level,
             "Part Number": pn,
-            "Filename": Path(filepath).name if filepath else pn,
+            "Filename": Path(filepath).stem if filepath else pn,
             "_filepath": filepath,
             "_unreadable": not _readable,
         }
@@ -2012,6 +1985,11 @@ class BomEditDialog(QDialog):
         self.setWindowTitle("BOM属性补全")
         self.setMinimumSize(900, 600)
         self.resize(1100, 700)
+        self.setWindowFlags(
+            self.windowFlags() |
+            Qt.WindowType.WindowMaximizeButtonHint |
+            Qt.WindowType.WindowMinimizeButtonHint
+        )
 
         # Share custom-column config with ExportBOMDialog
         self._settings = QSettings("CATIACompanion", "ExportBOMDialog")
@@ -2087,7 +2065,7 @@ class BomEditDialog(QDialog):
         layout.addWidget(note)
 
         # ── Preset custom column checkboxes ──────────────────────────────
-        preset_group = QGroupBox("自定义属性列（勾选以显示，属于user_ref_properties）")
+        preset_group = QGroupBox("自定义属性列（勾选以显示）")
         preset_layout = QHBoxLayout(preset_group)
         preset_layout.setSpacing(12)
         self._preset_checkboxes: dict[str, QCheckBox] = {}
@@ -2117,6 +2095,10 @@ class BomEditDialog(QDialog):
 
         # Bottom buttons
         btn_row = QHBoxLayout()
+        self._rename_btn = QPushButton("按零件编号将文件改名")
+        self._rename_btn.setEnabled(False)
+        self._rename_btn.clicked.connect(self._rename_by_part_number)
+        btn_row.addWidget(self._rename_btn)
         btn_row.addStretch()
         self._save_btn = QPushButton("应用（写回CATIA）")
         self._save_btn.setEnabled(False)
@@ -2257,8 +2239,7 @@ class BomEditDialog(QDialog):
         self._table.resizeColumnsToContents()
         self._save_btn.setEnabled(True)
         self._finish_btn.setEnabled(True)
-
-    # ── Table population ───────────────────────────────────────────────────
+        self._rename_btn.setEnabled(True)
 
     def _populate_table(self):
         self._updating = True
@@ -2481,6 +2462,18 @@ class BomEditDialog(QDialog):
                     self._updating = False
                     return
 
+        # ── Part Number character validity ───────────────────────────────
+        if col_name == "Part Number" and new_value:
+            if not _PN_VALID_RE.fullmatch(new_value):
+                QMessageBox.warning(
+                    self, "零件编号含非法字符",
+                    f"零件编号 \"{new_value}\" 含有非法字符。\n"
+                    "只允许：字母(A-Z, a-z)、数字(0-9)、下划线(_)、连字符(-)、空格( )。")
+                self._updating = True
+                item.setText(self._pn_data.get(pn, {}).get("Part Number", pn))
+                self._updating = False
+                return
+
         # Determine the set of rows to propagate to: all selected rows (if the
         # edited row is among the selection) + all rows with the same PN.
         selected_rows = {idx.row() for idx in self._table.selectedIndexes()}
@@ -2512,6 +2505,122 @@ class BomEditDialog(QDialog):
         self._updating = False
 
     # ── Write back ─────────────────────────────────────────────────────────
+
+    def _ask_keep_original(self, old_name: str, new_name: str) -> str:
+        """Ask user whether to keep the original file when renaming.
+
+        Returns one of: 'keep', 'keep_all', 'delete', 'delete_all', 'cancel'.
+        """
+        msg = QMessageBox(self)
+        msg.setWindowTitle("是否保留原文件")
+        msg.setText(
+            f"即将将文件\n「{old_name}」\n改名为\n「{new_name}」\n\n是否希望保留原文件？"
+        )
+        keep_btn     = msg.addButton("保留",     QMessageBox.ButtonRole.YesRole)
+        keep_all_btn = msg.addButton("全部保留", QMessageBox.ButtonRole.YesRole)
+        del_btn      = msg.addButton("删除",     QMessageBox.ButtonRole.NoRole)
+        del_all_btn  = msg.addButton("全部删除", QMessageBox.ButtonRole.NoRole)
+        msg.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+        clicked = msg.clickedButton()
+        if clicked is keep_btn:
+            return "keep"
+        if clicked is keep_all_btn:
+            return "keep_all"
+        if clicked is del_btn:
+            return "delete"
+        if clicked is del_all_btn:
+            return "delete_all"
+        return "cancel"
+
+    def _rename_by_part_number(self):
+        """Rename CATIA files on disk so each file's stem matches its Part Number.
+
+        For each file whose stem differs from its current Part Number the user is
+        asked whether to keep the original file (copy) or delete it (rename).
+        Invalid Part Numbers are reported and skipped so the user can fix them.
+        """
+        # Build a deduplicated list of (filepath, current_pn) pairs that need renaming
+        to_rename: list[tuple[str, str]] = []
+        seen_fps: set[str] = set()
+        for row in self._rows:
+            fp = str(row.get("_filepath", ""))
+            if not fp or fp in seen_fps:
+                continue
+            seen_fps.add(fp)
+            orig_pn = str(row.get("Part Number", ""))
+            pn = str(self._pn_data.get(orig_pn, {}).get("Part Number", orig_pn))
+            if pn and Path(fp).stem != pn:
+                to_rename.append((fp, pn))
+
+        if not to_rename:
+            QMessageBox.information(self, "无需改名", "所有文件名已与零件编号一致。")
+            return
+
+        keep_all: bool | None = None  # None = ask each time; True/False = decided
+        renamed_count = 0
+
+        for fp, pn in to_rename:
+            # Validity check – skip and warn if PN contains illegal characters
+            if not _PN_VALID_RE.fullmatch(pn):
+                QMessageBox.warning(
+                    self, "零件编号含非法字符",
+                    f"零件编号 「{pn}」 含有非法字符。\n"
+                    "只允许：字母(A-Z, a-z)、数字(0-9)、下划线(_)、连字符(-)、空格( )。\n"
+                    "请在表格中修改此零件编号后重试。"
+                )
+                continue
+
+            if not Path(fp).exists():
+                continue
+
+            ext = Path(fp).suffix
+            new_fp = str(Path(fp).parent / (pn + ext))
+
+            if Path(new_fp).exists() and new_fp != fp:
+                QMessageBox.warning(
+                    self, "目标文件已存在",
+                    f"目标文件 「{pn + ext}」 已存在，跳过。"
+                )
+                continue
+
+            # Decide whether to keep the original
+            if keep_all is None:
+                choice = self._ask_keep_original(Path(fp).name, pn + ext)
+                if choice == "cancel":
+                    break
+                elif choice == "keep_all":
+                    keep_all = True
+                    do_keep = True
+                elif choice == "delete_all":
+                    keep_all = False
+                    do_keep = False
+                elif choice == "keep":
+                    do_keep = True
+                else:  # "delete"
+                    do_keep = False
+            else:
+                do_keep = keep_all
+
+            try:
+                if do_keep:
+                    shutil.copy2(fp, new_fp)
+                else:
+                    os.rename(fp, new_fp)
+                # Update in-memory rows to reflect the new path and filename
+                for row in self._rows:
+                    if str(row.get("_filepath", "")) == fp:
+                        row["_filepath"] = new_fp
+                        row["Filename"] = pn
+                renamed_count += 1
+            except Exception as e:
+                QMessageBox.warning(self, "改名失败", f"改名失败：\n{e}")
+
+        if renamed_count > 0:
+            QMessageBox.information(
+                self, "改名完成", f"已成功改名 {renamed_count} 个文件。"
+            )
+            self._populate_table()
 
     def _write_back(self, *, close_on_success: bool):
         """Build a dirty-only data set, write it to CATIA, then optionally close.
