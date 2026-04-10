@@ -2533,11 +2533,9 @@ class BomEditDialog(QDialog):
             if ret != QMessageBox.StandardButton.Yes:
                 return
             self._write_back(close_on_success=False)
-            # _write_back already shows an error dialog on failure, so a
-            # non-empty _dirty here means write-back was not fully successful;
-            # abort silently to avoid renaming with stale Part Numbers.
-            if self._dirty:
-                return
+            # Always stop here: if write-back succeeded the user should
+            # re-trigger the rename; if it failed _dirty is still set.
+            return
 
         # ── Build deduplicated list of (filepath, target_pn) pairs ──────────
         to_rename: list[tuple[str, str]] = []
@@ -2562,6 +2560,11 @@ class BomEditDialog(QDialog):
             "另存为完成后，是否删除旧文件？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         ) == QMessageBox.StandardButton.Yes
+
+        QMessageBox.information(
+            self, "请在CATIA中继续操作",
+            "准备就绪，请在CATIA中确认后续操作。"
+        )
 
         renamed_count = 0
 
