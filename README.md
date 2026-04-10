@@ -1,5 +1,5 @@
 CATIA Companion
-Revision 1.0.0 | Released: 2026-04-03
+Revision 1.0.0 | Released: 2026-04-10
  
 A lightweight internal tool designed to streamline common CATIA V5 workflows,
 including drawing and part conversion, font installation, and drafting standard setup.

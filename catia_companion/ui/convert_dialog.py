@@ -312,31 +312,34 @@ class FileConvertDialog(QDialog):
         self._progress_bar.setVisible(True)
         self._confirm_btn.setEnabled(False)
 
-        success_count = 0
-        for i, file_path in enumerate(files):
+        def _progress(i: int, _total: int) -> None:
             self._progress_bar.setValue(i)
             self._progress_bar.setFormat(
-                f"正在转换 ({i + 1}/{total}): {Path(file_path).name}"
+                f"正在转换 ({i + 1}/{_total}): {Path(files[i]).name}"
             )
             QApplication.processEvents()
 
-            try:
-                if self._prefix_checkbox is not None:
-                    prefix_value = (
-                        self._prefix_edit.text() if self._prefix_checkbox.isChecked() else ""
-                    )
-                    suffix_value = (
-                        self._suffix_edit.text() if self._suffix_checkbox.isChecked() else ""
-                    )
-                    self._conversion_fn(
-                        [file_path], output_folder,
-                        prefix=prefix_value, suffix=suffix_value,
-                    )
-                else:
-                    self._conversion_fn([file_path], output_folder)
-                success_count += 1
-            except Exception as e:
-                logger.error("Conversion failed for %s: %s", file_path, e)
+        success_count = 0
+        try:
+            if self._prefix_checkbox is not None:
+                prefix_value = (
+                    self._prefix_edit.text() if self._prefix_checkbox.isChecked() else ""
+                )
+                suffix_value = (
+                    self._suffix_edit.text() if self._suffix_checkbox.isChecked() else ""
+                )
+                success_count = self._conversion_fn(
+                    files, output_folder,
+                    prefix=prefix_value, suffix=suffix_value,
+                    progress_callback=_progress,
+                )
+            else:
+                success_count = self._conversion_fn(
+                    files, output_folder,
+                    progress_callback=_progress,
+                )
+        except Exception as e:
+            logger.error("Conversion failed: %s", e)
 
         # Persist prefix/suffix settings after conversion
         if self._prefix_checkbox is not None:

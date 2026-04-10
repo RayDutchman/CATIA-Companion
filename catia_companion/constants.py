@@ -12,16 +12,17 @@ import re
 # ---------------------------------------------------------------------------
 
 APP_NAME    = "CATIA Companion"
-APP_VERSION = "1.0.0"
-APP_DATE    = "2026-04-03"
+APP_VERSION = "1.1.0"
+APP_DATE    = "2026-04-10"
 APP_AUTHOR  = "CHEN Weibo"
 APP_CONTACT = "thucwb@gmail.com"
 
 ABOUT_TEXT = f"""{APP_NAME} v{APP_VERSION}
 
 A CATIA V5 productivity tool for engineering teams.
-Automates drawing conversion, part export, and
-installation of CATIA resources.
+Automates drawing conversion, part export, BOM export,
+BOM edit, quickly run macros and installation of CATIA
+resources.
 
 ─────────────────────────────────────────
 Developer   {APP_AUTHOR}

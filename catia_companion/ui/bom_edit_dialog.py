@@ -692,14 +692,16 @@ class BomEditDialog(QDialog):
                 renamed_count += 1
 
             except Exception as e:
-                if target_existed_before and Path(fp).exists():
-                    # The target file already existed before SaveAs and the source
-                    # file is still intact.  This most likely means the user clicked
-                    # "No" when CATIA asked whether to overwrite – treat as a
-                    # user-initiated skip and move on silently.
+                if Path(fp).exists() and (target_existed_before or not Path(new_fp).exists()):
+                    # The source file is still intact and either:
+                    #   (a) the target already existed before and was not overwritten
+                    #       (user clicked "No" on CATIA's overwrite prompt), or
+                    #   (b) the target was never created at all
+                    #       (user clicked "Cancel" in CATIA's SaveAs dialog).
+                    # Either way this is a user-initiated skip – move on silently.
                     logger.info(
                         f"SaveAs skipped for {Path(fp).name} "
-                        "(target already existed; user likely declined overwrite)"
+                        "(user cancelled or declined overwrite in CATIA)"
                     )
                     continue
                 QMessageBox.warning(

@@ -7,6 +7,7 @@ Provides:
 """
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtWidgets import QMessageBox
@@ -48,12 +49,18 @@ def convert_drawing_to_pdf(
     output_folder: str | None = None,
     prefix: str = "DR_",
     suffix: str = "",
-) -> None:
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> int:
     """Convert CATDrawing files to PDF using pyCATIA.
 
     If *prefix* is non-empty it is prepended to the output filename unless the
     stem already starts with it.  If *suffix* is non-empty it is appended
     unless the stem already ends with it.
+
+    *progress_callback*, if provided, is called as ``progress_callback(i, total)``
+    before processing each file (0-based index).
+
+    Returns the number of files successfully exported.
     """
     from pycatia import catia
     from pycatia.drafting_interfaces.drawing_document import DrawingDocument
@@ -64,8 +71,13 @@ def convert_drawing_to_pdf(
     documents = application.documents
 
     bulk_action: str | None = None  # "skip_all", "overwrite_all", or "cancel"
+    success_count = 0
+    total = len(file_paths)
 
-    for path in file_paths:
+    for i, path in enumerate(file_paths):
+        if progress_callback:
+            progress_callback(i, total)
+
         if bulk_action == "cancel":
             break
 
@@ -104,18 +116,25 @@ def convert_drawing_to_pdf(
                     bulk_action = "overwrite_all"
                 dest.unlink()
 
-        documents.open(str(src))
-        drawing_doc = DrawingDocument(application.active_document.com_object)
-        sheet_count = drawing_doc.drawing_root.sheets.count
-        drawing_doc.export_data(str(dest), "pdf")
+        try:
+            documents.open(str(src))
+            drawing_doc = DrawingDocument(application.active_document.com_object)
+            sheet_count = drawing_doc.drawing_root.sheets.count
+            drawing_doc.export_data(str(dest), "pdf")
 
-        if not dest.exists():
-            logger.warning(f"  WARNING: export_data did not create {dest}")
-        else:
-            logger.info(f"  Exported {sheet_count} sheet(s) -> {dest}")
+            if not dest.exists():
+                logger.warning(f"  WARNING: export_data did not create {dest}")
+            else:
+                logger.info(f"  Exported {sheet_count} sheet(s) -> {dest}")
 
-        drawing_doc.close()
-        logger.info(f"Done: {src.name}\n")
+            drawing_doc.close()
+            logger.info(f"Done: {src.name}\n")
+            if dest.exists():
+                success_count += 1
+        except Exception as e:
+            logger.error("Failed to convert %s: %s", path, e)
+
+    return success_count
 
 
 def convert_part_to_step(
@@ -123,12 +142,18 @@ def convert_part_to_step(
     output_folder: str | None = None,
     prefix: str = "MD_",
     suffix: str = "",
-) -> None:
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> int:
     """Convert CATPart/CATProduct files to STEP (.stp) using pyCATIA.
 
     If *prefix* is non-empty it is prepended to the output filename unless the
     stem already starts with it.  If *suffix* is non-empty it is appended
     unless the stem already ends with it.
+
+    *progress_callback*, if provided, is called as ``progress_callback(i, total)``
+    before processing each file (0-based index).
+
+    Returns the number of files successfully exported.
     """
     from pycatia import catia
 
@@ -138,8 +163,13 @@ def convert_part_to_step(
     documents = application.documents
 
     bulk_action: str | None = None
+    success_count = 0
+    total = len(file_paths)
 
-    for path in file_paths:
+    for i, path in enumerate(file_paths):
+        if progress_callback:
+            progress_callback(i, total)
+
         if bulk_action == "cancel":
             break
 
@@ -178,9 +208,15 @@ def convert_part_to_step(
                     bulk_action = "overwrite_all"
                 dest.unlink()
 
-        documents.open(str(src))
-        doc = application.active_document
-        doc.export_data(str(dest), "stp")
-        logger.info(f"  Exported -> {dest}")
-        doc.close()
-        logger.info(f"Done: {src.name}\n")
+        try:
+            documents.open(str(src))
+            doc = application.active_document
+            doc.export_data(str(dest), "stp")
+            logger.info(f"  Exported -> {dest}")
+            doc.close()
+            logger.info(f"Done: {src.name}\n")
+            success_count += 1
+        except Exception as e:
+            logger.error("Failed to convert %s: %s", path, e)
+
+    return success_count
