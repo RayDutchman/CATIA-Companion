@@ -1738,10 +1738,11 @@ def _collect_bom_rows(file_path: str | None, columns: list[str],
         }
         try:
             child_count = product.products.count
-            if child_count > 0:
-                row["Type"] = "装配体"
-            elif filepath and Path(filepath).suffix.lower() == ".catproduct":
+            if not filepath:
+                # No backing file – this is an in-product component (部件)
                 row["Type"] = "部件"
+            elif child_count > 0:
+                row["Type"] = "装配体"
             else:
                 row["Type"] = "零件"
         except Exception:
