@@ -1593,8 +1593,10 @@ class FindDependenciesDialog(QDialog):
 # Columns that are structural / derived – shown read-only in the edit table
 _BOM_READONLY_COLS = {"Level", "Type", "Filename", "Quantity"}
 
-# Allowed characters in a Part Number (used for edit validation and file rename)
-_PN_VALID_RE = re.compile(r'^[A-Za-z0-9_ -]*$')
+# Allowed characters in a Part Number (used for edit validation and file rename).
+# Rejects: control characters, non-ASCII (non-English) characters, and Windows
+# filename-forbidden characters  \ / : * ? " < > |
+_PN_VALID_RE = re.compile(r'^[^\x00-\x1f\x7f-\U0010ffff\\/:*?"<>|]*$')
 
 # Internal column name → Chinese display name
 _BOM_COL_DISPLAY: dict[str, str] = {
@@ -2489,7 +2491,7 @@ class BomEditDialog(QDialog):
                 QMessageBox.warning(
                     self, "零件编号含非法字符",
                     f"零件编号 \"{new_value}\" 含有非法字符。\n"
-                    "只允许：字母(A-Z, a-z)、数字(0-9)、下划线(_)、连字符(-)、空格( )。")
+                    "不允许：控制字符、非英文字符，以及Windows文件名禁用字符（\\ / : * ? \" < > |）。")
                 self._updating = True
                 item.setText(self._pn_data.get(pn, {}).get("Part Number", pn))
                 self._updating = False
@@ -2595,7 +2597,7 @@ class BomEditDialog(QDialog):
                 QMessageBox.warning(
                     self, "零件编号含非法字符",
                     f"零件编号 「{pn}」 含有非法字符。\n"
-                    "只允许：字母(A-Z, a-z)、数字(0-9)、下划线(_)、连字符(-)、空格( )。\n"
+                    "不允许：控制字符、非英文字符，以及Windows文件名禁用字符（\\ / : * ? \" < > |）。\n"
                     "请在表格中修改此零件编号后重试。"
                 )
                 continue
