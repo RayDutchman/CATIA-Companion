@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QCheckBox, QGroupBox, QMessageBox, QApplication,
+    QFileDialog,
 )
 from PySide6.QtGui import QColor
 from PySide6.QtCore import Qt, QSettings
@@ -597,6 +598,7 @@ class BomEditDialog(QDialog):
 
             ext    = Path(fp).suffix
             new_fp = str(Path(fp).parent / (pn + ext))
+            target_existed_before = Path(new_fp).exists()
 
             try:
                 from pycatia import catia as _pycatia
@@ -628,7 +630,6 @@ class BomEditDialog(QDialog):
                     )
                     continue
 
-                target_existed_before = Path(new_fp).exists()
                 target_doc.com_object.SaveAs(new_fp)
 
                 if delete_old and Path(fp).resolve() != Path(new_fp).resolve():

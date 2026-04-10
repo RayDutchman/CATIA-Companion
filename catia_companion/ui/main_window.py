@@ -356,7 +356,7 @@ class MainWindow(QMainWindow):
 
     def _copy_font_to_catia(self) -> None:
         self._copy_file_to_catia(
-            file_name="Changfangsong.ttf",
+            file_name="ChangFangSong.ttf",
             relative_dest=Path("win_b64") / "resources" / "fonts" / "TrueType",
         )
 
