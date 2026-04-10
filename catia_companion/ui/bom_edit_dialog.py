@@ -28,6 +28,7 @@ from catia_companion.constants import (
     SOURCE_TO_DISPLAY,
     SOURCE_OPTIONS,
     PART_NUMBER_VALID_PATTERN,
+    FILENAME_NOT_FOUND,
 )
 from catia_companion.catia.bom_collect import collect_bom_rows
 from catia_companion.catia.bom_write import write_bom_to_catia
@@ -335,6 +336,7 @@ class BomEditDialog(QDialog):
 
         for row_idx, row_data in enumerate(self._rows):
             pn         = str(row_data.get("Part Number", ""))
+            not_found  = bool(row_data.get("_not_found"))
             unreadable = bool(row_data.get("_unreadable"))
 
             for col_idx, col_name in enumerate(self._columns):
@@ -379,10 +381,11 @@ class BomEditDialog(QDialog):
                         item.setToolTip(fp)
                 self._table.setItem(row_idx, col_idx, item)
 
-            # Grey out unreadable rows
-            if unreadable:
+            # Lock rows that cannot be accessed or whose backing file is missing
+            row_locked = unreadable or not_found
+            if row_locked:
                 grey = QColor(160, 160, 160)
-                bg   = QColor(245, 245, 245)
+                bg   = QColor(250, 245, 245) if not_found else QColor(245, 245, 245)
                 for ci in range(len(self._columns)):
                     it = self._table.item(row_idx, ci)
                     if it:
@@ -392,6 +395,15 @@ class BomEditDialog(QDialog):
                     w = self._table.cellWidget(row_idx, ci)
                     if isinstance(w, QComboBox):
                         w.setEnabled(False)
+                # Show a tooltip explaining why the row is locked
+                fn_col = self._columns.index("Filename") if "Filename" in self._columns else -1
+                if fn_col >= 0:
+                    it = self._table.item(row_idx, fn_col)
+                    if it:
+                        if not_found:
+                            it.setToolTip("该零件/装配体的文件未被CATIA检索到，行内容不可编辑。")
+                        else:
+                            it.setToolTip("该零件/装配体处于轻量化模式，无法读取属性。")
 
         self._is_updating = False
 

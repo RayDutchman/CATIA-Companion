@@ -9,6 +9,8 @@ Provides:
 import logging
 from pathlib import Path
 
+from catia_companion.constants import FILENAME_NOT_FOUND
+
 logger = logging.getLogger(__name__)
 
 
@@ -100,6 +102,7 @@ def collect_bom_rows(
             pn   = name.rsplit(".", 1)[0] if "." in name else name
 
         filepath  = get_product_filepath(product)
+        not_found = not bool(filepath)
         is_readable = True
         try:
             product.apply_work_mode(CatWorkModeType.DESIGN_MODE)
@@ -109,8 +112,9 @@ def collect_bom_rows(
         row: dict = {
             "Level":        level,
             "Part Number":  pn,
-            "Filename":     Path(filepath).stem if filepath else pn,
+            "Filename":     Path(filepath).stem if filepath else FILENAME_NOT_FOUND,
             "_filepath":    filepath,
+            "_not_found":   not_found,
             "_unreadable":  not is_readable,
         }
 

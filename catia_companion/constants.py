@@ -74,6 +74,10 @@ BOM_PRESET_CUSTOM_COLUMNS: list[str] = [
 # BOM edit / display constants
 # ---------------------------------------------------------------------------
 
+# Sentinel value displayed in the Filename cell when a product's backing file
+# cannot be resolved via COM (the product is "not found").
+FILENAME_NOT_FOUND: str = "未检索到"
+
 # Columns that are structural / derived – shown read-only in the edit table
 BOM_READONLY_COLUMNS: frozenset[str] = frozenset({"Level", "Type", "Filename", "Quantity"})
 
