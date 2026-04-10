@@ -15,13 +15,13 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QCheckBox, QGroupBox, QMessageBox, QApplication,
-    QFileDialog,
+    QFileDialog, QProgressDialog,
 )
 from PySide6.QtGui import QColor
 from PySide6.QtCore import Qt, QSettings
 
 from catia_companion.constants import (
-    BOM_PRESET_CUSTOM_COLUMNS,
+    PRESET_USER_REF_PROPERTIES,
     BOM_EDIT_COLUMN_ORDER,
     BOM_COLUMN_DISPLAY_NAMES,
     BOM_READONLY_COLUMNS,
@@ -73,13 +73,13 @@ class BomEditDialog(QDialog):
         if isinstance(saved_visible, str):
             saved_visible = [saved_visible]
         self._visible_preset_cols: list[str] = [
-            c for c in saved_visible if c in BOM_PRESET_CUSTOM_COLUMNS
+            c for c in saved_visible if c in PRESET_USER_REF_PROPERTIES
         ]
 
         # All custom columns (including all presets) so that pre-loading from
         # CATIA covers every column regardless of current visibility.
         self._all_custom_columns: list[str] = list(dict.fromkeys(
-            self._custom_columns + list(BOM_PRESET_CUSTOM_COLUMNS)
+            self._custom_columns + list(PRESET_USER_REF_PROPERTIES)
         ))
 
         self._columns: list[str] = self._build_visible_columns()
@@ -137,7 +137,7 @@ class BomEditDialog(QDialog):
         preset_layout = QHBoxLayout(preset_group)
         preset_layout.setSpacing(12)
         self._preset_checkboxes: dict[str, QCheckBox] = {}
-        for col_name in BOM_PRESET_CUSTOM_COLUMNS:
+        for col_name in PRESET_USER_REF_PROPERTIES:
             cb = QCheckBox(col_name)
             cb.setChecked(col_name in self._visible_preset_cols)
             cb.toggled.connect(self._on_preset_col_toggled)
@@ -214,11 +214,11 @@ class BomEditDialog(QDialog):
 
     def _build_visible_columns(self) -> list[str]:
         visible_preset = [
-            c for c in BOM_PRESET_CUSTOM_COLUMNS if c in self._visible_preset_cols
+            c for c in PRESET_USER_REF_PROPERTIES if c in self._visible_preset_cols
         ]
         other_custom   = [
             c for c in self._custom_columns
-            if c not in BOM_EDIT_COLUMN_ORDER and c not in BOM_PRESET_CUSTOM_COLUMNS
+            if c not in BOM_EDIT_COLUMN_ORDER and c not in PRESET_USER_REF_PROPERTIES
         ]
         return BOM_EDIT_COLUMN_ORDER + visible_preset + other_custom
 
@@ -266,13 +266,27 @@ class BomEditDialog(QDialog):
         self._load_btn.setText("加载中…")
         QApplication.processEvents()
 
+        progress = QProgressDialog("正在加载BOM，请稍候…", None, 0, 0, self)
+        progress.setWindowTitle("加载BOM")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(300)
+        progress.setValue(0)
+
+        def _on_row_collected(count: int) -> None:
+            progress.setLabelText(f"正在加载BOM，请稍候… 已读取 {count} 个节点")
+            QApplication.processEvents()
+
         try:
             all_read_cols = list(dict.fromkeys(
                 BOM_EDIT_COLUMN_ORDER
                 + [c for c in self._all_custom_columns if c not in BOM_EDIT_COLUMN_ORDER]
             ))
-            rows = collect_bom_rows(file_path, all_read_cols, self._all_custom_columns)
+            rows = collect_bom_rows(
+                file_path, all_read_cols, self._all_custom_columns,
+                progress_callback=_on_row_collected,
+            )
         except Exception as e:
+            progress.close()
             logger.error(f"Failed to load BOM for edit: {e}")
             QMessageBox.critical(
                 self, "加载失败",
@@ -281,6 +295,8 @@ class BomEditDialog(QDialog):
             self._load_btn.setEnabled(True)
             self._load_btn.setText("加载BOM")
             return
+        finally:
+            progress.close()
 
         self._load_btn.setEnabled(True)
         self._load_btn.setText("重新加载BOM")

@@ -6,6 +6,7 @@ Provides:
 """
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from catia_companion.constants import (
@@ -25,6 +26,7 @@ def export_bom_to_excel(
     output_folder: str | None = None,
     columns: list[str] | None = None,
     custom_columns: list[str] | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> None:
     """Export a hierarchical BOM from CATProduct files to Excel (.xlsx).
 
@@ -40,6 +42,9 @@ def export_bom_to_excel(
         :data:`~catia_companion.constants.BOM_DEFAULT_COLUMNS`.
     custom_columns:
         Column names that are user-defined properties.
+    progress_callback:
+        Optional callable invoked as ``progress_callback(file_index, total_files)``
+        after each file's BOM is collected.  May raise an exception to abort.
     """
     import openpyxl
     from openpyxl.styles import Font, Alignment
@@ -97,7 +102,8 @@ def export_bom_to_excel(
                     max_width = max(max_width, estimate_column_width(str(cell_val)))
             ws.column_dimensions[col_letter].width = max_width + 2
 
-    for path in file_paths:
+    total_files = len(file_paths)
+    for file_idx, path in enumerate(file_paths, start=1):
         if path is None:
             # Use the active document without opening or closing
             try:
@@ -119,6 +125,8 @@ def export_bom_to_excel(
             wb.save(str(dest))
             logger.info(f"  BOM exported -> {dest}")
             logger.info("Done: active document\n")
+            if progress_callback is not None:
+                progress_callback(file_idx, total_files)
             continue
 
         src      = Path(path).resolve()
@@ -180,3 +188,5 @@ def export_bom_to_excel(
                     pass
 
         logger.info(f"Done: {src.name}\n")
+        if progress_callback is not None:
+            progress_callback(file_idx, total_files)

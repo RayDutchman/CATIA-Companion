@@ -42,10 +42,11 @@ MAIN_WINDOW_DEFAULT_HEIGHT = 500
 STYLESHEET_RELATIVE_PATH = "catia_companion/ui/style.qss"
 
 # ---------------------------------------------------------------------------
-# Part template properties
+# Preset user-defined reference properties
+# (used both for CATPart template stamping and as BOM preset custom columns)
 # ---------------------------------------------------------------------------
 
-PART_TEMPLATE_PROPERTIES: list[str] = [
+PRESET_USER_REF_PROPERTIES: list[str] = [
     "物料编码", "物料名称", "规格型号",
     "物料来源", "数据状态", "存货类别", "质量", "备注",
 ]
@@ -62,12 +63,6 @@ BOM_ALL_COLUMNS: list[str] = [
 BOM_DEFAULT_COLUMNS: list[str] = [
     "Level", "Type", "Part Number", "Nomenclature",
     "Definition", "Revision", "Source", "Quantity",
-]
-
-# Preset user-defined property columns (stored on CATPart/CATProduct)
-BOM_PRESET_CUSTOM_COLUMNS: list[str] = [
-    "物料编码", "物料名称", "规格型号",
-    "物料来源", "数据状态", "存货类别", "质量", "备注",
 ]
 
 # ---------------------------------------------------------------------------

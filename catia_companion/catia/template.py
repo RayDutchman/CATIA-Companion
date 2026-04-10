@@ -8,7 +8,7 @@ Provides:
 import logging
 from pathlib import Path
 
-from catia_companion.constants import PART_TEMPLATE_PROPERTIES
+from catia_companion.constants import PRESET_USER_REF_PROPERTIES
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ def apply_part_template(
                     pass
 
             added: list[str] = []
-            for prop_name in PART_TEMPLATE_PROPERTIES:
+            for prop_name in PRESET_USER_REF_PROPERTIES:
                 if prop_name not in existing_names:
                     user_props.create_string(prop_name, "")
                     added.append(prop_name)

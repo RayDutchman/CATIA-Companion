@@ -7,6 +7,7 @@ Provides:
 """
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from catia_companion.constants import FILENAME_NOT_FOUND
@@ -36,6 +37,7 @@ def collect_bom_rows(
     file_path: str | None,
     columns: list[str],
     custom_columns: list[str],
+    progress_callback: Callable[[int], None] | None = None,
 ) -> list[dict]:
     """Return a list of row dicts representing the hierarchical BOM.
 
@@ -49,6 +51,10 @@ def collect_bom_rows(
     custom_columns:
         Column names that are user-defined properties (read via
         ``UserRefProperties``).
+    progress_callback:
+        Optional callable invoked with the current row count after each node
+        is appended to the result list.  May raise an exception to abort the
+        traversal (e.g. when the user cancels).
     """
     from pycatia import catia, CatWorkModeType
     from pycatia.product_structure_interfaces.product_document import ProductDocument
@@ -139,6 +145,8 @@ def collect_bom_rows(
                 row[col] = _get_user_prop(product, col)
 
         rows.append(row)
+        if progress_callback is not None:
+            progress_callback(len(rows))
 
         try:
             products  = product.products
