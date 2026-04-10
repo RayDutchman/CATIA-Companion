@@ -274,6 +274,7 @@ class BomEditDialog(QDialog):
 
         def _on_row_collected(count: int) -> None:
             progress.setLabelText(f"正在加载BOM，请稍候… 已读取 {count} 个节点")
+            progress.repaint()
             QApplication.processEvents()
 
         try:

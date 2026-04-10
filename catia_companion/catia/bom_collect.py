@@ -100,6 +100,8 @@ def collect_bom_rows(
                 pass
         return ""
 
+    _total_count: list[int] = [0]
+
     def _traverse(product, rows: list, level: int, parent_filepath: str = "") -> None:
         try:
             pn = product.part_number
@@ -145,8 +147,9 @@ def collect_bom_rows(
                 row[col] = _get_user_prop(product, col)
 
         rows.append(row)
+        _total_count[0] += 1
         if progress_callback is not None:
-            progress_callback(len(rows))
+            progress_callback(_total_count[0])
 
         try:
             products  = product.products

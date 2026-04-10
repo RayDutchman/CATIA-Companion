@@ -12,7 +12,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QFileDialog, QAbstractItemView, QRadioButton, QButtonGroup, QLineEdit,
-    QGroupBox, QPushButton, QMessageBox, QProgressDialog, QApplication,
+    QGroupBox, QPushButton, QMessageBox,
 )
 from PySide6.QtCore import Qt, QSettings
 
@@ -275,31 +275,15 @@ class ExportBomDialog(QDialog):
                 )
                 return
 
-        progress = QProgressDialog("正在导出BOM，请稍候…", None, 0, 1, self)
-        progress.setWindowTitle("导出BOM")
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(300)
-        progress.setValue(0)
-        QApplication.processEvents()
-
-        def _on_file_done(file_idx: int, total: int) -> None:
-            progress.setMaximum(total)
-            progress.setValue(file_idx)
-            QApplication.processEvents()
-
         try:
             export_bom_to_excel(
                 [file_path], output_folder,
                 columns=selected_cols,
                 custom_columns=self._custom_columns,
-                progress_callback=_on_file_done,
             )
         except Exception as e:
-            progress.close()
             QMessageBox.critical(self, "导出失败", f"导出BOM时出错：\n{e}")
             return
-        finally:
-            progress.close()
 
         QMessageBox.information(self, "导出成功", "BOM已成功导出为Excel文件。")
         self.accept()

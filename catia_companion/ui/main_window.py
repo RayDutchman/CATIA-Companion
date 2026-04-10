@@ -124,7 +124,7 @@ class MainWindow(QMainWindow):
         btn_stamp.setToolTip("为选中的 CATPart 添加标准用户自定义属性")
         btn_stamp.clicked.connect(self._open_stamp_part_template_dialog)
 
-        btn_deps = QPushButton("查找所有依赖项")
+        btn_deps = QPushButton("查找所有依赖项（未实现）")
         btn_deps.setToolTip("通过 CATIA COM 查找文件的所有引用文档")
         btn_deps.clicked.connect(self._open_find_dependencies_dialog)
 
@@ -180,7 +180,7 @@ class MainWindow(QMainWindow):
             ("复制ISO.xml到CATIA目录",    self._copy_iso_to_catia),
             ("PoJie",                     self._pojie),
             ("刷写零件模板",              self._open_stamp_part_template_dialog),
-            ("查找所有依赖项",            self._open_find_dependencies_dialog),
+            ("查找所有依赖项（未实现）",     self._open_find_dependencies_dialog),
         ):
             tools_menu.addAction(QAction(label, self, triggered=slot))
 
