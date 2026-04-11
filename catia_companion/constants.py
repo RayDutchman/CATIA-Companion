@@ -81,7 +81,7 @@ BOM_DEFAULT_COLUMNS: list[str] = [
 FILENAME_NOT_FOUND: str = "未检索到"
 
 # Columns that are structural / derived – shown read-only in the edit table
-BOM_READONLY_COLUMNS: frozenset[str] = frozenset({"Level", "Type", "Filename", "Quantity"})
+BOM_READONLY_COLUMNS: frozenset[str] = frozenset({"Level", "Type", "Filename", "Filepath", "Quantity"})
 
 # Column order used in the BOM edit dialog (internal names)
 BOM_EDIT_COLUMN_ORDER: list[str] = [
@@ -94,6 +94,7 @@ BOM_COLUMN_DISPLAY_NAMES: dict[str, str] = {
     "Level":        "层级",
     "Type":         "类型",
     "Filename":     "文件名",
+    "Filepath":     "完整路径",
     "Part Number":  "零件编号",
     "Nomenclature": "术语（中文名称）",
     "Definition":   "定义",
