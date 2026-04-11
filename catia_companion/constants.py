@@ -19,25 +19,31 @@ APP_CONTACT = "thucwb@gmail.com"
 
 ABOUT_TEXT = f"""{APP_NAME} v{APP_VERSION}
 
-A CATIA V5 productivity tool for engineering teams.
-Automates drawing conversion, part export, BOM export,
-BOM edit, quickly run macros and installation of CATIA
-resources.
+一款面向工程团队的 CATIA V5 效率工具。
+
+主要功能：
+  • CATDrawing 批量导出 PDF
+  • CATPart / CATProduct 批量导出 STEP
+  • CATProduct BOM 导出到 Excel
+  • BOM 属性在线编辑与回写 CATIA
+  • CATIA 宏脚本快捷运行
+  • 零件模板刷写（添加标准用户自定义属性）
+  • 字体文件 / ISO.xml 标准文件一键部署
 
 ─────────────────────────────────────────
-Developer   {APP_AUTHOR}
-Contact     {APP_CONTACT}
-Released    {APP_DATE}
+开发者    {APP_AUTHOR}
+联系方式  {APP_CONTACT}
+发布日期  {APP_DATE}
 ─────────────────────────────────────────
 
-\u00a9 2026 {APP_AUTHOR}. For internal use only."""
+\u00a9 2026 {APP_AUTHOR}. 仅供内部使用。"""
 
 # ---------------------------------------------------------------------------
 # Default window geometry
 # ---------------------------------------------------------------------------
 
-MAIN_WINDOW_DEFAULT_WIDTH  = 320
-MAIN_WINDOW_DEFAULT_HEIGHT = 500
+MAIN_WINDOW_DEFAULT_WIDTH  = 480
+MAIN_WINDOW_DEFAULT_HEIGHT = 520
 
 # Relative path to the QSS stylesheet (used by main.py entry point)
 STYLESHEET_RELATIVE_PATH = "catia_companion/ui/style.qss"

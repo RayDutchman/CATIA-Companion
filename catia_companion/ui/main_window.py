@@ -34,6 +34,7 @@ from catia_companion.ui.convert_dialog import FileConvertDialog
 from catia_companion.ui.export_bom_dialog import ExportBomDialog
 from catia_companion.ui.find_deps_dialog import FindDependenciesDialog
 from catia_companion.ui.bom_edit_dialog import BomEditDialog
+from catia_companion.ui.help_dialog import HelpDialog
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +209,7 @@ class MainWindow(QMainWindow):
         help_menu = bar.addMenu("帮助")
         help_menu.addAction(QAction(
             "文档", self,
-            triggered=lambda: QMessageBox.information(self, "提示", "功能尚未实现"),
+            triggered=self._show_help,
         ))
         help_menu.addAction(QAction(
             f"关于 {APP_NAME}", self,
@@ -226,6 +227,9 @@ class MainWindow(QMainWindow):
 
     def _show_about(self) -> None:
         QMessageBox.about(self, f"About {APP_NAME}", ABOUT_TEXT)
+
+    def _show_help(self) -> None:
+        HelpDialog(self).exec()
 
     # ── Macro menu helpers ─────────────────────────────────────────────────
 
