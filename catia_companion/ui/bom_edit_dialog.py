@@ -162,7 +162,7 @@ class _FileRenameDialog(QDialog):
         self.accept()
 
 
-
+class BomEditDialog(QDialog):
     """Editable BOM table for completing and writing back product properties.
 
     - 文件名 / 层级 / 类型 / 数量 are read-only (structural).
