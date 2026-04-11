@@ -910,13 +910,16 @@ class _FileRenameDialog(QDialog):
             if ret != QMessageBox.StandardButton.Yes:
                 return
             self._write_back(close_on_success=False)
-            return  # User must click the button again; write-back clears modified_keys.
+            # Only proceed if write-back actually cleared the modifications;
+            # if it failed (error dialog shown), modified_keys still has the entry.
+            if orig_pn in self._modified_keys:
+                return
 
         dlg = _FileRenameDialog(fp, parent=self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
 
-        new_fp               = dlg.new_path
+        new_fp                = dlg.new_path
         target_existed_before = Path(new_fp).exists()
 
         delete_old = (
@@ -935,7 +938,7 @@ class _FileRenameDialog(QDialog):
             documents   = application.documents
             src         = Path(fp).resolve()
 
-            def _find_doc(docs, path: Path):
+            def _find_document_by_path(docs, path: Path):
                 for i in range(1, docs.count + 1):
                     try:
                         d = docs.item(i)
@@ -945,10 +948,10 @@ class _FileRenameDialog(QDialog):
                         pass
                 return None
 
-            target_doc = _find_doc(documents, src)
+            target_doc = _find_document_by_path(documents, src)
             if target_doc is None:
                 documents.open(str(src))
-                target_doc = _find_doc(documents, src)
+                target_doc = _find_document_by_path(documents, src)
 
             if target_doc is None:
                 QMessageBox.warning(
@@ -978,9 +981,12 @@ class _FileRenameDialog(QDialog):
 
         except Exception as e:
             if Path(fp).exists() and (target_existed_before or not Path(new_fp).exists()):
+                # The source file is intact and either the target already existed
+                # before (no overwrite) or it was never created – most likely the
+                # user clicked Cancel or No in CATIA's own SaveAs prompt.
                 logger.info(
                     f"SaveAs skipped for {Path(fp).name} "
-                    "(user cancelled or declined overwrite in CATIA)"
+                    f"(user cancelled or declined overwrite in CATIA; exception: {e})"
                 )
                 return
             QMessageBox.warning(self, "另存为失败", f"文件操作失败：\n{e}")

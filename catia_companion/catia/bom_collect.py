@@ -105,6 +105,8 @@ def collect_bom_rows(
     # Cache properties by filepath to avoid redundant DESIGN_MODE switches and
     # COM property reads for the same physical document referenced multiple
     # times in the assembly tree (e.g. the same fastener used 50 times).
+    # NOTE: this dict is local to each collect_bom_rows() call, so it is
+    # discarded after the traversal and never shared across invocations.
     _props_cache: dict[str, dict] = {}
 
     def _traverse(product, rows: list, level: int, parent_filepath: str = "") -> None:
