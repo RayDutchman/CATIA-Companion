@@ -405,15 +405,31 @@ class MainWindow(QMainWindow):
         self._run_macro_with_template_path(macro_path, str(template_path))
 
     def _run_macro_with_template_path(self, macro_path: Path, template_path: str) -> None:
-        """Run *macro_path* via CATIA's SystemService.ExecuteScript, passing
-        *template_path* as the first element of the iParameters array so that
-        the macro can retrieve it with ``iParameters(0)``."""
+        """Run *macro_path* via CATIA's SystemService.ExecuteScript.
+
+        CATIA's ``ExecuteScript`` cannot locate ``CATMain`` when a non-empty
+        parameters array is supplied (it treats parameterised and
+        parameterless entry points as distinct signatures).  To work around
+        this, the selected template path is written to a well-known temporary
+        file first.  The macro then reads that file with ``FileSystemObject``
+        so the standard ``Sub CATMain()`` signature (no parameters) is kept.
+        """
+        import tempfile
+        tmp_path = Path(tempfile.gettempdir()) / "catia_companion_drawing_template.txt"
+        try:
+            tmp_path.write_text(template_path, encoding="utf-8")
+        except Exception as e:
+            QMessageBox.critical(
+                self, "无法写入临时文件",
+                f"无法将模板路径写入临时文件：\n{tmp_path}\n\n{e}",
+            )
+            return
         try:
             from pycatia import catia as _catia
             caa = _catia()
             app = caa.application
             app.com_object.SystemService.ExecuteScript(
-                str(macro_path.parent), 1, macro_path.name, "CATMain", [template_path]
+                str(macro_path.parent), 1, macro_path.name, "CATMain", []
             )
             logger.info(f"Macro executed: {macro_path.name} | templatePath={template_path}")
         except Exception as e:
@@ -422,6 +438,11 @@ class MainWindow(QMainWindow):
                 self, "宏执行失败",
                 f"运行宏时出错：\n{macro_path.name}\n\n{e}\n\n请确保CATIA已启动。",
             )
+        finally:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
     # ── CATIA resource file helpers ────────────────────────────────────────
 

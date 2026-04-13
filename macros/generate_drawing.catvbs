@@ -2,29 +2,36 @@
 '
 ' Called by CATIA Companion – "图纸 > 从CATPart/CATProduct生成图纸".
 '
-' CATIA Companion passes the selected CATDrawing template path as the first
-' element of the iParameters array.  Receive it like this:
-'
-'   Sub CATMain(iParameters)
-'       Dim templatePath As String
-'       templatePath = iParameters(0)
-'       ...
-'   End Sub
+' CATIA Companion writes the selected CATDrawing template path to:
+'   %TEMP%\catia_companion_drawing_template.txt
+' before running this macro.  CATMain() reads that file to obtain templatePath.
 '
 ' ─────────────────────────────────────────────────────────────────────────────
 
-Sub CATMain(iParameters)
+Sub CATMain()
 
+    ' Read templatePath from the handoff file written by CATIA Companion.
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    Dim tmpFile As String
+    tmpFile = Environ("TEMP") & "\catia_companion_drawing_template.txt"
+
+    If Not fso.FileExists(tmpFile) Then
+        MsgBox "找不到模板路径文件：" & Chr(13) & Chr(10) & tmpFile, _
+               vbExclamation, "CATIA Companion – 生成图纸"
+        Exit Sub
+    End If
+
+    Dim f As Object
+    Set f = fso.OpenTextFile(tmpFile, 1)   ' 1 = ForReading
     Dim templatePath As String
-    templatePath = iParameters(0)
+    templatePath = f.ReadLine()
+    f.Close
 
     ' TODO: implement your drawing-generation logic here.
     '
     ' Example skeleton:
-    '   Dim oActiveDoc As Document
-    '   Set oActiveDoc = CATIA.ActiveDocument
-    '
-    '   ' Open template as a new drawing
     '   Dim oDrawingDoc As DrawingDocument
     '   Set oDrawingDoc = CATIA.Documents.Open(templatePath)
     '
