@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 class MainWindow(QMainWindow):
     """Primary application window."""
 
-    _MACRO_EXTENSIONS: frozenset[str] = frozenset({".catvbs", ".catscript"})
+    _MACRO_EXTENSIONS: frozenset[str] = frozenset({".catvbs", ".catscript", ".catvba"})
 
     def __init__(self) -> None:
         super().__init__()
@@ -298,9 +298,7 @@ class MainWindow(QMainWindow):
             from pycatia import catia as _catia
             caa = _catia()
             app = caa.application
-            app.com_object.SystemService.ExecuteScript(
-                str(macro_path.parent), 1, macro_path.name, "CATMain", []
-            )
+            self._execute_script(app, macro_path, "CATMain", [])
             logger.info(f"Macro executed: {macro_path.name}")
         except Exception as e:
             logger.error(f"Failed to run macro {macro_path.name}: {e}")
@@ -393,33 +391,52 @@ class MainWindow(QMainWindow):
             return
 
         template_path = templates_dir / name
-        macro_path = resource_path("macros") / "generate_drawing.catvbs"
+        macros_dir = resource_path("macros")
+        macro_path = macros_dir / "generate_drawing.catvba"
+        if not macro_path.exists():
+            macro_path = macros_dir / "generate_drawing.catvbs"
         if not macro_path.exists():
             QMessageBox.warning(
                 self, "宏文件不存在",
-                f"未找到图纸生成宏文件：\n{macro_path}\n\n"
-                "请将 generate_drawing.catvbs 放入 macros 文件夹。",
+                f"未找到图纸生成宏文件。\n\n"
+                "请将 generate_drawing.catvba 或 generate_drawing.catvbs 放入 macros 文件夹。",
             )
             return
 
         self._run_macro_with_template_path(macro_path, str(template_path))
+
+    def _execute_script(self, app, macro_path: Path, func_name: str, params: list) -> None:
+        """Dispatch the correct SystemService.ExecuteScript call based on file type.
+
+        CATIA's ``ExecuteScript`` uses two different calling conventions:
+
+        * **LibraryType 0** (CATScript / .catvbs / .catscript): the library is a
+          *folder*; ProgramName is the filename inside that folder.
+        * **LibraryType 1** (VBA project / .catvba): the library is the *full path*
+          to the ``.catvba`` binary project file; ProgramName is the VBA module
+          name (conventionally ``"Module1"``).
+        """
+        if macro_path.suffix.lower() == ".catvba":
+            app.com_object.SystemService.ExecuteScript(
+                str(macro_path), 1, "Module1", func_name, params
+            )
+        else:
+            app.com_object.SystemService.ExecuteScript(
+                str(macro_path.parent), 0, macro_path.name, func_name, params
+            )
 
     def _run_macro_with_template_path(self, macro_path: Path, template_path: str) -> None:
         """Run *macro_path* via CATIA's SystemService.ExecuteScript, passing
         *template_path* as the first element of the iParameters array so that
         the macro can retrieve it with ``iParameters(0)``.
 
-        Important: the .catvbs file must use CRLF line endings and contain only
-        ASCII-compatible characters.  CATIA's VBScript engine on Windows cannot
-        locate ``CATMain`` in files with LF-only (Unix) line endings.
+        Supports both .catvba (VBA project) and .catvbs/.catscript (CATScript).
         """
         try:
             from pycatia import catia as _catia
             caa = _catia()
             app = caa.application
-            app.com_object.SystemService.ExecuteScript(
-                str(macro_path.parent), 1, macro_path.name, "CATMain", [template_path]
-            )
+            self._execute_script(app, macro_path, "CATMain", [template_path])
             logger.info(f"Macro executed: {macro_path.name} | templatePath={template_path}")
         except Exception as e:
             logger.error(f"Failed to run macro {macro_path.name}: {e}")
