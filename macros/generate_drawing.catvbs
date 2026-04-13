@@ -1,33 +1,16 @@
 ' generate_drawing.catvbs
 '
-' Called by CATIA Companion – "图纸 > 从CATPart/CATProduct生成图纸".
+' Called by CATIA Companion -- Drawing > Generate Drawing from CATPart/CATProduct.
 '
-' CATIA Companion writes the selected CATDrawing template path to:
-'   %TEMP%\catia_companion_drawing_template.txt
-' before running this macro.  CATMain() reads that file to obtain templatePath.
+' CATIA Companion passes the selected CATDrawing template path as the first
+' element of the iParameters array.  Read it with iParameters(0).
 '
-' ─────────────────────────────────────────────────────────────────────────────
+' ----------------------------------------------------------------------------
 
-Sub CATMain()
+Sub CATMain(iParameters)
 
-    ' Read templatePath from the handoff file written by CATIA Companion.
-    Dim fso As Object
-    Set fso = CreateObject("Scripting.FileSystemObject")
-
-    Dim tmpFile As String
-    tmpFile = Environ("TEMP") & "\catia_companion_drawing_template.txt"
-
-    If Not fso.FileExists(tmpFile) Then
-        MsgBox "找不到模板路径文件：" & Chr(13) & Chr(10) & tmpFile, _
-               vbExclamation, "CATIA Companion – 生成图纸"
-        Exit Sub
-    End If
-
-    Dim f As Object
-    Set f = fso.OpenTextFile(tmpFile, 1)   ' 1 = ForReading
     Dim templatePath As String
-    templatePath = f.ReadLine()
-    f.Close
+    templatePath = iParameters(0)
 
     ' TODO: implement your drawing-generation logic here.
     '
@@ -37,8 +20,8 @@ Sub CATMain()
     '
     '   ' ... populate views, title block, etc. ...
 
-    MsgBox "模板路径: " & templatePath & Chr(13) & Chr(10) & _
-           "请在 generate_drawing.catvbs 中实现图纸生成逻辑。", _
-           vbInformation, "CATIA Companion – 生成图纸"
+    MsgBox "Template: " & templatePath & Chr(13) & Chr(10) & _
+           "Implement drawing generation logic in generate_drawing.catvbs.", _
+           vbInformation, "CATIA Companion -- Generate Drawing"
 
 End Sub
