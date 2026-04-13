@@ -1,0 +1,37 @@
+' generate_drawing.catvbs
+'
+' Called by CATIA Companion – "图纸 > 从CATPart/CATProduct生成图纸".
+'
+' CATIA Companion passes the selected CATDrawing template path as the first
+' element of the iParameters array.  Receive it like this:
+'
+'   Sub CATMain(iParameters)
+'       Dim templatePath As String
+'       templatePath = iParameters(0)
+'       ...
+'   End Sub
+'
+' ─────────────────────────────────────────────────────────────────────────────
+
+Sub CATMain(iParameters)
+
+    Dim templatePath As String
+    templatePath = iParameters(0)
+
+    ' TODO: implement your drawing-generation logic here.
+    '
+    ' Example skeleton:
+    '   Dim oActiveDoc As Document
+    '   Set oActiveDoc = CATIA.ActiveDocument
+    '
+    '   ' Open template as a new drawing
+    '   Dim oDrawingDoc As DrawingDocument
+    '   Set oDrawingDoc = CATIA.Documents.Open(templatePath)
+    '
+    '   ' ... populate views, title block, etc. ...
+
+    MsgBox "模板路径: " & templatePath & Chr(13) & Chr(10) & _
+           "请在 generate_drawing.catvbs 中实现图纸生成逻辑。", _
+           vbInformation, "CATIA Companion – 生成图纸"
+
+End Sub

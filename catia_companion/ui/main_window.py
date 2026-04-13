@@ -14,7 +14,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QMessageBox, QPushButton, QFileDialog, QGroupBox,
+    QLabel, QMessageBox, QPushButton, QFileDialog, QGroupBox, QInputDialog,
 )
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt
@@ -168,6 +168,13 @@ class MainWindow(QMainWindow):
         edit_menu = bar.addMenu("编辑")
         edit_menu.addAction(QAction(
             "BOM属性补全", self, triggered=self._open_bom_edit_dialog
+        ))
+
+        # Drawing
+        drawing_menu = bar.addMenu("图纸")
+        drawing_menu.addAction(QAction(
+            "从CATPart/CATProduct生成图纸", self,
+            triggered=self._open_generate_drawing_dialog,
         ))
 
         # Macro
@@ -355,6 +362,66 @@ class MainWindow(QMainWindow):
 
     def _open_find_dependencies_dialog(self) -> None:
         FindDependenciesDialog(self).exec()
+
+    # ── Drawing generation ─────────────────────────────────────────────────
+
+    def _drawing_templates_dir(self) -> Path:
+        return resource_path("drawing_templates")
+
+    def _open_generate_drawing_dialog(self) -> None:
+        templates_dir = self._drawing_templates_dir()
+        templates_dir.mkdir(parents=True, exist_ok=True)
+
+        templates = sorted(templates_dir.glob("*.CATDrawing"))
+        if not templates:
+            QMessageBox.warning(
+                self, "未找到模板",
+                f"在以下目录中未找到任何 CATDrawing 模板文件：\n{templates_dir}\n\n"
+                "请将 *.CATDrawing 模板放入该文件夹后重试。",
+            )
+            return
+
+        name, ok = QInputDialog.getItem(
+            self,
+            "选择图纸模板",
+            "请选择一个 CATDrawing 模板：",
+            [t.name for t in templates],
+            0,
+            False,
+        )
+        if not ok:
+            return
+
+        template_path = templates_dir / name
+        macro_path = resource_path("macros") / "generate_drawing.catvbs"
+        if not macro_path.exists():
+            QMessageBox.warning(
+                self, "宏文件不存在",
+                f"未找到图纸生成宏文件：\n{macro_path}\n\n"
+                "请将 generate_drawing.catvbs 放入 macros 文件夹。",
+            )
+            return
+
+        self._run_macro_with_template_path(macro_path, str(template_path))
+
+    def _run_macro_with_template_path(self, macro_path: Path, template_path: str) -> None:
+        """Run *macro_path* via CATIA's SystemService.ExecuteScript, passing
+        *template_path* as the first element of the iParameters array so that
+        the macro can retrieve it with ``iParameters(0)``."""
+        try:
+            from pycatia import catia as _catia
+            caa = _catia()
+            app = caa.application
+            app.com_object.SystemService.ExecuteScript(
+                str(macro_path.parent), 1, macro_path.name, "CATMain", [template_path]
+            )
+            logger.info(f"Macro executed: {macro_path.name} | templatePath={template_path}")
+        except Exception as e:
+            logger.error(f"Failed to run macro {macro_path.name}: {e}")
+            QMessageBox.critical(
+                self, "宏执行失败",
+                f"运行宏时出错：\n{macro_path.name}\n\n{e}\n\n请确保CATIA已启动。",
+            )
 
     # ── CATIA resource file helpers ────────────────────────────────────────
 
