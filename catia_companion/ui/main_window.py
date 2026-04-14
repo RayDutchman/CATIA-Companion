@@ -14,7 +14,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QMessageBox, QPushButton, QFileDialog, QGroupBox,
+    QLabel, QMessageBox, QPushButton, QFileDialog, QGroupBox, QInputDialog,
 )
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt
@@ -34,6 +34,7 @@ from catia_companion.ui.convert_dialog import FileConvertDialog
 from catia_companion.ui.export_bom_dialog import ExportBomDialog
 from catia_companion.ui.find_deps_dialog import FindDependenciesDialog
 from catia_companion.ui.bom_edit_dialog import BomEditDialog
+from catia_companion.ui.help_dialog import HelpDialog
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ logger = logging.getLogger(__name__)
 class MainWindow(QMainWindow):
     """Primary application window."""
 
-    _MACRO_EXTENSIONS: frozenset[str] = frozenset({".catvbs", ".catscript"})
+    _MACRO_EXTENSIONS: frozenset[str] = frozenset({".catvbs", ".catscript", ".catvba"})
 
     def __init__(self) -> None:
         super().__init__()
@@ -169,6 +170,13 @@ class MainWindow(QMainWindow):
             "BOM属性补全", self, triggered=self._open_bom_edit_dialog
         ))
 
+        # Drawing
+        drawing_menu = bar.addMenu("图纸")
+        drawing_menu.addAction(QAction(
+            "从CATPart/CATProduct生成图纸", self,
+            triggered=self._open_generate_drawing_dialog,
+        ))
+
         # Macro
         self._macro_menu = bar.addMenu("宏")
         self._rebuild_macro_menu()
@@ -208,7 +216,7 @@ class MainWindow(QMainWindow):
         help_menu = bar.addMenu("帮助")
         help_menu.addAction(QAction(
             "文档", self,
-            triggered=lambda: QMessageBox.information(self, "提示", "功能尚未实现"),
+            triggered=self._show_help,
         ))
         help_menu.addAction(QAction(
             f"关于 {APP_NAME}", self,
@@ -226,6 +234,9 @@ class MainWindow(QMainWindow):
 
     def _show_about(self) -> None:
         QMessageBox.about(self, f"About {APP_NAME}", ABOUT_TEXT)
+
+    def _show_help(self) -> None:
+        HelpDialog(self).exec()
 
     # ── Macro menu helpers ─────────────────────────────────────────────────
 
@@ -287,9 +298,7 @@ class MainWindow(QMainWindow):
             from pycatia import catia as _catia
             caa = _catia()
             app = caa.application
-            app.com_object.SystemService.ExecuteScript(
-                str(macro_path.parent), 1, macro_path.name, "CATMain", []
-            )
+            self._execute_script(app, macro_path, "CATMain", [])
             logger.info(f"Macro executed: {macro_path.name}")
         except Exception as e:
             logger.error(f"Failed to run macro {macro_path.name}: {e}")
@@ -351,6 +360,90 @@ class MainWindow(QMainWindow):
 
     def _open_find_dependencies_dialog(self) -> None:
         FindDependenciesDialog(self).exec()
+
+    # ── Drawing generation ─────────────────────────────────────────────────
+
+    def _drawing_templates_dir(self) -> Path:
+        return resource_path("drawing_templates")
+
+    def _open_generate_drawing_dialog(self) -> None:
+        templates_dir = self._drawing_templates_dir()
+        templates_dir.mkdir(parents=True, exist_ok=True)
+
+        templates = sorted(templates_dir.glob("*.CATDrawing"))
+        if not templates:
+            QMessageBox.warning(
+                self, "未找到模板",
+                f"在以下目录中未找到任何 CATDrawing 模板文件：\n{templates_dir}\n\n"
+                "请将 *.CATDrawing 模板放入该文件夹后重试。",
+            )
+            return
+
+        name, ok = QInputDialog.getItem(
+            self,
+            "选择图纸模板",
+            "请选择一个 CATDrawing 模板：",
+            [t.name for t in templates],
+            0,
+            False,
+        )
+        if not ok:
+            return
+
+        template_path = templates_dir / name
+        macros_dir = resource_path("macros")
+        macro_path = macros_dir / "generate_drawing.catvba"
+        if not macro_path.exists():
+            macro_path = macros_dir / "generate_drawing.catvbs"
+        if not macro_path.exists():
+            QMessageBox.warning(
+                self, "宏文件不存在",
+                f"未找到图纸生成宏文件。\n\n"
+                "请将 generate_drawing.catvba 或 generate_drawing.catvbs 放入 macros 文件夹。",
+            )
+            return
+
+        self._run_macro_with_template_path(macro_path, str(template_path))
+
+    def _execute_script(self, app, macro_path: Path, func_name: str, params: list) -> None:
+        """Dispatch the correct SystemService.ExecuteScript call based on file type.
+
+        CATIA's ``ExecuteScript`` uses two different calling conventions:
+
+        * **LibraryType 0** (CATScript / .catvbs / .catscript): the library is a
+          *folder*; ProgramName is the filename inside that folder.
+        * **LibraryType 1** (VBA project / .catvba): the library is the *full path*
+          to the ``.catvba`` binary project file; ProgramName is the VBA module
+          name (conventionally ``"Module1"``).
+        """
+        if macro_path.suffix.lower() == ".catvba":
+            app.com_object.SystemService.ExecuteScript(
+                str(macro_path), 1, "Module1", func_name, params
+            )
+        else:
+            app.com_object.SystemService.ExecuteScript(
+                str(macro_path.parent), 0, macro_path.name, func_name, params
+            )
+
+    def _run_macro_with_template_path(self, macro_path: Path, template_path: str) -> None:
+        """Run *macro_path* via CATIA's SystemService.ExecuteScript, passing
+        *template_path* as the first element of the iParameters array so that
+        the macro can retrieve it with ``iParameters(0)``.
+
+        Supports both .catvba (VBA project) and .catvbs/.catscript (CATScript).
+        """
+        try:
+            from pycatia import catia as _catia
+            caa = _catia()
+            app = caa.application
+            self._execute_script(app, macro_path, "CATMain", [template_path])
+            logger.info(f"Macro executed: {macro_path.name} | templatePath={template_path}")
+        except Exception as e:
+            logger.error(f"Failed to run macro {macro_path.name}: {e}")
+            QMessageBox.critical(
+                self, "宏执行失败",
+                f"运行宏时出错：\n{macro_path.name}\n\n{e}\n\n请确保CATIA已启动。",
+            )
 
     # ── CATIA resource file helpers ────────────────────────────────────────
 

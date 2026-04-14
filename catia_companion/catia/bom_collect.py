@@ -102,6 +102,13 @@ def collect_bom_rows(
 
     _total_count: list[int] = [0]
 
+    # Cache properties by filepath to avoid redundant DESIGN_MODE switches and
+    # COM property reads for the same physical document referenced multiple
+    # times in the assembly tree (e.g. the same fastener used 50 times).
+    # NOTE: this dict is local to each collect_bom_rows() call, so it is
+    # discarded after the traversal and never shared across invocations.
+    _props_cache: dict[str, dict] = {}
+
     def _traverse(product, rows: list, level: int, parent_filepath: str = "") -> None:
         try:
             pn = product.part_number
@@ -111,11 +118,30 @@ def collect_bom_rows(
 
         filepath  = get_product_filepath(product)
         not_found = not bool(filepath)
+
+        # Use the cache to skip DESIGN_MODE + property reads for repeated files.
+        cached = bool(filepath) and filepath in _props_cache
         is_readable = True
-        try:
-            product.apply_work_mode(CatWorkModeType.DESIGN_MODE)
-        except Exception:
-            is_readable = False
+
+        if not cached:
+            try:
+                product.apply_work_mode(CatWorkModeType.DESIGN_MODE)
+            except Exception:
+                is_readable = False
+
+            props: dict = {}
+            for col in columns:
+                if col in DIRECT_ATTR_MAP:
+                    props[col] = _get_prop(product, col)
+                elif col in custom_columns:
+                    props[col] = _get_user_prop(product, col)
+            props["_is_readable"] = is_readable
+
+            if filepath:
+                _props_cache[filepath] = props
+        else:
+            props       = _props_cache[filepath]
+            is_readable = bool(props.get("_is_readable", True))
 
         row: dict = {
             "Level":        level,
@@ -141,10 +167,8 @@ def collect_bom_rows(
             row["Type"] = ""
 
         for col in columns:
-            if col in DIRECT_ATTR_MAP:
-                row[col] = _get_prop(product, col)
-            elif col in custom_columns:
-                row[col] = _get_user_prop(product, col)
+            if col in DIRECT_ATTR_MAP or col in custom_columns:
+                row[col] = props.get(col, "")
 
         rows.append(row)
         _total_count[0] += 1

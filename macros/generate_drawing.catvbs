@@ -1,0 +1,27 @@
+' generate_drawing.catvbs
+'
+' Called by CATIA Companion -- Drawing > Generate Drawing from CATPart/CATProduct.
+'
+' CATIA Companion passes the selected CATDrawing template path as the first
+' element of the iParameters array.  Read it with iParameters(0).
+'
+' ----------------------------------------------------------------------------
+
+Sub CATMain(iParameters)
+
+    Dim templatePath As String
+    templatePath = iParameters(0)
+
+    ' TODO: implement your drawing-generation logic here.
+    '
+    ' Example skeleton:
+    '   Dim oDrawingDoc As DrawingDocument
+    '   Set oDrawingDoc = CATIA.Documents.Open(templatePath)
+    '
+    '   ' ... populate views, title block, etc. ...
+
+    MsgBox "Template: " & templatePath & Chr(13) & Chr(10) & _
+           "Implement drawing generation logic in generate_drawing.catvbs.", _
+           vbInformation, "CATIA Companion -- Generate Drawing"
+
+End Sub

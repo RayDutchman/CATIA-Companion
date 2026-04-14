@@ -12,8 +12,8 @@ import logging
 from pathlib import Path
 
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QLineEdit,
+    QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QCheckBox, QGroupBox, QMessageBox, QApplication,
     QFileDialog, QProgressDialog,
 )
@@ -34,6 +34,132 @@ from catia_companion.catia.bom_collect import collect_bom_rows
 from catia_companion.catia.bom_write import write_bom_to_catia
 
 logger = logging.getLogger(__name__)
+
+
+class _FileRenameDialog(QDialog):
+    """Dialog for renaming or moving a single CATIA file via CATIA SaveAs.
+
+    Lets the user change the file stem (name without extension) and/or the
+    target directory independently.  Validates the new stem with
+    :data:`~catia_companion.constants.PART_NUMBER_VALID_PATTERN` and creates
+    the target directory on demand.
+    """
+
+    def __init__(self, current_fp: str, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("修改文件名/路径")
+        self.setMinimumWidth(540)
+        self._current_fp = current_fp
+        self._p          = Path(current_fp)
+
+        layout = QFormLayout(self)
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        layout.setSpacing(8)
+
+        # Current path (read-only)
+        cur_label = QLabel(current_fp)
+        cur_label.setWordWrap(True)
+        cur_label.setStyleSheet("color: #555;")
+        layout.addRow("当前路径：", cur_label)
+
+        # New filename (stem only; extension is preserved automatically)
+        self._name_edit = QLineEdit(self._p.stem)
+        layout.addRow(f"新文件名（不含扩展名 {self._p.suffix}）：", self._name_edit)
+
+        # New directory (with browse button)
+        dir_widget = QWidget()
+        dir_layout = QHBoxLayout(dir_widget)
+        dir_layout.setContentsMargins(0, 0, 0, 0)
+        self._dir_edit = QLineEdit(str(self._p.parent))
+        dir_btn        = QPushButton("浏览…")
+        dir_btn.setFixedWidth(64)
+        dir_btn.clicked.connect(self._browse_dir)
+        dir_layout.addWidget(self._dir_edit)
+        dir_layout.addWidget(dir_btn)
+        layout.addRow("新目录：", dir_widget)
+
+        # Path preview
+        self._preview_label = QLabel()
+        self._preview_label.setWordWrap(True)
+        self._preview_label.setStyleSheet("color: #333; font-style: italic;")
+        layout.addRow("新路径预览：", self._preview_label)
+
+        self._name_edit.textChanged.connect(self._update_preview)
+        self._dir_edit.textChanged.connect(self._update_preview)
+        self._update_preview()
+
+        # Buttons
+        btn_widget = QWidget()
+        btn_row    = QHBoxLayout(btn_widget)
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.addStretch()
+        ok_btn     = QPushButton("确认")
+        ok_btn.setDefault(True)
+        ok_btn.clicked.connect(self._validate_and_accept)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cancel_btn)
+        layout.addRow(btn_widget)
+
+    # ── Properties ─────────────────────────────────────────────────────────
+
+    @property
+    def new_stem(self) -> str:
+        return self._name_edit.text().strip()
+
+    @property
+    def new_dir(self) -> str:
+        return self._dir_edit.text().strip()
+
+    @property
+    def new_path(self) -> str:
+        stem      = self.new_stem or self._p.stem
+        directory = self.new_dir  or str(self._p.parent)
+        return str(Path(directory) / (stem + self._p.suffix))
+
+    # ── Slots ───────────────────────────────────────────────────────────────
+
+    def _update_preview(self) -> None:
+        self._preview_label.setText(self.new_path)
+
+    def _browse_dir(self) -> None:
+        d = QFileDialog.getExistingDirectory(
+            self, "选择目标目录",
+            self._dir_edit.text() or str(self._p.parent),
+        )
+        if d:
+            self._dir_edit.setText(d)
+
+    def _validate_and_accept(self) -> None:
+        stem = self.new_stem or self._p.stem
+        if stem != self._p.stem and not PART_NUMBER_VALID_PATTERN.fullmatch(stem):
+            QMessageBox.warning(
+                self, "文件名含非法字符",
+                f"文件名 「{stem}」 含有非法字符。\n"
+                "不允许：控制字符、非ASCII字符，以及Windows文件名禁用字符"
+                "（\\ / : * ? \" < > |）。",
+            )
+            return
+        new_p = Path(self.new_path)
+        if new_p.resolve() == self._p.resolve():
+            QMessageBox.warning(self, "路径未改变", "新路径与当前路径相同，无需操作。")
+            return
+        dest_dir = new_p.parent
+        if not dest_dir.exists():
+            ret = QMessageBox.question(
+                self, "目录不存在",
+                f"目标目录不存在：\n{dest_dir}\n\n是否创建该目录？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return
+            try:
+                dest_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                QMessageBox.critical(self, "创建目录失败", f"无法创建目录：\n{exc}")
+                return
+        self.accept()
 
 
 class BomEditDialog(QDialog):
@@ -81,6 +207,10 @@ class BomEditDialog(QDialog):
         self._all_custom_columns: list[str] = list(dict.fromkeys(
             self._custom_columns + list(PRESET_USER_REF_PROPERTIES)
         ))
+
+        self._show_filepath_col: bool = self._edit_settings.value(
+            "show_filepath_column", False, type=bool,
+        )
 
         self._columns: list[str] = self._build_visible_columns()
 
@@ -132,6 +262,12 @@ class BomEditDialog(QDialog):
         hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(hint)
 
+        self._filepath_chk = QCheckBox("显示完整路径列")
+        self._filepath_chk.setToolTip("在表格中显示每个零件/产品文件的完整路径（默认隐藏）")
+        self._filepath_chk.setChecked(self._show_filepath_col)
+        self._filepath_chk.toggled.connect(self._on_show_filepath_toggled)
+        layout.addWidget(self._filepath_chk)
+
         # Preset column visibility checkboxes
         preset_group  = QGroupBox("自定义属性列（勾选以显示）")
         preset_layout = QHBoxLayout(preset_group)
@@ -174,6 +310,12 @@ class BomEditDialog(QDialog):
         self._rename_btn.setEnabled(False)
         self._rename_btn.clicked.connect(self._rename_by_part_number)
         btn_row.addWidget(self._rename_btn)
+
+        self._rename_file_btn = QPushButton("修改选中文件名/路径")
+        self._rename_file_btn.setToolTip("为选中行的文件执行重命名或移动（通过CATIA另存为）")
+        self._rename_file_btn.setEnabled(False)
+        self._rename_file_btn.clicked.connect(self._rename_selected_file)
+        btn_row.addWidget(self._rename_file_btn)
         btn_row.addStretch()
 
         self._save_btn   = QPushButton("应用（写回CATIA）")
@@ -213,6 +355,11 @@ class BomEditDialog(QDialog):
     # ── Preset column helpers ─────────────────────────────────────────────────
 
     def _build_visible_columns(self) -> list[str]:
+        base = list(BOM_EDIT_COLUMN_ORDER)
+        if self._show_filepath_col:
+            fn_idx = base.index("Filename") if "Filename" in base else -1
+            if fn_idx >= 0:
+                base.insert(fn_idx + 1, "Filepath")
         visible_preset = [
             c for c in PRESET_USER_REF_PROPERTIES if c in self._visible_preset_cols
         ]
@@ -220,13 +367,24 @@ class BomEditDialog(QDialog):
             c for c in self._custom_columns
             if c not in BOM_EDIT_COLUMN_ORDER and c not in PRESET_USER_REF_PROPERTIES
         ]
-        return BOM_EDIT_COLUMN_ORDER + visible_preset + other_custom
+        return base + visible_preset + other_custom
 
     def _on_preset_col_toggled(self) -> None:
         self._visible_preset_cols = [
             name for name, cb in self._preset_checkboxes.items() if cb.isChecked()
         ]
         self._edit_settings.setValue("visible_preset_columns", self._visible_preset_cols)
+        self._columns = self._build_visible_columns()
+        display_headers = [BOM_COLUMN_DISPLAY_NAMES.get(c, c) for c in self._columns]
+        self._table.setColumnCount(len(self._columns))
+        self._table.setHorizontalHeaderLabels(display_headers)
+        if self._rows:
+            self._populate_table()
+            self._table.resizeColumnsToContents()
+
+    def _on_show_filepath_toggled(self, checked: bool) -> None:
+        self._show_filepath_col = checked
+        self._edit_settings.setValue("show_filepath_column", checked)
         self._columns = self._build_visible_columns()
         display_headers = [BOM_COLUMN_DISPLAY_NAMES.get(c, c) for c in self._columns]
         self._table.setColumnCount(len(self._columns))
@@ -341,6 +499,7 @@ class BomEditDialog(QDialog):
         self._save_btn.setEnabled(True)
         self._finish_btn.setEnabled(True)
         self._rename_btn.setEnabled(True)
+        self._rename_file_btn.setEnabled(True)
 
     def _populate_table(self) -> None:
         self._is_updating = True
@@ -380,6 +539,8 @@ class BomEditDialog(QDialog):
                     value = self._level_cell_text(row_idx)
                 elif col_name == "Quantity":
                     value = str(row_data.get("Quantity", "1"))
+                elif col_name == "Filepath":
+                    value = str(row_data.get("_filepath", ""))
                 elif col_name in BOM_READONLY_COLUMNS:
                     value = str(row_data.get(col_name, ""))
                 else:
@@ -714,6 +875,121 @@ class BomEditDialog(QDialog):
                 f"已成功将 {renamed_count} 个文件通过CATIA另存为功能改名。",
             )
             self._populate_table()
+
+    def _rename_selected_file(self) -> None:
+        """Rename or move the file for a single selected BOM row via CATIA SaveAs."""
+        selected_rows = {idx.row() for idx in self._table.selectedIndexes()}
+        if len(selected_rows) != 1:
+            QMessageBox.warning(
+                self, "请选择单行",
+                "请在表格中选中恰好一行，再执行此操作。",
+            )
+            return
+
+        row_idx  = next(iter(selected_rows))
+        row_data = self._rows[row_idx]
+        fp       = str(row_data.get("_filepath", ""))
+
+        if not fp or row_data.get("_not_found"):
+            QMessageBox.warning(self, "无有效路径", "该行没有可用的文件路径，无法执行重命名/移动。")
+            return
+        if not Path(fp).exists():
+            QMessageBox.warning(self, "文件不存在", f"文件不存在：\n{fp}")
+            return
+
+        # Require attribute write-back before renaming to keep file content consistent.
+        orig_pn = str(row_data.get("Part Number", ""))
+        if orig_pn in self._modified_keys:
+            ret = QMessageBox.question(
+                self, "存在未写回的属性修改",
+                f"零件「{orig_pn}」的属性尚未写回CATIA。\n\n"
+                "必须先将修改写回CATIA，才能确保文件内容与表格一致。\n\n"
+                "是否立即执行写回？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return
+            self._write_back(close_on_success=False)
+            # Only proceed if write-back actually cleared the modifications;
+            # if it failed (error dialog shown), modified_keys still has the entry.
+            if orig_pn in self._modified_keys:
+                return
+
+        dlg = _FileRenameDialog(fp, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        new_fp                = dlg.new_path
+        target_existed_before = Path(new_fp).exists()
+
+        delete_old = (
+            QMessageBox.question(
+                self, "是否删除旧文件",
+                f"另存为完成后，是否删除旧文件？\n\n旧文件：{fp}",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            ) == QMessageBox.StandardButton.Yes
+        )
+
+        try:
+            from pycatia import catia as _pycatia
+            caa         = _pycatia()
+            application = caa.application
+            application.visible = True
+            documents   = application.documents
+            src         = Path(fp).resolve()
+
+            def _find_document_by_path(docs, path: Path):
+                for i in range(1, docs.count + 1):
+                    try:
+                        d = docs.item(i)
+                        if Path(d.full_name).resolve() == path:
+                            return d
+                    except Exception:
+                        pass
+                return None
+
+            target_doc = _find_document_by_path(documents, src)
+            if target_doc is None:
+                documents.open(str(src))
+                target_doc = _find_document_by_path(documents, src)
+
+            if target_doc is None:
+                QMessageBox.warning(
+                    self, "无法找到文档",
+                    f"无法在CATIA中找到或打开文档：\n{fp}",
+                )
+                return
+
+            target_doc.com_object.SaveAs(new_fp)
+
+            if delete_old and Path(fp).resolve() != Path(new_fp).resolve():
+                try:
+                    os.remove(fp)
+                except Exception as del_err:
+                    logger.warning(f"Failed to delete old file {fp}: {del_err}")
+
+            new_stem = Path(new_fp).stem
+            for row in self._rows:
+                if str(row.get("_filepath", "")) == fp:
+                    row["_filepath"] = new_fp
+                    row["Filename"]  = new_stem
+            self._populate_table()
+            QMessageBox.information(
+                self, "操作成功",
+                f"文件已成功另存为：\n{new_fp}",
+            )
+
+        except Exception as e:
+            if Path(fp).exists() and (target_existed_before or not Path(new_fp).exists()):
+                # The source file is intact and either the target already existed
+                # before (no overwrite) or it was never created – most likely the
+                # user clicked Cancel or No in CATIA's own SaveAs prompt.
+                logger.info(
+                    f"SaveAs skipped for {Path(fp).name} "
+                    f"(user cancelled or declined overwrite in CATIA; exception: {e})"
+                )
+                return
+            QMessageBox.warning(self, "另存为失败", f"文件操作失败：\n{e}")
 
     def _write_back(self, *, close_on_success: bool) -> None:
         """Write only the changed fields back to CATIA."""
