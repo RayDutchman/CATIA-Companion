@@ -392,9 +392,9 @@ class MainWindow(QMainWindow):
 
         template_path = templates_dir / name
         macros_dir = resource_path("macros")
-        macro_path = macros_dir / "generate_drawing.catvba"
+        macro_path = macros_dir / "generate_drawing.catvbs"
         if not macro_path.exists():
-            macro_path = macros_dir / "generate_drawing.catvbs"
+            macro_path = macros_dir / "generate_drawing.catvba"
         if not macro_path.exists():
             QMessageBox.warning(
                 self, "宏文件不存在",
