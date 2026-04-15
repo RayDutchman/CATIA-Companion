@@ -414,24 +414,28 @@ class MainWindow(QMainWindow):
     ) -> None:
         """Dispatch the correct SystemService.ExecuteScript call based on file type.
 
-        CATIA's ``ExecuteScript`` uses two different calling conventions:
+        CATIA's ``ExecuteScript`` signature::
 
-        * **LibraryType 1** (VBA project / .catvba): ``iLibraryName`` is the full
-          path to the ``.catvba`` binary project file; ``iProgramName`` is the VBA
-          module name.  Pass *module_name* to specify the module explicitly;
-          otherwise the stem of *macro_path* is used as the module name.
-        * **LibraryType 0** (CATScript / .catvbs / .catscript): ``iLibraryName``
-          must be the **parent directory** of the script file and ``iProgramName``
-          must be the **script filename** (e.g. ``"generate_drawing.catvbs"``).
-          The directory must be registered as a macro library in CATIA.  This
-          method attempts to register it automatically via
-          ``SystemService.MacroLibraries.Add`` before calling ``ExecuteScript``,
-          so no manual registration step is required.
+            SystemService.ExecuteScript(iLibraryName, iLibraryType,
+                                        iProgramName, iFunctionName, iParameters)
+
+        Official ``iLibraryType`` values:
+
+        * **0** – Document: macro stored inside a CATPart / CATProduct.
+        * **1** – Directory: macro stored as a loose file inside a registered
+          folder.  ``iLibraryName`` must be the folder path and ``iProgramName``
+          must be the script filename (e.g. ``"generate_drawing.catvbs"``).
+          The folder must be registered as a macro library; this method registers
+          it automatically via ``SystemService.MacroLibraries.Add(dir, 1)``
+          before calling ``ExecuteScript``.
+        * **2** – VBA Project: macro stored in a ``.catvba`` binary project file.
+          ``iLibraryName`` is the **full path** to the ``.catvba`` file and
+          ``iProgramName`` is the VBA **module name** inside that project.
         """
         if macro_path.suffix.lower() == ".catvba":
             vba_module = module_name or macro_path.stem
             app.com_object.SystemService.ExecuteScript(
-                str(macro_path), 1, vba_module, func_name, params
+                str(macro_path), 2, vba_module, func_name, params
             )
         else:
             lib_dir = str(macro_path.parent)
