@@ -80,6 +80,7 @@ Sub SyncToDrawingParameters(partDoc, drawingDoc)
 
 	'--- 获取零件用户自定义属性集合 ---
 	Dim partUserProps
+	Set partUserProps = Nothing
 	On Error Resume Next
 	Set partUserProps = partDoc.Part.UserRefProperties
 	On Error GoTo 0
