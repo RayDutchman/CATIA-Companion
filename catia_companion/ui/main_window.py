@@ -391,7 +391,16 @@ class MainWindow(QMainWindow):
             return
 
         template_path = templates_dir / name
-        self._generate_drawing_from_template(str(template_path))
+
+        # Prefer the VBA project (catia_companion.catvba / generate_drawing module)
+        # when available; fall back to the pure-Python COM implementation.
+        catvba_path = self._macros_dir() / "catia_companion.catvba"
+        if catvba_path.exists():
+            self._run_macro_with_template_path(
+                catvba_path, str(template_path), module_name="generate_drawing"
+            )
+        else:
+            self._generate_drawing_from_template(str(template_path))
 
     def _generate_drawing_from_template(self, template_path: str) -> None:
         """Generate a CATDrawing from *template_path* linked to the active CATPart.
@@ -485,14 +494,22 @@ class MainWindow(QMainWindow):
                 f"生成图纸时出错：\n\n{e}\n\n请确保 CATIA 已启动且已激活一个 CATPart 文档。",
             )
 
-    def _execute_script(self, app, macro_path: Path, func_name: str, params: list) -> None:
+    def _execute_script(
+        self,
+        app,
+        macro_path: Path,
+        func_name: str,
+        params: list,
+        module_name: str = "",
+    ) -> None:
         """Dispatch the correct SystemService.ExecuteScript call based on file type.
 
         CATIA's ``ExecuteScript`` uses two different calling conventions:
 
         * **LibraryType 1** (VBA project / .catvba): ``iLibraryName`` is the full
           path to the ``.catvba`` binary project file; ``iProgramName`` is the VBA
-          module name (conventionally ``"Module1"``).
+          module name.  Pass *module_name* to specify the module explicitly;
+          otherwise the stem of *macro_path* is used as the module name.
         * **LibraryType 0** (CATScript / .catvbs / .catscript): ``iLibraryName``
           must be the **parent directory** of the script file and ``iProgramName``
           must be the **script filename** (e.g. ``"generate_drawing.catvbs"``).
@@ -502,8 +519,9 @@ class MainWindow(QMainWindow):
           so no manual registration step is required.
         """
         if macro_path.suffix.lower() == ".catvba":
+            vba_module = module_name or macro_path.stem
             app.com_object.SystemService.ExecuteScript(
-                str(macro_path), 1, "Module1", func_name, params
+                str(macro_path), 1, vba_module, func_name, params
             )
         else:
             lib_dir = str(macro_path.parent)
@@ -515,18 +533,25 @@ class MainWindow(QMainWindow):
                 lib_dir, 0, macro_path.name, func_name, params
             )
 
-    def _run_macro_with_template_path(self, macro_path: Path, template_path: str) -> None:
+    def _run_macro_with_template_path(
+        self,
+        macro_path: Path,
+        template_path: str,
+        module_name: str = "",
+    ) -> None:
         """Run *macro_path* via CATIA's SystemService.ExecuteScript, passing
         *template_path* as a plain string in iParameters so that the macro can
         use it directly with ``templatePath = iParameters``.
 
         Supports both .catvba (VBA project) and .catvbs/.catscript (CATScript).
+        For .catvba files, *module_name* specifies the VBA module to invoke (defaults
+        to the stem of *macro_path* when not provided).
         """
         try:
             from pycatia import catia as _catia
             caa = _catia()
             app = caa.application
-            self._execute_script(app, macro_path, "CATMain", [template_path])
+            self._execute_script(app, macro_path, "CATMain", [template_path], module_name)
             logger.info(f"Macro executed: {macro_path.name} | templatePath={template_path}")
         except Exception as e:
             logger.error(f"Failed to run macro {macro_path.name}: {e}")
