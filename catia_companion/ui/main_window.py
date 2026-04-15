@@ -392,15 +392,17 @@ class MainWindow(QMainWindow):
 
         template_path = templates_dir / name
 
-        catvbs_path = self._macros_dir() / "generate_drawing.catvbs"
-        if not catvbs_path.exists():
+        catvba_path = self._macros_dir() / "catia_companion.catvba"
+        if not catvba_path.exists():
             QMessageBox.warning(
                 self, "宏文件未找到",
-                f"未找到宏脚本：\n{catvbs_path}\n\n"
-                "请将 generate_drawing.catvbs 放入 macros 文件夹后重试。",
+                f"未找到 VBA 宏文件：\n{catvba_path}\n\n"
+                "请将 catia_companion.catvba 放入 macros 文件夹后重试。",
             )
             return
-        self._run_macro_with_template_path(catvbs_path, str(template_path))
+        self._run_macro_with_template_path(
+            catvba_path, str(template_path), module_name="generate_drawing"
+        )
 
     def _execute_script(
         self,
