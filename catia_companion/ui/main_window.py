@@ -392,12 +392,22 @@ class MainWindow(QMainWindow):
 
         template_path = templates_dir / name
         macros_dir = resource_path("macros")
-        macro_path = macros_dir / "generate_drawing.catvbs"
+
+        # Prefer .catvba (LibraryType 1 – full file path, no CATIA library
+        # registration required).  Fall back to .catvbs only when .catvba is
+        # absent; .catvbs requires the macros folder to be registered in CATIA
+        # under Tools → Macro → Macro Libraries (LibraryType 0).
+        macro_path = macros_dir / "generate_drawing.catvba"
+        if not macro_path.exists():
+            macro_path = macros_dir / "generate_drawing.catvbs"
         if not macro_path.exists():
             QMessageBox.warning(
                 self, "宏文件不存在",
-                f"未找到图纸生成宏文件。\n\n"
-                "请将 generate_drawing.catvbs 放入 macros 文件夹。",
+                "未找到图纸生成宏文件。\n\n"
+                "请将 generate_drawing.catvba（推荐）或 generate_drawing.catvbs "
+                "放入 macros 文件夹。\n\n"
+                "注意：使用 .catvbs 文件时，需先在 CATIA 中将 macros 文件夹注册为宏库\n"
+                "（工具 → 宏 → 宏库 → 添加目录）。",
             )
             return
 
@@ -408,11 +418,14 @@ class MainWindow(QMainWindow):
 
         CATIA's ``ExecuteScript`` uses two different calling conventions:
 
-        * **LibraryType 0** (CATScript / .catvbs / .catscript): the library is a
-          *folder*; ProgramName is the filename inside that folder.
         * **LibraryType 1** (VBA project / .catvba): the library is the *full path*
           to the ``.catvba`` binary project file; ProgramName is the VBA module
-          name (conventionally ``"Module1"``).
+          name (conventionally ``"Module1"``).  **No registration required.**
+        * **LibraryType 0** (CATScript / .catvbs / .catscript): the library is a
+          *registered* folder; ProgramName is the filename inside that folder.
+          The folder **must** be registered in CATIA under
+          Tools → Macro → Macro Libraries, otherwise CATIA raises
+          ``-2147467259 未知宏库``.  Prefer ``.catvba`` to avoid this requirement.
         """
         if macro_path.suffix.lower() == ".catvba":
             app.com_object.SystemService.ExecuteScript(
