@@ -46,6 +46,5 @@ $RECYCLE.BIN/
 # Ignore auto-generated config files; keep manually committed ones if any
 *.ini
 *.cfg
-macros/generate_drawing.catvbs
 macros/generate_drawing.catvba
 macros/catia_companion.catvba
