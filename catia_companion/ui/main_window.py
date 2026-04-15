@@ -392,107 +392,17 @@ class MainWindow(QMainWindow):
 
         template_path = templates_dir / name
 
-        # Prefer the VBA project (catia_companion.catvba / generate_drawing module)
-        # when available; fall back to the pure-Python COM implementation.
         catvba_path = self._macros_dir() / "catia_companion.catvba"
-        if catvba_path.exists():
-            self._run_macro_with_template_path(
-                catvba_path, str(template_path), module_name="generate_drawing"
+        if not catvba_path.exists():
+            QMessageBox.warning(
+                self, "宏文件未找到",
+                f"未找到 VBA 宏文件：\n{catvba_path}\n\n"
+                "请将 catia_companion.catvba 放入 macros 文件夹后重试。",
             )
-        else:
-            self._generate_drawing_from_template(str(template_path))
-
-    def _generate_drawing_from_template(self, template_path: str) -> None:
-        """Generate a CATDrawing from *template_path* linked to the active CATPart.
-
-        This method replicates the logic of ``generate_drawing.catvbs`` entirely
-        through Python COM calls so that no macro library registration is needed.
-        """
-        try:
-            from pycatia import catia as _catia
-            caa = _catia()
-            app = caa.application
-
-            # 1. Validate active document is a PartDocument
-            try:
-                active_doc = app.com_object.ActiveDocument
-            except Exception as exc:
-                QMessageBox.warning(
-                    self, "文档类型错误",
-                    "请先在 CATIA 中激活一个 CATPart 文档！",
-                )
-                return
-
-            # TypeName() is the reliable way to check the document type via COM.
-            try:
-                doc_type = app.com_object.SystemService.Evaluate(
-                    "TypeName(CATIA.ActiveDocument)", 0, "", []
-                )
-            except Exception:
-                doc_type = ""
-
-            if doc_type != "PartDocument":
-                QMessageBox.warning(
-                    self, "文档类型错误",
-                    "请先在 CATIA 中激活一个 CATPart 文档！",
-                )
-                return
-
-            part_doc = active_doc
-
-            # 2. Open the drawing template as a new document
-            drawing_doc = app.com_object.Documents.NewFrom(template_path)
-
-            # 3. Sync part standard properties → drawing parameters
-            props_to_sync = {
-                "PartNumber": part_doc.Product.PartNumber,
-                "Nomenclature": part_doc.Product.Nomenclature,
-                "Revision": part_doc.Product.Revision,
-            }
-
-            # Also gather user-defined custom properties
-            custom_prop_names = ["物料编码", "材料", "重量"]
-            try:
-                user_props = part_doc.Product.UserRefProperties
-                for prop_name in custom_prop_names:
-                    try:
-                        props_to_sync[prop_name] = user_props.Item(prop_name).Value
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-            params = drawing_doc.Parameters
-            for prop_name, prop_value in props_to_sync.items():
-                try:
-                    param = params.Item(prop_name)
-                    param.Value = prop_value
-                except Exception:
-                    pass
-
-            # 4. Activate the first drawing sheet and create a front view
-            drawing_sheet = drawing_doc.Sheets.Item(1)
-            drawing_sheet.Activate()
-
-            front_view = drawing_sheet.Views.Add("正视图")
-            front_view.x = 150
-            front_view.y = 200
-            front_view.GenerativeBehavior.Document = part_doc
-            front_view.GenerativeBehavior.Update()
-
-            drawing_doc.Update()
-
-            logger.info(
-                f"Drawing generated from template: {template_path} | "
-                f"part: {part_doc.Name}"
-            )
-
-        except Exception as e:
-            logger.error(f"Failed to generate drawing: {e}")
-            QMessageBox.critical(
-                self, "图纸生成失败",
-                f"生成图纸时出错：\n\n{e}\n\n请确保 CATIA 已启动且已激活一个 CATPart 文档。",
-            )
+            return
+        self._run_macro_with_template_path(
+            catvba_path, str(template_path), module_name="generate_drawing"
+        )
 
     def _execute_script(
         self,
