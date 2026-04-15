@@ -5,22 +5,15 @@ Option Explicit
 '
 ' CATIA Companion passes the selected CATDrawing template path as a plain
 ' string in iParameters.  The macro uses it directly as templatePath.
+' When invoked without a parameter, CATIA itself prompts the user.
 '
 ' ----------------------------------------------------------------------------
 
 Sub CATMain(iParameters)
 
 	'--- 1. 定义模板路径 ---
-	' iParameters 来源有两种：
-	'   (a) CATIA Companion 调用：直接传入模板路径字符串
-	'   (b) 无参数 / 手动运行：弹出 InputBox 让用户填写
 	Dim templatePath
-	If Not IsEmpty(iParameters) And Not IsNull(iParameters) And CStr(iParameters) <> "" Then
-		templatePath = CStr(iParameters)
-	Else
-		templatePath = InputBox("请输入 CATDrawing 模板文件的完整路径：", "CATIA Companion -- Generate Drawing", "C:\Templates\MyTemplate.CATDrawing")
-		If templatePath = "" Then Exit Sub
-	End If
+	templatePath = CStr(iParameters)
 
 	'--- 2. 验证当前活动文档是否为零件 ---
 	If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then
