@@ -438,7 +438,7 @@ class MainWindow(QMainWindow):
             from pycatia import catia as _catia
             caa = _catia()
             app = caa.application
-            self._execute_script(app, macro_path, "CATMain", template_path)
+            self._execute_script(app, macro_path, "CATMain", [template_path])
             logger.info(f"Macro executed: {macro_path.name} | templatePath={template_path}")
         except Exception as e:
             logger.error(f"Failed to run macro {macro_path.name}: {e}")

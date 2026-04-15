@@ -13,7 +13,7 @@ Sub CATMain(iParameters)
 
 	'--- 1. 定义模板路径 ---
 	Dim templatePath
-	templatePath = CStr(iParameters)
+	templatePath = CStr(iParameters(0))
 
 	'--- 2. 验证当前活动文档是否为零件 ---
 	If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then
