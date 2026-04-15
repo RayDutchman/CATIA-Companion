@@ -26,6 +26,8 @@ ABOUT_TEXT = f"""{APP_NAME} v{APP_VERSION}
   • CATPart / CATProduct 批量导出 STEP
   • CATProduct BOM 导出到 Excel
   • BOM 属性在线编辑与回写 CATIA
+  • 新建图纸（从模板生成 CATDrawing）
+  • 刷新图纸（同步零件属性到图纸参数）
   • CATIA 宏脚本快捷运行
   • 零件模板刷写（添加标准用户自定义属性）
   • 字体文件 / ISO.xml 标准文件一键部署

@@ -52,6 +52,15 @@ _HELP_HTML = f"""\
     定义、版本、来源等字段，以及自定义的用户属性（物料编码、物料名称、
     规格型号等）。修改完成后可一键写回 CATIA。<br/>
     <i>同一文件的属性修改会自动联动更新。</i></td></tr>
+<tr><td><b>新建图纸</b></td>
+    <td>根据 drawing_templates 文件夹中的 CATDrawing 模板，在 CATIA 中为当前
+    活动的 CATPart 或 CATProduct 生成新图纸。<br/>
+    <i>需在 CATIA 中打开目标零件/装配体，并将 *.CATDrawing 模板放入
+    drawing_templates 文件夹。</i></td></tr>
+<tr><td><b>刷新图纸</b></td>
+    <td>将 CATIA 中当前活动 CATDrawing 图纸的参数（零件编号、术语、版本及
+    自定义属性）与对应的零件/装配体同步刷新。<br/>
+    <i>需在 CATIA 中同时打开目标图纸和对应零件/装配体文档。</i></td></tr>
 </table>
 
 <h4>三、工具</h4>

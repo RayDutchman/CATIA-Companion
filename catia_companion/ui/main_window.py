@@ -103,6 +103,22 @@ class MainWindow(QMainWindow):
         btn_bom_edit.clicked.connect(self._open_bom_edit_dialog)
 
         edit_layout.addWidget(btn_bom_edit)
+
+        drawing_row = QHBoxLayout()
+        drawing_row.setSpacing(6)
+
+        btn_new_drawing = QPushButton("新建图纸")
+        btn_new_drawing.setToolTip("从 CATPart/CATProduct 生成 CATDrawing 图纸")
+        btn_new_drawing.clicked.connect(self._open_generate_drawing_dialog)
+
+        btn_refresh_drawing = QPushButton("刷新图纸")
+        btn_refresh_drawing.setToolTip("刷新当前活动图纸的参数信息（从对应零件/装配体同步属性）")
+        btn_refresh_drawing.clicked.connect(self._open_refresh_drawing_dialog)
+
+        drawing_row.addWidget(btn_new_drawing)
+        drawing_row.addWidget(btn_refresh_drawing)
+        edit_layout.addLayout(drawing_row)
+
         layout.addWidget(edit_group)
 
         # ── Tools group ──────────────────────────────────────────────────
@@ -176,6 +192,10 @@ class MainWindow(QMainWindow):
         drawing_menu.addAction(QAction(
             "从CATPart/CATProduct生成图纸", self,
             triggered=self._open_generate_drawing_dialog,
+        ))
+        drawing_menu.addAction(QAction(
+            "刷新图纸信息", self,
+            triggered=self._open_refresh_drawing_dialog,
         ))
 
         # Macro
@@ -404,6 +424,18 @@ class MainWindow(QMainWindow):
             )
             return
         self._run_template_macro(catvbs_path, str(template_path))
+
+    def _open_refresh_drawing_dialog(self) -> None:
+        """刷新当前活动图纸的参数信息（通过 refresh_drawing_info.catvbs 宏）。"""
+        catvbs_path = self._macros_dir() / "refresh_drawing_info.catvbs"
+        if not catvbs_path.exists():
+            QMessageBox.warning(
+                self, "宏文件未找到",
+                f"未找到 CATScript 宏文件：\n{catvbs_path}\n\n"
+                "请将 refresh_drawing_info.catvbs 放入 macros 文件夹后重试。",
+            )
+            return
+        self._run_macro(catvbs_path)
 
     def _execute_catscript(
         self,
