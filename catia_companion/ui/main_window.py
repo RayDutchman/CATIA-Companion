@@ -412,19 +412,25 @@ class MainWindow(QMainWindow):
           path to the ``.catvba`` binary project file; ``iProgramName`` is the VBA
           module name (conventionally ``"Module1"``).
         * **LibraryType 0** (CATScript / .catvbs / .catscript): ``iLibraryName``
-          is the **full path to the script file** and ``iProgramName`` is an empty
-          string.  Passing the parent directory instead requires that directory to
-          be registered in CATIA under Tools → Macro → Macro Libraries, which
-          causes ``-2147467259 未知宏库`` on unregistered installations.  Using the
-          full file path avoids this requirement entirely.
+          must be the **parent directory** of the script file and ``iProgramName``
+          must be the **script filename** (e.g. ``"generate_drawing.catvbs"``).
+          The directory must be registered as a macro library in CATIA.  This
+          method attempts to register it automatically via
+          ``SystemService.MacroLibraries.Add`` before calling ``ExecuteScript``,
+          so no manual registration step is required.
         """
         if macro_path.suffix.lower() == ".catvba":
             app.com_object.SystemService.ExecuteScript(
                 str(macro_path), 1, "Module1", func_name, params
             )
         else:
+            lib_dir = str(macro_path.parent)
+            try:
+                app.com_object.SystemService.MacroLibraries.Add(lib_dir, 0)
+            except Exception:
+                pass
             app.com_object.SystemService.ExecuteScript(
-                str(macro_path), 0, "", func_name, params
+                lib_dir, 0, macro_path.name, func_name, params
             )
 
     def _run_macro_with_template_path(self, macro_path: Path, template_path: str) -> None:
