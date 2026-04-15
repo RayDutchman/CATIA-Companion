@@ -42,7 +42,8 @@ logger = logging.getLogger(__name__)
 class MainWindow(QMainWindow):
     """Primary application window."""
 
-    _MACRO_EXTENSIONS: frozenset[str] = frozenset({".catvbs", ".catscript", ".catvba"})
+    # 快速运行宏仅支持 CATScript 文件（.catvbs / .catscript），不支持 .catvba
+    _MACRO_EXTENSIONS: frozenset[str] = frozenset({".catvbs", ".catscript"})
 
     def __init__(self) -> None:
         super().__init__()
@@ -298,10 +299,11 @@ class MainWindow(QMainWindow):
             from pycatia import catia as _catia
             caa = _catia()
             app = caa.application
-            self._execute_script(app, macro_path, "CATMain", [])
-            logger.info(f"Macro executed: {macro_path.name}")
+            # 不传递额外参数，直接运行宏入口函数 CATMain
+            self._execute_catscript(app, macro_path, "CATMain", [])
+            logger.info(f"宏执行成功：{macro_path.name}")
         except Exception as e:
-            logger.error(f"Failed to run macro {macro_path.name}: {e}")
+            logger.error(f"宏执行失败 {macro_path.name}: {e}")
             QMessageBox.critical(
                 self, "宏执行失败",
                 f"运行宏时出错：\n{macro_path.name}\n\n{e}\n\n请确保CATIA已启动。",
@@ -392,83 +394,59 @@ class MainWindow(QMainWindow):
 
         template_path = templates_dir / name
 
-        catvba_path = self._macros_dir() / "catia_companion.catvba"
-        if not catvba_path.exists():
+        # 优先使用同名的 .catvbs 脚本；若不存在则提示用户
+        catvbs_path = self._macros_dir() / "generate_drawing.catvbs"
+        if not catvbs_path.exists():
             QMessageBox.warning(
                 self, "宏文件未找到",
-                f"未找到 VBA 宏文件：\n{catvba_path}\n\n"
-                "请将 catia_companion.catvba 放入 macros 文件夹后重试。",
+                f"未找到 CATScript 宏文件：\n{catvbs_path}\n\n"
+                "请将 generate_drawing.catvbs 放入 macros 文件夹后重试。",
             )
             return
-        self._run_macro_with_template_path(
-            catvba_path, str(template_path), module_name="generate_drawing"
-        )
+        self._run_template_macro(catvbs_path, str(template_path))
 
-    def _execute_script(
+    def _execute_catscript(
         self,
         app,
         macro_path: Path,
         func_name: str,
         params: list,
-        module_name: str = "",
     ) -> None:
-        """Dispatch the correct SystemService.ExecuteScript call based on file type.
+        """调用 CATIA SystemService.ExecuteScript 执行 CATScript 宏（.catvbs / .catscript）。
 
-        CATIA's ``ExecuteScript`` signature::
+        CATIA ExecuteScript 签名::
 
             SystemService.ExecuteScript(iLibraryName, iLibraryType,
                                         iProgramName, iFunctionName, iParameters)
 
-        Official ``iLibraryType`` values:
-
-        * **0** – Document: macro stored inside a CATPart / CATProduct.
-        * **1** – Directory: macro stored as a loose file inside a registered
-          folder.  ``iLibraryName`` must be the folder path and ``iProgramName``
-          must be the script filename (e.g. ``"generate_drawing.catvbs"``).
-          The folder must be registered as a macro library; this method registers
-          it automatically via ``SystemService.MacroLibraries.Add(dir, 1)``
-          before calling ``ExecuteScript``.
-        * **2** – VBA Project: macro stored in a ``.catvba`` binary project file.
-          ``iLibraryName`` is the **full path** to the ``.catvba`` file and
-          ``iProgramName`` is the VBA **module name** inside that project.
+        此处使用 iLibraryType=1（目录模式）：
+          - iLibraryName：宏文件所在目录
+          - iProgramName：宏文件名（含扩展名）
+          - iFunctionName：要调用的函数/子程序名（通常为 "CATMain"）
+          - iParameters：传递给宏的参数列表
         """
-        if macro_path.suffix.lower() == ".catvba":
-            vba_module = module_name or macro_path.stem
-            app.com_object.SystemService.ExecuteScript(
-                str(macro_path), 2, vba_module, func_name, params
-            )
-        else:
-            lib_dir = str(macro_path.parent)
-            try:
-                app.com_object.SystemService.MacroLibraries.Add(lib_dir, 1)
-            except Exception:
-                pass
-            app.com_object.SystemService.ExecuteScript(
-                lib_dir, 1, macro_path.name, func_name, params
-            )
+        lib_dir = str(macro_path.parent)
+        app.com_object.SystemService.ExecuteScript(
+            lib_dir, 1, macro_path.name, func_name, params
+        )
 
-    def _run_macro_with_template_path(
+    def _run_template_macro(
         self,
         macro_path: Path,
         template_path: str,
-        module_name: str = "",
     ) -> None:
-        """Run *macro_path* via CATIA's SystemService.ExecuteScript, passing
-        *template_path* as a plain string in iParameters so that the macro can
-        use it directly with ``templatePath = iParameters``.
-
-        Supports both .catvba (VBA project) and .catvbs/.catscript (CATScript).
-        For .catvba files, *module_name* specifies the VBA module to invoke (defaults
-        to the stem of *macro_path* when not provided).
+        """通过 CATIA SystemService.ExecuteScript 运行指定的 CATScript 宏，
+        并将模板文件路径作为参数传入，宏内可通过 iParameters 直接获取。
         """
         try:
             from pycatia import catia as _catia
             caa = _catia()
             app = caa.application
-            self._execute_script(app, macro_path, "CATMain", [template_path], module_name)
-            logger.info(f"Macro executed: {macro_path.name} | templatePath={template_path}")
+            # 将模板路径作为单一字符串参数传递给宏的 CATMain 函数
+            self._execute_catscript(app, macro_path, "CATMain", [template_path])
+            logger.info(f"宏执行成功：{macro_path.name} | 模板路径={template_path}")
         except Exception as e:
-            logger.error(f"Failed to run macro {macro_path.name}: {e}")
+            logger.error(f"宏执行失败 {macro_path.name}: {e}")
             QMessageBox.critical(
                 self, "宏执行失败",
                 f"运行宏时出错：\n{macro_path.name}\n\n{e}\n\n请确保CATIA已启动。",
