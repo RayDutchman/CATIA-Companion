@@ -440,11 +440,11 @@ class MainWindow(QMainWindow):
         else:
             lib_dir = str(macro_path.parent)
             try:
-                app.com_object.SystemService.MacroLibraries.Add(lib_dir, 0)
+                app.com_object.SystemService.MacroLibraries.Add(lib_dir, 1)
             except Exception:
                 pass
             app.com_object.SystemService.ExecuteScript(
-                lib_dir, 0, macro_path.name, func_name, params
+                lib_dir, 1, macro_path.name, func_name, params
             )
 
     def _run_macro_with_template_path(
