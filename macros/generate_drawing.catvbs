@@ -50,36 +50,6 @@ Sub CATMain(iParameters)
 	'frontView.GenerativeBehavior.Document = partDoc
 	'frontView.GenerativeBehavior.Update
 
-	'--- 7. 将图纸另存为 "DR_" + PartNumber，存放在与零件相同的目录下 ---
-	Dim partNumber
-	partNumber = ""
-	On Error Resume Next
-	partNumber = partDoc.Product.PartNumber
-	On Error GoTo 0
-
-	If partNumber <> "" Then
-		Dim partFullName
-		partFullName = ""
-		On Error Resume Next
-		partFullName = partDoc.FullName
-		On Error GoTo 0
-
-		If partFullName <> "" Then
-			Dim partDir
-			partDir = Left(partFullName, InStrRev(partFullName, "\") - 1)
-			Dim newDrawingPath
-			newDrawingPath = partDir & "\DR_" & partNumber & ".CATDrawing"
-			On Error Resume Next
-			drawingDoc.SaveAs newDrawingPath
-			If Err.Number <> 0 Then
-				MsgBox "图纸另存失败：" & Err.Description & Chr(10) & _
-				       "目标路径：" & newDrawingPath, vbExclamation, "另存图纸"
-				Err.Clear
-			End If
-			On Error GoTo 0
-		End If
-	End If
-
 End Sub
 
 Sub SyncToDrawingParameters(partDoc, drawingDoc)
