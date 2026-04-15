@@ -24,6 +24,9 @@ from catia_companion.constants import (
     ABOUT_TEXT,
     MAIN_WINDOW_DEFAULT_WIDTH,
     MAIN_WINDOW_DEFAULT_HEIGHT,
+    FONT_FILE_PATH,
+    ISO_XML_FILE_PATH,
+    POJIE_DIR_PATH,
 )
 from catia_companion.utils import resource_path, detect_catia_root
 from catia_companion.logging_setup import log_signal_emitter
@@ -488,22 +491,23 @@ class MainWindow(QMainWindow):
 
     def _copy_font_to_catia(self) -> None:
         self._copy_file_to_catia(
-            file_name="ChangFangSong.ttf",
+            file_name=FONT_FILE_PATH,
             relative_dest=Path("win_b64") / "resources" / "fonts" / "TrueType",
         )
 
     def _copy_iso_to_catia(self) -> None:
         self._copy_file_to_catia(
-            file_name="ISO.xml",
+            file_name=ISO_XML_FILE_PATH,
             relative_dest=Path("win_b64") / "resources" / "standard" / "drafting",
         )
 
     def _copy_file_to_catia(self, file_name: str, relative_dest: Path) -> None:
         src_file = resource_path(file_name)
+        base_name = Path(file_name).name
         if not src_file.exists():
             QMessageBox.warning(
                 self, "文件未找到",
-                f"在工作目录中找不到 '{file_name}'：\n{src_file.parent}",
+                f"在工作目录中找不到 '{base_name}'：\n{src_file.parent}",
             )
             return
 
@@ -538,12 +542,12 @@ class MainWindow(QMainWindow):
             else:
                 return
 
-        dest_file = dest_dir / file_name
+        dest_file = dest_dir / base_name
         try:
             shutil.copy2(str(src_file), str(dest_file))
             QMessageBox.information(
                 self, "成功",
-                f"'{file_name}' 已成功复制到：\n{dest_file}",
+                f"'{base_name}' 已成功复制到：\n{dest_file}",
             )
         except PermissionError:
             QMessageBox.critical(
@@ -554,7 +558,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "错误", f"发生意外错误：\n{e}")
 
     def _pojie(self) -> None:
-        src_dir = resource_path("Pojie")
+        src_dir = resource_path(POJIE_DIR_PATH)
         if not src_dir.exists() or not src_dir.is_dir():
             QMessageBox.warning(
                 self, "文件夹未找到",

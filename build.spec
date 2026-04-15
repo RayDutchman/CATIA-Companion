@@ -5,6 +5,10 @@
 #
 # Output: dist/CATIA Companion/
 # The executable and resource files will all be in the same folder.
+#
+# Before building, place the application icon at:
+#   resources/icon.ico
+# Then uncomment the `icon=` line in the EXE block below.
 
 block_cipher = None
 
@@ -13,8 +17,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('ISO.xml', '.'),
-        ('ChangFangSong.ttf', '.'),
+        ('resources', 'resources'),
         ('catia_companion/ui/style.qss', 'catia_companion/ui'),
         ('catia_companion', 'catia_companion'),
     ],
@@ -46,6 +49,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    # icon='resources/icon.ico',  # Uncomment after placing icon.ico in resources/
 )
 
 coll = COLLECT(

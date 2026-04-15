@@ -10,9 +10,10 @@ import sys
 # Ensure logging and Qt signal emitter are initialised before any widget is created.
 import catia_companion.logging_setup  # noqa: F401
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 from catia_companion.utils import resource_path
-from catia_companion.constants import STYLESHEET_RELATIVE_PATH
+from catia_companion.constants import STYLESHEET_RELATIVE_PATH, APP_ICON_PATH
 from catia_companion.ui.main_window import MainWindow
 
 
@@ -24,6 +25,11 @@ def main() -> None:
     qss_path = resource_path(STYLESHEET_RELATIVE_PATH)
     if qss_path.exists():
         app.setStyleSheet(qss_path.read_text(encoding="utf-8"))
+
+    # Set application icon (resources/icon.ico); silently skipped if not yet provided
+    icon_path = resource_path(APP_ICON_PATH)
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     window = MainWindow()
     window.show()
