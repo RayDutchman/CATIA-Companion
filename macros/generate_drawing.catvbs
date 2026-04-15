@@ -11,21 +11,23 @@ Option Explicit
 Sub CATMain(iParameters)
 
 	'--- 1. 定义模板路径 ---
-	Dim templatePath As String
+	Dim templatePath
 	templatePath = iParameters(0)
-	
+
 	'--- 2. 验证当前活动文档是否为零件 ---
 	If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then
 		MsgBox "请先激活一个 CATPart 文档！", vbExclamation
 		Exit Sub
 	End If
+	Dim partDoc
+	Set partDoc = CATIA.ActiveDocument
 	If Dir(templatePath) = "" Then
 		MsgBox "模板文件不存在：" & vbCrLf & templatePath, vbCritical
 		Exit Sub
 	End If
 
 	'--- 3. 用 NewFrom 创建新图纸 ---
-	Dim drawingDoc As DrawingDocument
+	Dim drawingDoc
 	Set drawingDoc = CATIA.Documents.NewFrom(templatePath)
 
 	If TypeName(drawingDoc) <> "DrawingDocument" Then
@@ -37,15 +39,15 @@ Sub CATMain(iParameters)
 	Call SyncToDrawingParameters(partDoc, drawingDoc)
 
 	'--- 5. 获取第一张图纸页 ---
-	Dim drawingSheet As Object
+	Dim drawingSheet
 	Set drawingSheet = drawingDoc.Sheets.Item(1)
 	drawingSheet.Activate
 
 	'--- 6. 创建前视图 ---
-	Dim views As DrawingViews
+	Dim views
 	Set views = drawingSheet.Views
 
-	Dim frontView As DrawingView
+	Dim frontView
 	Set frontView = views.Add("正视图")
 	frontView.X = 150
 	frontView.Y = 200
@@ -58,12 +60,12 @@ Sub CATMain(iParameters)
 
 End Sub
 
-Sub SyncToDrawingParameters(partDoc As PartDocument, drawingDoc As DrawingDocument)
+Sub SyncToDrawingParameters(partDoc, drawingDoc)
 
 	'--- 从零件读取标准属性 ---
-	Dim partNumber   As String
-	Dim nomenclature As String
-	Dim revision     As String
+	Dim partNumber
+	Dim nomenclature
+	Dim revision
 
 	On Error Resume Next
 	partNumber   = partDoc.Product.PartNumber
@@ -77,7 +79,7 @@ Sub SyncToDrawingParameters(partDoc As PartDocument, drawingDoc As DrawingDocume
 	Debug.Print "  Revision     = " & revision
 
 	'--- 获取零件用户自定义属性集合 ---
-	Dim partUserProps As Object
+	Dim partUserProps
 	On Error Resume Next
 	Set partUserProps = partDoc.Part.UserRefProperties
 	On Error GoTo 0
@@ -87,7 +89,7 @@ Sub SyncToDrawingParameters(partDoc As PartDocument, drawingDoc As DrawingDocume
 	End If
 
 	'--- 定义需要同步的自定义属性名列表 ---
-	Dim propNames As Variant
+	Dim propNames
 	propNames = Array( _
 		"物料编码", _
 		"材料", _
@@ -95,10 +97,10 @@ Sub SyncToDrawingParameters(partDoc As PartDocument, drawingDoc As DrawingDocume
 	)
 
 	'--- 获取图纸参数集合 ---
-	Dim params As Object
+	Dim params
 	Set params = drawingDoc.Parameters
 
-	Dim param As Object
+	Dim param
 	On Error Resume Next
 
 	'--- 同步标准属性 ---
@@ -130,12 +132,12 @@ Sub SyncToDrawingParameters(partDoc As PartDocument, drawingDoc As DrawingDocume
 	Set param = Nothing
 
 	'--- 批量同步自定义属性 ---
-	Dim i As Integer
+	Dim i
 	For i = 0 To UBound(propNames)
-		Dim propName As String
+		Dim propName
 		propName = propNames(i)
 
-		Dim propValue As String
+		Dim propValue
 		propValue = ""
 
 		If Not partUserProps Is Nothing Then
