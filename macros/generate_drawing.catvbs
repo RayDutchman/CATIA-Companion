@@ -10,11 +10,11 @@ Option Explicit
 ' ----------------------------------------------------------------------------
 
 Sub CATMain(iParameters)
-
+'Sub CATMain()
 	'--- 1. 定义模板路径 ---
 	Dim templatePath
 	templatePath = CStr(iParameters(0))
-
+	'templatePath = "D:\QT-pySide6-CATIA\CATIA-Companion\Newest\CATIA-Companion\drawing_templates\Drawing5.CATDrawing"
 	'--- 2. 验证当前活动文档是否为零件 ---
 	If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then
 		MsgBox "请先激活一个 CATPart 文档！", vbExclamation
@@ -50,10 +50,6 @@ Sub CATMain(iParameters)
 	frontView.GenerativeBehavior.Document = partDoc
 	frontView.GenerativeBehavior.Update
 
-	MsgBox "Template: " & templatePath & Chr(13) & Chr(10) & _
-		"Implement drawing generation logic in generate_drawing.catvbs.", _
-		vbInformation, "CATIA Companion -- Generate Drawing"
-
 End Sub
 
 Sub SyncToDrawingParameters(partDoc, drawingDoc)
@@ -73,16 +69,16 @@ Sub SyncToDrawingParameters(partDoc, drawingDoc)
 	revision     = partDoc.Product.Revision
 	On Error GoTo 0
 
-	logMsg = logMsg & "零件属性读取：" & Chr(10)
-	logMsg = logMsg & "  PartNumber   = " & partNumber & Chr(10)
-	logMsg = logMsg & "  Nomenclature = " & nomenclature & Chr(10)
-	logMsg = logMsg & "  Revision     = " & revision & Chr(10)
+	'logMsg = logMsg & "零件属性读取：" & Chr(10)
+	'logMsg = logMsg & "  PartNumber   = " & partNumber & Chr(10)
+	'logMsg = logMsg & "  Nomenclature = " & nomenclature & Chr(10)
+	'logMsg = logMsg & "  Revision     = " & revision & Chr(10)
 
 	'--- 获取零件用户自定义属性集合 ---
 	Dim partUserProps
 	Set partUserProps = Nothing
 	On Error Resume Next
-	Set partUserProps = partDoc.Part.UserRefProperties
+	Set partUserProps = partDoc.Product.UserRefProperties
 	On Error GoTo 0
 
 	If partUserProps Is Nothing Then
@@ -108,7 +104,7 @@ Sub SyncToDrawingParameters(partDoc, drawingDoc)
 	Set param = params.Item("PartNumber")
 	If Not param Is Nothing Then
 		param.Value = partNumber
-		logMsg = logMsg & "已同步 PartNumber = " & partNumber & Chr(10)
+		logMsg = logMsg & "已同步： PartNumber = " & partNumber & Chr(10)
 	Else
 		logMsg = logMsg & "图纸中未找到参数 PartNumber" & Chr(10)
 	End If
@@ -117,7 +113,7 @@ Sub SyncToDrawingParameters(partDoc, drawingDoc)
 	Set param = params.Item("Nomenclature")
 	If Not param Is Nothing Then
 		param.Value = nomenclature
-		logMsg = logMsg & "已同步 Nomenclature = " & nomenclature & Chr(10)
+		logMsg = logMsg & "已同步： Nomenclature = " & nomenclature & Chr(10)
 	Else
 		logMsg = logMsg & "图纸中未找到参数 Nomenclature" & Chr(10)
 	End If
@@ -126,7 +122,7 @@ Sub SyncToDrawingParameters(partDoc, drawingDoc)
 	Set param = params.Item("Revision")
 	If Not param Is Nothing Then
 		param.Value = revision
-		logMsg = logMsg & "已同步 Revision = " & revision & Chr(10)
+		logMsg = logMsg & "已同步： Revision = " & revision & Chr(10)
 	Else
 		logMsg = logMsg & "图纸中未找到参数 Revision" & Chr(10)
 	End If
