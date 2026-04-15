@@ -429,8 +429,8 @@ class MainWindow(QMainWindow):
 
     def _run_macro_with_template_path(self, macro_path: Path, template_path: str) -> None:
         """Run *macro_path* via CATIA's SystemService.ExecuteScript, passing
-        *template_path* as the first element of the iParameters array so that
-        the macro can retrieve it with ``iParameters(0)``.
+        *template_path* as a plain string in iParameters so that the macro can
+        use it directly with ``templatePath = iParameters``.
 
         Supports both .catvba (VBA project) and .catvbs/.catscript (CATScript).
         """
@@ -438,7 +438,7 @@ class MainWindow(QMainWindow):
             from pycatia import catia as _catia
             caa = _catia()
             app = caa.application
-            self._execute_script(app, macro_path, "CATMain", [template_path])
+            self._execute_script(app, macro_path, "CATMain", template_path)
             logger.info(f"Macro executed: {macro_path.name} | templatePath={template_path}")
         except Exception as e:
             logger.error(f"Failed to run macro {macro_path.name}: {e}")
