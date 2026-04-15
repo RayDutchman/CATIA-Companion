@@ -110,7 +110,7 @@ Sub SyncToDrawingParameters(partDoc, drawingDoc)
     On Error GoTo 0
 
     If partUserProps Is Nothing Then
-        logMsg = logMsg & "零件无用户自定义属性" & Chr(10)
+        logMsg = logMsg & "零件无用户自定义属性集合" & Chr(10)
     End If
 
     '--- 定义需要同步的自定义属性名列表 ---
@@ -156,19 +156,61 @@ Sub SyncToDrawingParameters(partDoc, drawingDoc)
     End If
     Set param = Nothing
 
+    On Error GoTo 0
+
     '--- 批量同步自定义属性 ---
     Dim i
+    Dim propName
+    Dim propValue
+    Dim bPropExists
+    Dim tmpProp
+    Dim userInput
+
     For i = 0 To UBound(propNames)
-        Dim propName
-        propName = propNames(i)
+        propName    = propNames(i)
+        propValue   = ""
+        bPropExists = False
 
-        Dim propValue
-        propValue = ""
-
+        '--- 尝试从零件读取属性值 ---
         If Not partUserProps Is Nothing Then
-            propValue = partUserProps.Item(propName).Value
+            On Error Resume Next
+            Err.Clear
+            Set tmpProp = partUserProps.Item(propName)
+            If Err.Number = 0 Then
+                If Not tmpProp Is Nothing Then
+                    propValue   = tmpProp.Value
+                    bPropExists = True
+                End If
+            End If
+            Set tmpProp = Nothing
+            On Error GoTo 0
         End If
 
+        '--- 属性不存在时弹窗提示用户填写 ---
+        If Not bPropExists Then
+            userInput = InputBox( _
+                "零件 """ & partNumber & """ 中未找到用户自定义属性 """ & propName & """。" & Chr(10) & _
+                "请输入该属性的值（留空则以空值写入图纸）：", _
+                "补充缺失属性 - " & propName, "")
+            propValue = userInput
+
+            '--- 将填入的值写回零件属性 ---
+            If propValue <> "" Then
+                On Error Resume Next
+                If partUserProps Is Nothing Then
+                    Set partUserProps = partDoc.Product.UserRefProperties
+                End If
+                If Not partUserProps Is Nothing Then
+                    partUserProps.CreateString propName, propValue
+                End If
+                On Error GoTo 0
+            End If
+
+            logMsg = logMsg & "属性 " & propName & " 不存在，用户输入值：" & propValue & Chr(10)
+        End If
+
+        '--- 写入图纸参数 ---
+        On Error Resume Next
         Set param = Nothing
         Set param = params.Item(propName)
         If Not param Is Nothing Then
@@ -177,9 +219,8 @@ Sub SyncToDrawingParameters(partDoc, drawingDoc)
         Else
             logMsg = logMsg & "图纸中未找到参数：" & propName & Chr(10)
         End If
+        On Error GoTo 0
     Next
-
-    On Error GoTo 0
 
     '--- 更新图纸显示 ---
     drawingDoc.Update
