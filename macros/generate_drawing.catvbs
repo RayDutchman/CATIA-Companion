@@ -10,11 +10,11 @@ Option Explicit
 ' ----------------------------------------------------------------------------
 
 Sub CATMain(iParameters)
-'Sub CATMain()
+
 	'--- 1. 定义模板路径 ---
 	Dim templatePath
-	templatePath = CStr(iParameters)
-	'templatePath = "D:\QT-pySide6-CATIA\CATIA-Companion\Newest\CATIA-Companion\drawing_templates\Drawing5.CATDrawing"
+	templatePath = iParameters
+	
 	'--- 2. 验证当前活动文档是否为零件 ---
 	If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then
 		MsgBox "请先激活一个 CATPart 文档！", vbExclamation
@@ -24,7 +24,7 @@ Sub CATMain(iParameters)
 	Set partDoc = CATIA.ActiveDocument
 	'--- 3. 用 NewFrom 创建新图纸 ---
 	Dim drawingDoc
-	Set drawingDoc = CATIA.Documents.NewFrom(templatePath)
+	Set drawingDoc = CATIA.Documents.NewFrom(CStr(templatePath))
 
 	If TypeName(drawingDoc) <> "DrawingDocument" Then
 		MsgBox "NewFrom 返回类型错误：" & TypeName(drawingDoc), vbCritical
@@ -40,15 +40,15 @@ Sub CATMain(iParameters)
 	drawingSheet.Activate
 
 	'--- 6. 创建前视图 ---
-	Dim views
-	Set views = drawingSheet.Views
+	'Dim views
+	'Set views = drawingSheet.Views
 
-	Dim frontView
-	Set frontView = views.Add("正视图")
-	frontView.X = 150
-	frontView.Y = 200
-	frontView.GenerativeBehavior.Document = partDoc
-	frontView.GenerativeBehavior.Update
+	'Dim frontView
+	'Set frontView = views.Add("正视图")
+	'frontView.X = 150
+	'frontView.Y = 200
+	'frontView.GenerativeBehavior.Document = partDoc
+	'frontView.GenerativeBehavior.Update
 
 End Sub
 
