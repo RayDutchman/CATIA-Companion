@@ -1,0 +1,190 @@
+Option Explicit
+' refresh_drawing_info.catvbs
+'
+' 功能：刷新当前活动图纸的参数信息。
+'
+'   1. 从当前活动 CATDrawing 的图纸参数（drawingDoc.Parameters）中读取 PartNumber。
+'   2. 在所有已打开的 CATIA 文档中查找具有相同零件编号的 CATPart 或 CATProduct。
+'   3. 调用 SyncToDrawingParameters 将零件属性同步回图纸参数。
+'
+' 使用前提：
+'   - CATIA 中已打开目标图纸（CATDrawing），并将其设为活动文档。
+'   - 对应的 CATPart 或 CATProduct 文档已在同一 CATIA 会话中打开。
+' ----------------------------------------------------------------------------
+
+Sub CATMain()
+
+    '--- 1. 验证当前活动文档为图纸 ---
+    If TypeName(CATIA.ActiveDocument) <> "DrawingDocument" Then
+        MsgBox "请先激活一个 CATDrawing 图纸文档！", vbExclamation, "刷新图纸信息"
+        Exit Sub
+    End If
+
+    Dim drawingDoc
+    Set drawingDoc = CATIA.ActiveDocument
+
+    '--- 2. 从图纸参数中读取 PartNumber ---
+    Dim pnParam
+    Set pnParam = Nothing
+    On Error Resume Next
+    Set pnParam = drawingDoc.Parameters.Item("PartNumber")
+    On Error GoTo 0
+
+    If pnParam Is Nothing Then
+        MsgBox "图纸参数中未找到 ""PartNumber""，无法自动匹配零件。", vbExclamation, "刷新图纸信息"
+        Exit Sub
+    End If
+
+    Dim targetPN
+    targetPN = pnParam.Value
+
+    If Trim(targetPN) = "" Then
+        MsgBox "图纸参数 PartNumber 为空，无法自动匹配零件。", vbExclamation, "刷新图纸信息"
+        Exit Sub
+    End If
+
+    '--- 3. 在所有已打开文档中查找匹配零件编号的零件或装配体 ---
+    Dim foundDoc
+    Set foundDoc = Nothing
+
+    Dim i
+    For i = 1 To CATIA.Documents.Count
+        Dim doc
+        Set doc = CATIA.Documents.Item(i)
+        Dim docType
+        docType = TypeName(doc)
+
+        If docType = "PartDocument" Or docType = "ProductDocument" Then
+            Dim pn
+            pn = ""
+            On Error Resume Next
+            pn = doc.Product.PartNumber
+            On Error GoTo 0
+
+            If pn = targetPN Then
+                Set foundDoc = doc
+                Exit For
+            End If
+        End If
+    Next
+
+    If foundDoc Is Nothing Then
+        MsgBox "未找到零件编号为 """ & targetPN & """ 的零件或装配体文档。" & Chr(10) & _
+               "请确保对应文档已在 CATIA 中打开。", vbExclamation, "刷新图纸信息"
+        Exit Sub
+    End If
+
+    '--- 4. 同步零件属性到图纸参数 ---
+    Call SyncToDrawingParameters(foundDoc, drawingDoc)
+
+End Sub
+
+' ----------------------------------------------------------------------------
+' SyncToDrawingParameters
+'   将 partDoc（CATPart/CATProduct）的属性同步到 drawingDoc（CATDrawing）的参数中。
+'   同步范围：标准属性（PartNumber、Nomenclature、Revision）
+'             以及预定义的用户自定义属性列表（物料编码、材料、重量）。
+' ----------------------------------------------------------------------------
+Sub SyncToDrawingParameters(partDoc, drawingDoc)
+
+    '--- 调试日志收集 ---
+    Dim logMsg
+    logMsg = ""
+
+    '--- 从零件读取标准属性 ---
+    Dim partNumber
+    Dim nomenclature
+    Dim revision
+
+    On Error Resume Next
+    partNumber   = partDoc.Product.PartNumber
+    nomenclature = partDoc.Product.Nomenclature
+    revision     = partDoc.Product.Revision
+    On Error GoTo 0
+
+    '--- 获取零件用户自定义属性集合 ---
+    Dim partUserProps
+    Set partUserProps = Nothing
+    On Error Resume Next
+    Set partUserProps = partDoc.Product.UserRefProperties
+    On Error GoTo 0
+
+    If partUserProps Is Nothing Then
+        logMsg = logMsg & "零件无用户自定义属性" & Chr(10)
+    End If
+
+    '--- 定义需要同步的自定义属性名列表 ---
+    Dim propNames
+    propNames = Array( _
+        "物料编码", _
+        "材料", _
+        "重量" _
+    )
+
+    '--- 获取图纸参数集合 ---
+    Dim params
+    Set params = drawingDoc.Parameters
+
+    Dim param
+    On Error Resume Next
+
+    '--- 同步标准属性 ---
+    Set param = params.Item("PartNumber")
+    If Not param Is Nothing Then
+        param.Value = partNumber
+        logMsg = logMsg & "已同步：PartNumber = " & partNumber & Chr(10)
+    Else
+        logMsg = logMsg & "图纸中未找到参数 PartNumber" & Chr(10)
+    End If
+    Set param = Nothing
+
+    Set param = params.Item("Nomenclature")
+    If Not param Is Nothing Then
+        param.Value = nomenclature
+        logMsg = logMsg & "已同步：Nomenclature = " & nomenclature & Chr(10)
+    Else
+        logMsg = logMsg & "图纸中未找到参数 Nomenclature" & Chr(10)
+    End If
+    Set param = Nothing
+
+    Set param = params.Item("Revision")
+    If Not param Is Nothing Then
+        param.Value = revision
+        logMsg = logMsg & "已同步：Revision = " & revision & Chr(10)
+    Else
+        logMsg = logMsg & "图纸中未找到参数 Revision" & Chr(10)
+    End If
+    Set param = Nothing
+
+    '--- 批量同步自定义属性 ---
+    Dim i
+    For i = 0 To UBound(propNames)
+        Dim propName
+        propName = propNames(i)
+
+        Dim propValue
+        propValue = ""
+
+        If Not partUserProps Is Nothing Then
+            propValue = partUserProps.Item(propName).Value
+        End If
+
+        Set param = Nothing
+        Set param = params.Item(propName)
+        If Not param Is Nothing Then
+            param.Value = propValue
+            logMsg = logMsg & "已同步：" & propName & " = " & propValue & Chr(10)
+        Else
+            logMsg = logMsg & "图纸中未找到参数：" & propName & Chr(10)
+        End If
+    Next
+
+    On Error GoTo 0
+
+    '--- 更新图纸显示 ---
+    drawingDoc.Update
+    logMsg = logMsg & "同步完成"
+
+    MsgBox logMsg, vbInformation, "同步日志"
+
+End Sub
