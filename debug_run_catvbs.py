@@ -227,7 +227,15 @@ except Exception as e:
     log("方法12: ExecuteScript(full_path, 1=VBA, 'Module1', ...)", False,
         str(e).split("\n")[0])
 
-# ── 方法 13：枚举当前宏库列表（诊断信息） ────────────────────────────────
+# ── 方法 13：ExecuteScript(full_path, 1, filename) ────────────────────────
+try:
+    sys_svc.ExecuteScript(MACRO_FULL, 1, MACRO_NAME, "CATMain", [])
+    log("方法13: ExecuteScript(full_path, 1, filename)", True)
+except Exception as e:
+    log("方法13: ExecuteScript(full_path, 1, filename)", False,
+        str(e).split("\n")[0])
+
+# ── 方法 14：枚举当前宏库列表（诊断信息） ────────────────────────────────
 print("\n--- 诊断：列出当前已注册的宏库 ---")
 try:
     libs = sys_svc.MacroLibraries
@@ -239,10 +247,10 @@ try:
             print(f"  [{i}] Path={lib.Path}  Type={lib.Type}")
         except Exception:
             print(f"  [{i}] (无法读取属性)")
-    log(f"方法13(诊断): 枚举 MacroLibraries ({count} 个)", True,
+    log(f"方法14(诊断): 枚举 MacroLibraries ({count} 个)", True,
         f"已注册库数量: {count}")
 except Exception as e:
-    log("方法13(诊断): MacroLibraries 枚举", False, str(e).split("\n")[0])
+    log("方法14(诊断): MacroLibraries 枚举", False, str(e).split("\n")[0])
 
 # ---------------------------------------------------------------------------
 # 4. 汇总结果
