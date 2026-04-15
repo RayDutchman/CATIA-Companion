@@ -22,11 +22,6 @@ Sub CATMain(iParameters)
 	End If
 	Dim partDoc
 	Set partDoc = CATIA.ActiveDocument
-	If Dir(templatePath) = "" Then
-		MsgBox "模板文件不存在：" & vbCrLf & templatePath, vbCritical
-		Exit Sub
-	End If
-
 	'--- 3. 用 NewFrom 创建新图纸 ---
 	Dim drawingDoc
 	Set drawingDoc = CATIA.Documents.NewFrom(templatePath)
