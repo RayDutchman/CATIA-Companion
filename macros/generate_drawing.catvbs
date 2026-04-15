@@ -13,7 +13,7 @@ Sub CATMain(iParameters)
 'Sub CATMain()
 	'--- 1. 定义模板路径 ---
 	Dim templatePath
-	templatePath = CStr(iParameters(0))
+	templatePath = CStr(iParameters)
 	'templatePath = "D:\QT-pySide6-CATIA\CATIA-Companion\Newest\CATIA-Companion\drawing_templates\Drawing5.CATDrawing"
 	'--- 2. 验证当前活动文档是否为零件 ---
 	If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then
