@@ -46,3 +46,4 @@ $RECYCLE.BIN/
 # Ignore auto-generated config files; keep manually committed ones if any
 *.ini
 *.cfg
+macros/generate_drawing.catvbs
