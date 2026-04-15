@@ -152,7 +152,7 @@ Sub SyncToDrawingParameters(partDoc, drawingDoc)
 		Else
 			Debug.Print "图纸中未找到参数：" & propName
 		End If
-	Next i
+	Next
 
 	On Error GoTo 0
 
