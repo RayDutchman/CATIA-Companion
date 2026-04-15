@@ -48,3 +48,4 @@ $RECYCLE.BIN/
 *.cfg
 macros/generate_drawing.catvbs
 macros/generate_drawing.catvba
+macros/catia_companion.catvba
