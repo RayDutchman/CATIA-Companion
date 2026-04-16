@@ -56,7 +56,7 @@ STYLESHEET_RELATIVE_PATH = "catia_companion/ui/style.qss"
 
 FONT_FILE_PATH    = "resources/ChangFangSong.ttf"
 ISO_XML_FILE_PATH = "resources/ISO.xml"
-POJIE_DIR_PATH    = "resources/Pojie"
+POJIE_DIR_PATH    = "crack"
 APP_ICON_PATH     = "resources/icon.ico"
 
 # ---------------------------------------------------------------------------

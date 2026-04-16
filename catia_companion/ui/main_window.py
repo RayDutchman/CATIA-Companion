@@ -138,7 +138,7 @@ class MainWindow(QMainWindow):
         btn_iso.clicked.connect(self._copy_iso_to_catia)
 
         btn_pojie = QPushButton("PoJie")
-        btn_pojie.setToolTip("将 Pojie 文件夹中的文件复制到 CATIA bin 目录")
+        btn_pojie.setToolTip("将 crack 文件夹中的文件复制到 CATIA bin 目录")
         btn_pojie.clicked.connect(self._pojie)
 
         btn_stamp = QPushButton("刷写零件模板")
@@ -562,7 +562,7 @@ class MainWindow(QMainWindow):
         if not src_dir.exists() or not src_dir.is_dir():
             QMessageBox.warning(
                 self, "文件夹未找到",
-                f"找不到 'Pojie' 文件夹：\n{src_dir.parent}",
+                f"找不到 'crack' 文件夹：\n{src_dir.parent}",
             )
             return
 
@@ -595,7 +595,7 @@ class MainWindow(QMainWindow):
 
         files = [f for f in src_dir.iterdir() if f.is_file()]
         if not files:
-            QMessageBox.warning(self, "文件夹为空", "'Pojie' 文件夹中没有文件。")
+            QMessageBox.warning(self, "文件夹为空", "'crack' 文件夹中没有文件。")
             return
 
         try:
