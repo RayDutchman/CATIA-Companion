@@ -11,6 +11,9 @@
 #   resources/icon.ico
 # Then uncomment the `icon=` line in the EXE block below.
 
+import PyInstaller
+_pyinstaller_ver = tuple(int(x) for x in PyInstaller.__version__.split('.')[:2])
+
 block_cipher = None
 
 a = Analysis(
@@ -53,6 +56,11 @@ exe = EXE(
     icon='resources/icon.ico',  # Uncomment after placing icon.ico in resources/
 )
 
+# PyInstaller 6.0 introduced the _internal/ sub-folder and the
+# contents_directory option to opt out of it.  Older versions do not
+# accept (or need) this parameter, so it is passed conditionally.
+_coll_kw = {'contents_directory': '.'} if _pyinstaller_ver >= (6, 0) else {}
+
 coll = COLLECT(
     exe,
     a.binaries,
@@ -62,5 +70,5 @@ coll = COLLECT(
     upx=True,
     upx_exclude=[],
     name='CATIA Companion',
-    contents_directory='.',
+    **_coll_kw,
 )
