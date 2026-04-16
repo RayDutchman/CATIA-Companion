@@ -20,6 +20,8 @@ a = Analysis(
     binaries=[],
     datas=[
         ('resources', 'resources'),
+        ('macros', 'macros'),
+        ('drawing_templates', 'drawing_templates'),
         ('catia_companion/ui/style.qss', 'catia_companion/ui'),
         ('catia_companion', 'catia_companion'),
     ],
