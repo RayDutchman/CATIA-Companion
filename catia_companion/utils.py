@@ -19,11 +19,12 @@ logger = logging.getLogger(__name__)
 def resource_path(filename: str) -> Path:
     """Return the absolute path to a bundled resource file.
 
-    When running as a PyInstaller-frozen executable the executable's directory
-    is used; otherwise the directory that contains this file is used.
+    When running as a PyInstaller-frozen executable ``sys._MEIPASS`` is used
+    (the ``_internal/`` directory where PyInstaller 6.x extracts data files);
+    otherwise the project root directory is used.
     """
     if hasattr(sys, "_MEIPASS"):
-        return Path(sys.executable).parent / filename
+        return Path(sys._MEIPASS) / filename
     return Path(__file__).parent.parent / filename
 
 

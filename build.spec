@@ -4,8 +4,9 @@
 #   pyinstaller build.spec
 #
 # Output: dist/CATIA Companion/
-# All files (resources/, macros/, drawing_templates/, etc.) are placed
-# directly next to CATIA Companion.exe — no _internal/ subdirectory.
+# The executable is placed in dist/CATIA Companion/ and all supporting files
+# (resources/, macros/, catia_companion/, etc.) are placed inside the default
+# _internal/ subdirectory alongside it.
 #
 # Before building, place the application icon at:
 #   resources/icon.ico
@@ -53,8 +54,6 @@ exe = EXE(
     icon='resources/icon.ico',  # Uncomment after placing icon.ico in resources/
 )
 
-# contents_directory='.' places all bundle files directly next to the .exe,
-# eliminating the _internal/ subdirectory introduced in PyInstaller 6.0.
 coll = COLLECT(
     exe,
     a.binaries,
@@ -64,5 +63,4 @@ coll = COLLECT(
     upx=True,
     upx_exclude=[],
     name='CATIA Companion',
-    contents_directory='.',
 )
