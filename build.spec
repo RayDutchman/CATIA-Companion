@@ -4,7 +4,8 @@
 #   pyinstaller build.spec
 #
 # Output: dist/CATIA Companion/
-# The executable and resource files will all be in the same folder.
+# All files (resources/, macros/, drawing_templates/, etc.) are placed
+# directly next to CATIA Companion.exe — no _internal/ subdirectory.
 #
 # Before building, place the application icon at:
 #   resources/icon.ico
@@ -61,4 +62,5 @@ coll = COLLECT(
     upx=True,
     upx_exclude=[],
     name='CATIA Companion',
+    contents_directory='.',
 )
