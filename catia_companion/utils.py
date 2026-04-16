@@ -17,12 +17,22 @@ logger = logging.getLogger(__name__)
 
 
 def resource_path(filename: str) -> Path:
-    """Return the absolute path to a bundled resource file.
+    """Return the absolute path to a resource file.
 
-    When running as a PyInstaller-frozen executable the executable's directory
-    is used; otherwise the directory that contains this file is used.
+    When running as a PyInstaller-frozen executable, bundled files (e.g.
+    ``resources/``, ``catia_companion/ui/style.qss``) live inside
+    ``sys._MEIPASS`` (which may be an ``_internal/`` sub-folder on
+    PyInstaller 6.x).  User-placed files such as ``macros/`` and
+    ``drawing_templates/`` are never bundled and always live next to the
+    executable.  This function checks ``sys._MEIPASS`` first so that
+    bundled resources are found regardless of the PyInstaller version or
+    ``contents_directory`` setting, then falls back to the executable's
+    directory for user-managed folders.
     """
     if hasattr(sys, "_MEIPASS"):
+        meipass_candidate = Path(sys._MEIPASS) / filename
+        if meipass_candidate.exists():
+            return meipass_candidate
         return Path(sys.executable).parent / filename
     return Path(__file__).parent.parent / filename
 
