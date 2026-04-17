@@ -16,6 +16,17 @@ Output columns per node
   CHOSEN  : which accessor won (0/1/2) – same as get_product_filepath()
   IS_OWN  : True when chosen path != parent node's path (standalone file)
             False when == parent path (embedded 部件)
+
+Findings (2026-04-17)
+---------------------
+  For standalone 产品/零件:
+    A0, A1, A2 all succeed and return the node's own file path.
+  For embedded 部件:
+    A0 succeeds → returns PARENT's file path (correct for 部件 detection)
+    A1 succeeds → returns PARENT's file path (same result)
+    A2 raises AttributeError – the COM object has no .Parent on embedded nodes.
+  Conclusion: A2 is never useful and was removed from production code.
+  get_product_filepath() and bom_write._traverse_write() now use A0+A1 only.
 """
 
 import sys

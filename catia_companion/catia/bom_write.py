@@ -129,7 +129,6 @@ def write_bom_to_catia(
         for accessor in (
             lambda p: p.reference_product.com_object.Parent.FullName,
             lambda p: p.com_object.ReferenceProduct.Parent.FullName,
-            lambda p: p.com_object.Parent.FullName,
         ):
             try:
                 filepath = accessor(product)
