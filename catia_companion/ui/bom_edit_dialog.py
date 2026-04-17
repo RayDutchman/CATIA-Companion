@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QLineEdit,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QCheckBox, QGroupBox, QMessageBox, QApplication,
-    QFileDialog, QProgressDialog,
+    QFileDialog, QProgressDialog, QRadioButton, QButtonGroup,
 )
 from PySide6.QtGui import QColor
 from PySide6.QtCore import Qt, QSettings
@@ -30,7 +30,7 @@ from catia_companion.constants import (
     PART_NUMBER_VALID_PATTERN,
     FILENAME_NOT_FOUND,
 )
-from catia_companion.catia.bom_collect import collect_bom_rows
+from catia_companion.catia.bom_collect import collect_bom_rows, flatten_bom_to_summary
 from catia_companion.catia.bom_write import write_bom_to_catia
 
 logger = logging.getLogger(__name__)
@@ -202,6 +202,14 @@ class BomEditDialog(QDialog):
             c for c in saved_visible if c in PRESET_USER_REF_PROPERTIES
         ]
 
+        self._summarize: bool = self._edit_settings.value("summarize", False, type=bool)
+        self._summary_include_assemblies: bool = self._edit_settings.value(
+            "summary_include_assemblies", False, type=bool
+        )
+        self._summary_sort_column: str = self._edit_settings.value(
+            "summary_sort_column", "Part Number"
+        )
+
         # All custom columns (including all presets) so that pre-loading from
         # CATIA covers every column regardless of current visibility.
         self._all_custom_columns: list[str] = list(dict.fromkeys(
@@ -229,6 +237,9 @@ class BomEditDialog(QDialog):
         self._collapsed_rows: set[int] = set()
         # True once BOM has been successfully loaded at least once
         self._bom_loaded: bool = False
+        # Raw (hierarchical) BOM rows as returned by collect_bom_rows(); used to
+        # reconstruct the display rows when the user toggles the BOM type.
+        self._raw_rows: list[dict] = []
 
         # ── Layout ────────────────────────────────────────────────────────────
         layout = QVBoxLayout(self)
@@ -252,6 +263,61 @@ class BomEditDialog(QDialog):
         file_row.addWidget(self._file_browse_btn)
         file_row.addWidget(self._load_btn)
         layout.addLayout(file_row)
+
+        # BOM type selection
+        bom_type_group  = QGroupBox("BOM类型")
+        bom_type_layout = QHBoxLayout(bom_type_group)
+        self._bom_type_btn_group  = QButtonGroup(self)
+        self._radio_hierarchical  = QRadioButton("层级BOM（显示装配层级）")
+        self._radio_summary_bom   = QRadioButton("汇总BOM（仅显示零件及总数量）")
+        if self._summarize:
+            self._radio_summary_bom.setChecked(True)
+        else:
+            self._radio_hierarchical.setChecked(True)
+        self._bom_type_btn_group.addButton(self._radio_hierarchical)
+        self._bom_type_btn_group.addButton(self._radio_summary_bom)
+        bom_type_layout.addWidget(self._radio_hierarchical)
+        bom_type_layout.addWidget(self._radio_summary_bom)
+        bom_type_layout.addStretch()
+        self._radio_summary_bom.toggled.connect(self._on_bom_type_changed)
+        layout.addWidget(bom_type_group)
+
+        # ── Summary BOM options (only visible in summary mode) ────────────────
+        self._summary_opts_group = QGroupBox("汇总BOM选项")
+        summary_opts_layout = QVBoxLayout(self._summary_opts_group)
+
+        self._include_assemblies_chk = QCheckBox("包含产品和部件（子装配体）")
+        self._include_assemblies_chk.setToolTip(
+            "勾选后，汇总BOM中也会列出产品和部件（子装配体），而不仅限于零件。"
+        )
+        self._include_assemblies_chk.setChecked(self._summary_include_assemblies)
+        self._include_assemblies_chk.toggled.connect(self._on_include_assemblies_toggled)
+        summary_opts_layout.addWidget(self._include_assemblies_chk)
+
+        sort_row_layout = QHBoxLayout()
+        sort_row_layout.addWidget(QLabel("排序列:"))
+        self._sort_col_combo = QComboBox()
+        # Build initial column list for sort combo
+        _sort_cols = list(BOM_EDIT_COLUMN_ORDER) + [
+            c for c in PRESET_USER_REF_PROPERTIES if c not in BOM_EDIT_COLUMN_ORDER
+        ] + [
+            c for c in self._custom_columns
+            if c not in BOM_EDIT_COLUMN_ORDER and c not in PRESET_USER_REF_PROPERTIES
+        ]
+        for col in _sort_cols:
+            self._sort_col_combo.addItem(
+                BOM_COLUMN_DISPLAY_NAMES.get(col, col), col
+            )
+        sort_saved_idx = self._sort_col_combo.findData(self._summary_sort_column)
+        if sort_saved_idx >= 0:
+            self._sort_col_combo.setCurrentIndex(sort_saved_idx)
+        self._sort_col_combo.currentIndexChanged.connect(self._on_sort_col_changed)
+        sort_row_layout.addWidget(self._sort_col_combo)
+        sort_row_layout.addStretch()
+        summary_opts_layout.addLayout(sort_row_layout)
+
+        self._summary_opts_group.setVisible(self._summarize)
+        layout.addWidget(self._summary_opts_group)
 
         hint = QLabel(
             "文件名 / 层级 / 类型 / 数量 为结构属性，不可编辑。"
@@ -341,6 +407,64 @@ class BomEditDialog(QDialog):
         self._file_edit.setEnabled(not use_active)
         self._file_browse_btn.setEnabled(not use_active)
 
+    # ── BOM type toggle ───────────────────────────────────────────────────────
+
+    def _on_bom_type_changed(self, summary_checked: bool) -> None:
+        self._summarize = summary_checked
+        self._edit_settings.setValue("summarize", summary_checked)
+        self._summary_opts_group.setVisible(summary_checked)
+        # If BOM is already loaded, re-derive display rows from the raw rows and repopulate
+        if self._raw_rows:
+            self._rows = (
+                flatten_bom_to_summary(
+                    self._raw_rows,
+                    include_assemblies=self._summary_include_assemblies,
+                    sort_column=self._summary_sort_column or None,
+                )
+                if summary_checked else self._raw_rows
+            )
+            self._collapsed_rows.clear()
+            self._columns = self._build_visible_columns()
+            display_headers = [BOM_COLUMN_DISPLAY_NAMES.get(c, c) for c in self._columns]
+            self._table.setColumnCount(len(self._columns))
+            self._table.setHorizontalHeaderLabels(display_headers)
+            self._populate_table()
+            self._table.resizeColumnsToContents()
+
+    def _on_include_assemblies_toggled(self, checked: bool) -> None:
+        self._summary_include_assemblies = checked
+        self._edit_settings.setValue("summary_include_assemblies", checked)
+        # Rebuild summary display if BOM is loaded and summary mode is active
+        if self._summarize and self._raw_rows:
+            self._rows = flatten_bom_to_summary(
+                self._raw_rows,
+                include_assemblies=checked,
+                sort_column=self._summary_sort_column or None,
+            )
+            self._collapsed_rows.clear()
+            # When assemblies are included show the Type column; otherwise hide it
+            self._columns = self._build_visible_columns()
+            display_headers = [BOM_COLUMN_DISPLAY_NAMES.get(c, c) for c in self._columns]
+            self._table.setColumnCount(len(self._columns))
+            self._table.setHorizontalHeaderLabels(display_headers)
+            self._populate_table()
+            self._table.resizeColumnsToContents()
+
+    def _on_sort_col_changed(self, _index: int) -> None:
+        col = self._sort_col_combo.currentData()
+        if col:
+            self._summary_sort_column = col
+            self._edit_settings.setValue("summary_sort_column", col)
+            # Re-sort the currently displayed summary rows if applicable
+            if self._summarize and self._raw_rows:
+                self._rows = flatten_bom_to_summary(
+                    self._raw_rows,
+                    include_assemblies=self._summary_include_assemblies,
+                    sort_column=col,
+                )
+                self._collapsed_rows.clear()
+                self._populate_table()
+
     # ── Table helpers ─────────────────────────────────────────────────────────
 
     def _autofit_columns(self) -> None:
@@ -360,6 +484,13 @@ class BomEditDialog(QDialog):
             fn_idx = base.index("Filename") if "Filename" in base else -1
             if fn_idx >= 0:
                 base.insert(fn_idx + 1, "Filepath")
+        if self._summarize:
+            # Always hide Level (hierarchy is meaningless in summary)
+            # Keep Type when assemblies are included (so the user can see 产品/部件/零件)
+            cols_to_hide = {"Level"}
+            if not self._summary_include_assemblies:
+                cols_to_hide.add("Type")
+            base = [c for c in base if c not in cols_to_hide]
         visible_preset = [
             c for c in PRESET_USER_REF_PROPERTIES if c in self._visible_preset_cols
         ]
@@ -459,10 +590,25 @@ class BomEditDialog(QDialog):
 
         self._load_btn.setEnabled(True)
         self._load_btn.setText("重新加载BOM")
-        self._rows = rows
+
+        # Always save the raw hierarchical rows so we can switch modes later
+        self._raw_rows = rows
+
+        # In summary mode collapse the hierarchy into unique parts
+        display_rows = (
+            flatten_bom_to_summary(
+                rows,
+                include_assemblies=self._summary_include_assemblies,
+                sort_column=self._summary_sort_column or None,
+            )
+            if self._summarize else rows
+        )
+
+        self._rows = display_rows
         self._collapsed_rows.clear()
 
-        # Build PN-keyed canonical data (first occurrence wins)
+        # Build PN-keyed canonical data from the raw rows (first occurrence wins).
+        # Using raw rows ensures all parts are indexed regardless of current mode.
         all_data_cols = list(dict.fromkeys(
             BOM_EDIT_COLUMN_ORDER
             + [c for c in self._all_custom_columns if c not in BOM_EDIT_COLUMN_ORDER]
@@ -615,6 +761,9 @@ class BomEditDialog(QDialog):
                 hide_depth_stack.append(level)
 
     def _on_cell_clicked(self, row: int, col: int) -> None:
+        # Collapse/expand is only meaningful in hierarchical BOM mode
+        if self._summarize:
+            return
         if "Level" not in self._columns:
             return
         level_col = self._columns.index("Level")
@@ -1001,7 +1150,12 @@ class BomEditDialog(QDialog):
                 QMessageBox.warning(self, "未选择文件", "请选择一个CATProduct文件。")
                 return
 
+        # dirty_data must be keyed by the *current* CATIA PN, which may differ
+        # from the internal canonical key (orig_pn) when a PN rename was already
+        # written back in a previous write-back operation.  We keep pn_remap to
+        # go back from current_pn → orig_pn for the post-write snapshot update.
         dirty_data: dict[str, dict[str, str]] = {}
+        pn_remap:   dict[str, str]            = {}  # current_pn → orig_pn
         for pn, dirty_cols in self._modified_keys.items():
             if pn not in self._canonical_data:
                 continue
@@ -1010,7 +1164,14 @@ class BomEditDialog(QDialog):
                 for col in dirty_cols if col in self._canonical_data[pn]
             }
             if changed:
-                dirty_data[pn] = changed
+                # Use the snapshot PN (= what CATIA currently holds for this
+                # node) as the lookup key for the traversal.  If the PN has
+                # never been written back, the snapshot value equals orig_pn.
+                current_pn = self._snapshot_data.get(pn, {}).get(
+                    "Part Number", pn
+                )
+                dirty_data[current_pn] = changed
+                pn_remap[current_pn]   = pn
 
         if not dirty_data:
             if close_on_success:
@@ -1050,7 +1211,8 @@ class BomEditDialog(QDialog):
         finally:
             progress.close()
 
-        for pn, changed in dirty_data.items():
+        for current_pn, changed in dirty_data.items():
+            pn = pn_remap.get(current_pn, current_pn)
             if pn in self._snapshot_data:
                 self._snapshot_data[pn].update(changed)
             if pn in self._modified_keys:

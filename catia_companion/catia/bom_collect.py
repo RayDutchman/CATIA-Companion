@@ -2,8 +2,10 @@
 BOM data-collection helpers.
 
 Provides:
-- get_product_filepath()  – resolve the backing file path of a CATIA product
-- collect_bom_rows()      – traverse a product tree and return a list of row dicts
+- get_product_filepath()     – resolve the backing file path of a CATIA product
+- collect_bom_rows()         – traverse a product tree and return a list of row dicts
+- flatten_bom_to_summary()   – collapse a hierarchical BOM into a flat summary
+                               (unique parts with cumulative quantities)
 """
 
 import logging
@@ -18,19 +20,15 @@ logger = logging.getLogger(__name__)
 def get_product_filepath(product) -> str:
     """Return the full file path of the CATIA document backing *product*.
 
-    Tries several COM access patterns in order and returns an empty string if
-    none succeed.
+    Uses ``com_object.ReferenceProduct.Parent.FullName`` – a pure COM path
+    that works for both standalone products/parts and embedded 部件 (which
+    have no own file and return their parent's path).  Returns an empty
+    string on failure.
     """
-    for accessor in (
-        lambda p: p.reference_product.com_object.Parent.FullName,
-        lambda p: p.com_object.ReferenceProduct.Parent.FullName,
-        lambda p: p.com_object.Parent.FullName,
-    ):
-        try:
-            return accessor(product)
-        except Exception:
-            pass
-    return ""
+    try:
+        return product.com_object.ReferenceProduct.Parent.FullName
+    except Exception:
+        return ""
 
 
 def collect_bom_rows(
@@ -249,3 +247,107 @@ def collect_bom_rows(
     rows = []
     _traverse(root_product, rows, level=0)
     return rows
+
+
+def flatten_bom_to_summary(
+    rows: list[dict],
+    include_assemblies: bool = False,
+    sort_column: str | None = None,
+) -> list[dict]:
+    """Collapse a hierarchical BOM into a flat summary BOM.
+
+    Each unique part (identified by its backing filepath when available, or by
+    Part Number otherwise) appears exactly once in the result.  The
+    ``Quantity`` value is the *total* count across the whole assembly tree,
+    computed by multiplying the per-level quantities along every path from the
+    root to that part.
+
+    The root row (Level == 0) is always excluded from the result.
+
+    Parameters
+    ----------
+    rows:
+        The hierarchical BOM rows returned by :func:`collect_bom_rows`.
+    include_assemblies:
+        When ``False`` (default) rows whose ``Type`` is ``"产品"`` or
+        ``"部件"`` are omitted so that only leaf parts appear in the summary.
+        Set to ``True`` to include sub-assemblies and assemblies as well.
+    sort_column:
+        Internal column name to sort the result by.  Sorting is case-
+        insensitive string comparison.  Defaults to ``"Part Number"`` when
+        ``None``.
+
+    Returns
+    -------
+    list[dict]
+        Flat list of row dicts.  Each dict contains the same keys as the input
+        rows except that ``Level`` is removed and ``Quantity`` reflects the
+        total accumulated count.
+    """
+    if not rows:
+        return []
+
+    # ── Step 1: compute absolute quantity for every row ──────────────────────
+    # We walk the rows in traversal order.  A stack tracks (level, cum_qty)
+    # for each ancestor on the current path.
+    # cum_qty[i] = cumulative quantity multiplier up to and including level i.
+    cum_qty_stack: list[tuple[int, int]] = []  # (level, cumulative_qty)
+
+    # absolute_qtys[i] = total count of rows[i] in the whole assembly
+    absolute_qtys: list[int] = []
+
+    for row in rows:
+        level = row.get("Level", 0)
+        qty   = int(row.get("Quantity", 1) or 1)
+
+        # Pop stack entries that belong to a sibling or a higher-level ancestor
+        while cum_qty_stack and cum_qty_stack[-1][0] >= level:
+            cum_qty_stack.pop()
+
+        # Parent's cumulative multiplier (1 if this is the root)
+        parent_cum = cum_qty_stack[-1][1] if cum_qty_stack else 1
+
+        abs_qty = parent_cum * qty
+        absolute_qtys.append(abs_qty)
+        cum_qty_stack.append((level, abs_qty))
+
+    # ── Step 2: deduplicate by filepath (preferred) or Part Number ───────────
+    # Key: filepath if non-empty, else Part Number.
+    # For each key we keep the first row's attributes and accumulate quantity.
+    seen_order:  list[str]       = []   # insertion-ordered keys
+    summary:     dict[str, dict] = {}   # key → merged row dict
+    key_to_qty:  dict[str, int]  = {}   # key → accumulated total qty
+
+    _assembly_types = {"产品", "部件"}
+
+    for row, abs_qty in zip(rows, absolute_qtys):
+        level = row.get("Level", 0)
+
+        # Always skip the root assembly (level 0 – the top-level product itself)
+        if level == 0:
+            continue
+
+        # Optionally skip sub-assemblies and assemblies
+        if not include_assemblies and row.get("Type", "") in _assembly_types:
+            continue
+
+        fp  = row.get("_filepath", "")
+        key = fp if fp else str(row.get("Part Number", ""))
+        if not key:
+            continue
+
+        if key not in summary:
+            seen_order.append(key)
+            merged = {k: v for k, v in row.items() if k != "Level"}
+            merged["Quantity"] = abs_qty
+            summary[key]       = merged
+            key_to_qty[key]    = abs_qty
+        else:
+            key_to_qty[key]          += abs_qty
+            summary[key]["Quantity"]  = key_to_qty[key]
+
+    # ── Step 3: sort and return ───────────────────────────────────────────────
+    result    = [summary[k] for k in seen_order]
+    sort_key  = sort_column if sort_column else "Part Number"
+    result.sort(key=lambda r: str(r.get(sort_key, "")).lower())
+    return result
