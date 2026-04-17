@@ -40,6 +40,8 @@ def write_bom_to_catia(
     progress_callback:
         Optional callable invoked with the current node count after each node
         is visited during the traversal.  May raise an exception to abort.
+        The traversal is post-order (children before parents), so deeper
+        levels are written to CATIA before their parent levels.
     """
     from pycatia import catia, CatWorkModeType
     from pycatia.product_structure_interfaces.product_document import ProductDocument
@@ -140,6 +142,24 @@ def write_bom_to_catia(
         if filepath and filepath in _written_fps:
             return
 
+        # ── Recurse into children FIRST (post-order / bottom-up) ────────────
+        # This guarantees that deeper levels (e.g. level 6) are written to
+        # CATIA before their parent levels (e.g. level 5).  The parent node's
+        # PN remains in remaining_pns throughout child processing, so the
+        # early-exit break inside the loop only fires when truly nothing is
+        # left to write (i.e. the parent itself is also not dirty).
+        try:
+            count = product.products.count
+            for i in range(1, count + 1):
+                if not remaining_pns:
+                    break
+                try:
+                    _traverse_write(product.products.item(i))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         if pn in pn_data:
             try:
                 product.apply_work_mode(CatWorkModeType.DESIGN_MODE)
@@ -165,18 +185,6 @@ def write_bom_to_catia(
         _total_count[0] += 1
         if progress_callback is not None:
             progress_callback(_total_count[0])
-
-        try:
-            count = product.products.count
-            for i in range(1, count + 1):
-                if not remaining_pns:
-                    break
-                try:
-                    _traverse_write(product.products.item(i))
-                except Exception:
-                    pass
-        except Exception:
-            pass
 
         # Mark this filepath as done after its sub-tree has been fully
         # traversed so that future identical references are skipped entirely.
