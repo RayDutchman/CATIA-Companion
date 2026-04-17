@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QLineEdit,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QCheckBox, QGroupBox, QMessageBox, QApplication,
-    QFileDialog, QProgressDialog,
+    QFileDialog, QProgressDialog, QRadioButton, QButtonGroup,
 )
 from PySide6.QtGui import QColor
 from PySide6.QtCore import Qt, QSettings
@@ -30,7 +30,7 @@ from catia_companion.constants import (
     PART_NUMBER_VALID_PATTERN,
     FILENAME_NOT_FOUND,
 )
-from catia_companion.catia.bom_collect import collect_bom_rows
+from catia_companion.catia.bom_collect import collect_bom_rows, flatten_bom_to_summary
 from catia_companion.catia.bom_write import write_bom_to_catia
 
 logger = logging.getLogger(__name__)
@@ -202,6 +202,8 @@ class BomEditDialog(QDialog):
             c for c in saved_visible if c in PRESET_USER_REF_PROPERTIES
         ]
 
+        self._summarize: bool = self._edit_settings.value("summarize", False, type=bool)
+
         # All custom columns (including all presets) so that pre-loading from
         # CATIA covers every column regardless of current visibility.
         self._all_custom_columns: list[str] = list(dict.fromkeys(
@@ -252,6 +254,24 @@ class BomEditDialog(QDialog):
         file_row.addWidget(self._file_browse_btn)
         file_row.addWidget(self._load_btn)
         layout.addLayout(file_row)
+
+        # BOM type selection
+        bom_type_group  = QGroupBox("BOM类型")
+        bom_type_layout = QHBoxLayout(bom_type_group)
+        self._bom_type_btn_group  = QButtonGroup(self)
+        self._radio_hierarchical  = QRadioButton("层级BOM（显示装配层级）")
+        self._radio_summary_bom   = QRadioButton("汇总BOM（仅显示零件及总数量）")
+        if self._summarize:
+            self._radio_summary_bom.setChecked(True)
+        else:
+            self._radio_hierarchical.setChecked(True)
+        self._bom_type_btn_group.addButton(self._radio_hierarchical)
+        self._bom_type_btn_group.addButton(self._radio_summary_bom)
+        bom_type_layout.addWidget(self._radio_hierarchical)
+        bom_type_layout.addWidget(self._radio_summary_bom)
+        bom_type_layout.addStretch()
+        self._radio_summary_bom.toggled.connect(self._on_bom_type_changed)
+        layout.addWidget(bom_type_group)
 
         hint = QLabel(
             "文件名 / 层级 / 类型 / 数量 为结构属性，不可编辑。"
@@ -341,6 +361,20 @@ class BomEditDialog(QDialog):
         self._file_edit.setEnabled(not use_active)
         self._file_browse_btn.setEnabled(not use_active)
 
+    # ── BOM type toggle ───────────────────────────────────────────────────────
+
+    def _on_bom_type_changed(self, summary_checked: bool) -> None:
+        self._summarize = summary_checked
+        self._edit_settings.setValue("summarize", summary_checked)
+        # If BOM is already loaded, rebuild the visible columns and repopulate
+        if self._rows:
+            self._columns = self._build_visible_columns()
+            display_headers = [BOM_COLUMN_DISPLAY_NAMES.get(c, c) for c in self._columns]
+            self._table.setColumnCount(len(self._columns))
+            self._table.setHorizontalHeaderLabels(display_headers)
+            self._populate_table()
+            self._table.resizeColumnsToContents()
+
     # ── Table helpers ─────────────────────────────────────────────────────────
 
     def _autofit_columns(self) -> None:
@@ -360,6 +394,9 @@ class BomEditDialog(QDialog):
             fn_idx = base.index("Filename") if "Filename" in base else -1
             if fn_idx >= 0:
                 base.insert(fn_idx + 1, "Filepath")
+        # In summary mode hide Level (no hierarchy) and Type (all items are parts)
+        if self._summarize:
+            base = [c for c in base if c not in ("Level", "Type")]
         visible_preset = [
             c for c in PRESET_USER_REF_PROPERTIES if c in self._visible_preset_cols
         ]
@@ -459,6 +496,11 @@ class BomEditDialog(QDialog):
 
         self._load_btn.setEnabled(True)
         self._load_btn.setText("重新加载BOM")
+
+        # In summary mode collapse the hierarchy into unique parts
+        if self._summarize:
+            rows = flatten_bom_to_summary(rows)
+
         self._rows = rows
         self._collapsed_rows.clear()
 
@@ -615,6 +657,9 @@ class BomEditDialog(QDialog):
                 hide_depth_stack.append(level)
 
     def _on_cell_clicked(self, row: int, col: int) -> None:
+        # Collapse/expand is only meaningful in hierarchical BOM mode
+        if self._summarize:
+            return
         if "Level" not in self._columns:
             return
         level_col = self._columns.index("Level")

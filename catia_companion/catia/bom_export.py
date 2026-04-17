@@ -2,7 +2,7 @@
 BOM Excel export.
 
 Provides:
-- export_bom_to_excel() – export a hierarchical BOM to an .xlsx file
+- export_bom_to_excel() – export a hierarchical or summarised BOM to an .xlsx file
 """
 
 import logging
@@ -16,7 +16,7 @@ from catia_companion.constants import (
     SOURCE_TO_DISPLAY,
 )
 from catia_companion.utils import estimate_column_width
-from catia_companion.catia.bom_collect import collect_bom_rows
+from catia_companion.catia.bom_collect import collect_bom_rows, flatten_bom_to_summary
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,9 @@ def export_bom_to_excel(
     columns: list[str] | None = None,
     custom_columns: list[str] | None = None,
     row_progress_callback: Callable[[int], None] | None = None,
+    summarize: bool = False,
 ) -> None:
-    """Export a hierarchical BOM from CATProduct files to Excel (.xlsx).
+    """Export a hierarchical or summarised BOM from CATProduct files to Excel (.xlsx).
 
     Parameters
     ----------
@@ -46,6 +47,11 @@ def export_bom_to_excel(
         Optional callable invoked as ``row_progress_callback(count)`` with the
         running node count after each row is collected.  Matches the signature
         of the BOM-load progress callback so both operations can share UI code.
+    summarize:
+        When ``True`` the hierarchical BOM is collapsed into a flat summary
+        (unique parts with cumulative quantities) before writing to Excel.
+        The output filename will have the suffix ``_BOM汇总`` instead of
+        ``_BOM``.
     """
     import openpyxl
     from openpyxl.styles import Font, Alignment
@@ -56,6 +62,12 @@ def export_bom_to_excel(
         columns = BOM_DEFAULT_COLUMNS
     if custom_columns is None:
         custom_columns = []
+
+    # In summary mode the "Level" column carries no useful information.
+    if summarize:
+        columns = [c for c in columns if c != "Level"]
+
+    bom_suffix = "_BOM汇总" if summarize else "_BOM"
 
     caa         = catia()
     application = caa.application
@@ -116,13 +128,15 @@ def export_bom_to_excel(
             src_name = Path(active_full)
             dest_dir = Path(output_folder).resolve() if output_folder else src_name.parent
             dest_dir.mkdir(parents=True, exist_ok=True)
-            dest = dest_dir / f"{src_name.stem}_BOM.xlsx"
+            dest = dest_dir / f"{src_name.stem}{bom_suffix}.xlsx"
 
             rows = collect_bom_rows(None, columns, custom_columns,
                                      row_progress_callback)
+            if summarize:
+                rows = flatten_bom_to_summary(rows)
             wb   = openpyxl.Workbook()
             ws   = wb.active
-            ws.title = "BOM"
+            ws.title = "BOM汇总" if summarize else "BOM"
             _write_sheet(ws, rows)
             wb.save(str(dest))
             logger.info(f"  BOM exported -> {dest}")
@@ -132,7 +146,7 @@ def export_bom_to_excel(
         src      = Path(path).resolve()
         dest_dir = Path(output_folder).resolve() if output_folder else src.parent
         dest_dir.mkdir(parents=True, exist_ok=True)
-        dest     = dest_dir / f"{src.stem}_BOM.xlsx"
+        dest     = dest_dir / f"{src.stem}{bom_suffix}.xlsx"
 
         if dest.exists():
             try:
@@ -169,10 +183,12 @@ def export_bom_to_excel(
         logger.info(f"Opening: {src}")
         rows = collect_bom_rows(str(src), columns, custom_columns,
                                 row_progress_callback)
+        if summarize:
+            rows = flatten_bom_to_summary(rows)
 
         wb       = openpyxl.Workbook()
         ws       = wb.active
-        ws.title = "BOM"
+        ws.title = "BOM汇总" if summarize else "BOM"
         _write_sheet(ws, rows)
         wb.save(str(dest))
         logger.info(f"  BOM exported -> {dest}")

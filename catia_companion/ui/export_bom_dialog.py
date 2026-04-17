@@ -44,6 +44,8 @@ class ExportBomDialog(QDialog):
             saved_custom = [saved_custom]
         self._custom_columns: list[str] = list(saved_custom)
 
+        self._summarize: bool = self._settings.value("summarize", False, type=bool)
+
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -101,6 +103,24 @@ class ExportBomDialog(QDialog):
         if self._last_output_dir:
             self._radio_custom.setChecked(True)
             self._folder_edit.setText(self._last_output_dir)
+
+        # ── BOM type ────────────────────────────────────────────────────────
+        bom_type_group  = QGroupBox("BOM类型")
+        bom_type_layout = QHBoxLayout(bom_type_group)
+        self._bom_type_btn_group = QButtonGroup(self)
+        self._radio_hierarchical = QRadioButton("层级BOM（显示装配层级）")
+        self._radio_summary      = QRadioButton("汇总BOM（仅显示零件及总数量）")
+        if self._summarize:
+            self._radio_summary.setChecked(True)
+        else:
+            self._radio_hierarchical.setChecked(True)
+        self._bom_type_btn_group.addButton(self._radio_hierarchical)
+        self._bom_type_btn_group.addButton(self._radio_summary)
+        bom_type_layout.addWidget(self._radio_hierarchical)
+        bom_type_layout.addWidget(self._radio_summary)
+        bom_type_layout.addStretch()
+        self._radio_summary.toggled.connect(self._on_bom_type_changed)
+        layout.addWidget(bom_type_group)
 
         # ── Column selector ─────────────────────────────────────────────────
         col_group  = QGroupBox("导出列（拖动以排序）")
@@ -245,6 +265,20 @@ class ExportBomDialog(QDialog):
             self._selected_list.insertItem(row + 1, item)
             self._selected_list.setCurrentRow(row + 1)
 
+    def _on_bom_type_changed(self, summary_checked: bool) -> None:
+        """When BOM type switches, move the 'Level' column between the lists."""
+        self._summarize = summary_checked
+        self._settings.setValue("summarize", summary_checked)
+
+        if summary_checked:
+            # Move "Level" from selected to available (it has no meaning in summary BOM)
+            for i in range(self._selected_list.count()):
+                item = self._selected_list.item(i)
+                if self._item_internal(item) == "Level":
+                    self._selected_list.takeItem(i)
+                    self._avail_list.addItem(self._make_col_item("Level"))
+                    break
+
     def _confirm(self) -> None:
         use_active = self._radio_active.isChecked()
         if use_active:
@@ -275,14 +309,17 @@ class ExportBomDialog(QDialog):
                 )
                 return
 
-        progress = QProgressDialog("正在导出BOM，请稍候…", None, 0, 0, self)
-        progress.setWindowTitle("导出BOM")
+        summarize = self._radio_summary.isChecked()
+        label_text = "正在导出汇总BOM，请稍候…" if summarize else "正在导出BOM，请稍候…"
+        progress = QProgressDialog(label_text, None, 0, 0, self)
+        progress.setWindowTitle("导出BOM汇总" if summarize else "导出BOM")
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(300)
         progress.setValue(0)
 
         def _on_row_collected(count: int) -> None:
-            progress.setLabelText(f"正在导出BOM，请稍候… 已读取 {count} 个节点")
+            base = "正在导出汇总BOM，请稍候…" if summarize else "正在导出BOM，请稍候…"
+            progress.setLabelText(f"{base} 已读取 {count} 个节点")
             progress.repaint()
             QApplication.processEvents()
 
@@ -292,6 +329,7 @@ class ExportBomDialog(QDialog):
                 columns=selected_cols,
                 custom_columns=self._custom_columns,
                 row_progress_callback=_on_row_collected,
+                summarize=summarize,
             )
         except Exception as e:
             progress.close()
