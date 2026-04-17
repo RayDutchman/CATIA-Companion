@@ -148,6 +148,7 @@ def export_bom_to_excel(
                     sort_column=summary_sort_column,
                 )
             wb   = openpyxl.Workbook()
+            ws   = wb.active
             ws.title = "BOM汇总" if summarize else "BOM"
             _write_sheet(ws, rows)
             wb.save(str(dest))
