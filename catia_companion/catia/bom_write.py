@@ -97,12 +97,48 @@ def write_bom_to_catia(
 
     _total_count: list[int] = [0]
 
+    # Track backing filepaths that have already been written so that repeated
+    # instances of the same physical document (e.g. the same fastener used
+    # 50 times) are skipped together with their entire sub-tree.  This mirrors
+    # the _props_cache optimisation in collect_bom_rows and keeps the write-back
+    # node count consistent with the read node count.
+    # NOTE: nodes without a filepath (embedded sub-assemblies / 部件) are
+    # always processed because they share the parent file but may represent
+    # structurally distinct sub-trees.
+    _written_fps: set[str] = set()
+
+    # Mutable copy of the dirty-PN set used for early-exit: once every dirty
+    # part has been written we can stop traversing the rest of the tree.
+    remaining_pns: set[str] = set(pn_data.keys())
+
     def _traverse_write(product) -> None:
+        # Early exit: nothing left to write.
+        if not remaining_pns:
+            return
+
         try:
             pn = product.part_number
         except Exception:
             name = product.name
             pn   = name.rsplit(".", 1)[0] if "." in name else name
+
+        # Resolve the backing filepath for this node.
+        filepath = ""
+        for accessor in (
+            lambda p: p.reference_product.com_object.Parent.FullName,
+            lambda p: p.com_object.ReferenceProduct.Parent.FullName,
+            lambda p: p.com_object.Parent.FullName,
+        ):
+            try:
+                filepath = accessor(product)
+                break
+            except Exception:
+                pass
+
+        # If we have already processed this file (written its properties and
+        # recursed into its children), skip the whole sub-tree.
+        if filepath and filepath in _written_fps:
+            return
 
         if pn in pn_data:
             try:
@@ -124,6 +160,7 @@ def write_bom_to_catia(
                     _set_prop(product, col, value)
                 elif col in custom_columns:
                     _set_user_prop(product, col, value)
+            remaining_pns.discard(pn)
 
         _total_count[0] += 1
         if progress_callback is not None:
@@ -132,12 +169,19 @@ def write_bom_to_catia(
         try:
             count = product.products.count
             for i in range(1, count + 1):
+                if not remaining_pns:
+                    break
                 try:
                     _traverse_write(product.products.item(i))
                 except Exception:
                     pass
         except Exception:
             pass
+
+        # Mark this filepath as done after its sub-tree has been fully
+        # traversed so that future identical references are skipped entirely.
+        if filepath:
+            _written_fps.add(filepath)
 
     # ── CATIA connection ────────────────────────────────────────────────────
     caa         = catia()
