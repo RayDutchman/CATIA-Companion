@@ -51,6 +51,15 @@ MAIN_WINDOW_DEFAULT_HEIGHT = 520
 STYLESHEET_RELATIVE_PATH = "catia_companion/ui/style.qss"
 
 # ---------------------------------------------------------------------------
+# Resource file paths (relative to project root / frozen executable directory)
+# ---------------------------------------------------------------------------
+
+FONT_FILE_PATH    = "resources/ChangFangSong.ttf"
+ISO_XML_FILE_PATH = "resources/ISO.xml"
+CRACK_DIR_PATH    = "crack"
+APP_ICON_PATH     = "resources/icon.ico"
+
+# ---------------------------------------------------------------------------
 # Preset user-defined reference properties
 # (used both for CATPart template stamping and as BOM preset custom columns)
 # ---------------------------------------------------------------------------

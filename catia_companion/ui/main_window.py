@@ -24,6 +24,9 @@ from catia_companion.constants import (
     ABOUT_TEXT,
     MAIN_WINDOW_DEFAULT_WIDTH,
     MAIN_WINDOW_DEFAULT_HEIGHT,
+    FONT_FILE_PATH,
+    ISO_XML_FILE_PATH,
+    CRACK_DIR_PATH,
 )
 from catia_companion.utils import resource_path, detect_catia_root
 from catia_companion.logging_setup import log_signal_emitter
@@ -134,9 +137,9 @@ class MainWindow(QMainWindow):
         btn_iso.setToolTip("将 ISO.xml 复制到 CATIA 标准目录")
         btn_iso.clicked.connect(self._copy_iso_to_catia)
 
-        btn_pojie = QPushButton("PoJie")
-        btn_pojie.setToolTip("将 Pojie 文件夹中的文件复制到 CATIA bin 目录")
-        btn_pojie.clicked.connect(self._pojie)
+        btn_crack = QPushButton("Crack")
+        btn_crack.setToolTip("将 crack 文件夹中的文件复制到 CATIA bin 目录")
+        btn_crack.clicked.connect(self._crack)
 
         btn_stamp = QPushButton("刷写零件模板")
         btn_stamp.setToolTip("为选中的 CATPart 添加标准用户自定义属性")
@@ -146,7 +149,7 @@ class MainWindow(QMainWindow):
         btn_deps.setToolTip("通过 CATIA COM 查找文件的所有引用文档")
         btn_deps.clicked.connect(self._open_find_dependencies_dialog)
 
-        for btn in (btn_font, btn_iso, btn_pojie, btn_stamp, btn_deps):
+        for btn in (btn_font, btn_iso, btn_crack, btn_stamp, btn_deps):
             tools_layout.addWidget(btn)
         layout.addWidget(tools_group)
 
@@ -207,7 +210,7 @@ class MainWindow(QMainWindow):
         for label, slot in (
             ("复制字体文件到CATIA目录",  self._copy_font_to_catia),
             ("复制ISO.xml到CATIA目录",    self._copy_iso_to_catia),
-            ("PoJie",                     self._pojie),
+            ("Crack",                     self._crack),
             ("刷写零件模板",              self._open_stamp_part_template_dialog),
             ("查找所有依赖项（未实现）",     self._open_find_dependencies_dialog),
         ):
@@ -488,22 +491,23 @@ class MainWindow(QMainWindow):
 
     def _copy_font_to_catia(self) -> None:
         self._copy_file_to_catia(
-            file_name="ChangFangSong.ttf",
+            file_name=FONT_FILE_PATH,
             relative_dest=Path("win_b64") / "resources" / "fonts" / "TrueType",
         )
 
     def _copy_iso_to_catia(self) -> None:
         self._copy_file_to_catia(
-            file_name="ISO.xml",
+            file_name=ISO_XML_FILE_PATH,
             relative_dest=Path("win_b64") / "resources" / "standard" / "drafting",
         )
 
     def _copy_file_to_catia(self, file_name: str, relative_dest: Path) -> None:
         src_file = resource_path(file_name)
+        base_name = Path(file_name).name
         if not src_file.exists():
             QMessageBox.warning(
                 self, "文件未找到",
-                f"在工作目录中找不到 '{file_name}'：\n{src_file.parent}",
+                f"在工作目录中找不到 '{base_name}'：\n{src_file.parent}",
             )
             return
 
@@ -538,12 +542,12 @@ class MainWindow(QMainWindow):
             else:
                 return
 
-        dest_file = dest_dir / file_name
+        dest_file = dest_dir / base_name
         try:
             shutil.copy2(str(src_file), str(dest_file))
             QMessageBox.information(
                 self, "成功",
-                f"'{file_name}' 已成功复制到：\n{dest_file}",
+                f"'{base_name}' 已成功复制到：\n{dest_file}",
             )
         except PermissionError:
             QMessageBox.critical(
@@ -553,12 +557,12 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "错误", f"发生意外错误：\n{e}")
 
-    def _pojie(self) -> None:
-        src_dir = resource_path("Pojie")
+    def _crack(self) -> None:
+        src_dir = resource_path(CRACK_DIR_PATH)
         if not src_dir.exists() or not src_dir.is_dir():
             QMessageBox.warning(
                 self, "文件夹未找到",
-                f"找不到 'Pojie' 文件夹：\n{src_dir.parent}",
+                f"找不到 'crack' 文件夹：\n{src_dir.parent}",
             )
             return
 
@@ -591,7 +595,7 @@ class MainWindow(QMainWindow):
 
         files = [f for f in src_dir.iterdir() if f.is_file()]
         if not files:
-            QMessageBox.warning(self, "文件夹为空", "'Pojie' 文件夹中没有文件。")
+            QMessageBox.warning(self, "文件夹为空", "'crack' 文件夹中没有文件。")
             return
 
         try:

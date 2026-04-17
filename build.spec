@@ -4,7 +4,13 @@
 #   pyinstaller build.spec
 #
 # Output: dist/CATIA Companion/
-# The executable and resource files will all be in the same folder.
+# The executable is placed in dist/CATIA Companion/ and all supporting files
+# (resources/, macros/, catia_companion/, etc.) are placed inside the default
+# _internal/ subdirectory alongside it.
+#
+# Before building, place the application icon at:
+#   resources/icon.ico
+# Then uncomment the `icon=` line in the EXE block below.
 
 block_cipher = None
 
@@ -13,8 +19,10 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('ISO.xml', '.'),
-        ('ChangFangSong.ttf', '.'),
+        ('resources', 'resources'),
+        ('macros', 'macros'),
+        ('drawing_templates', 'drawing_templates'),
+        ('crack', 'crack'),
         ('catia_companion/ui/style.qss', 'catia_companion/ui'),
         ('catia_companion', 'catia_companion'),
     ],
@@ -46,6 +54,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='resources/icon.ico',  # Uncomment after placing icon.ico in resources/
 )
 
 coll = COLLECT(
