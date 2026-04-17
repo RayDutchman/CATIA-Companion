@@ -1150,7 +1150,12 @@ class BomEditDialog(QDialog):
                 QMessageBox.warning(self, "未选择文件", "请选择一个CATProduct文件。")
                 return
 
+        # dirty_data must be keyed by the *current* CATIA PN, which may differ
+        # from the internal canonical key (orig_pn) when a PN rename was already
+        # written back in a previous write-back operation.  We keep pn_remap to
+        # go back from current_pn → orig_pn for the post-write snapshot update.
         dirty_data: dict[str, dict[str, str]] = {}
+        pn_remap:   dict[str, str]            = {}  # current_pn → orig_pn
         for pn, dirty_cols in self._modified_keys.items():
             if pn not in self._canonical_data:
                 continue
@@ -1159,7 +1164,14 @@ class BomEditDialog(QDialog):
                 for col in dirty_cols if col in self._canonical_data[pn]
             }
             if changed:
-                dirty_data[pn] = changed
+                # Use the snapshot PN (= what CATIA currently holds for this
+                # node) as the lookup key for the traversal.  If the PN has
+                # never been written back, the snapshot value equals orig_pn.
+                current_pn = self._snapshot_data.get(pn, {}).get(
+                    "Part Number", pn
+                )
+                dirty_data[current_pn] = changed
+                pn_remap[current_pn]   = pn
 
         if not dirty_data:
             if close_on_success:
@@ -1199,7 +1211,8 @@ class BomEditDialog(QDialog):
         finally:
             progress.close()
 
-        for pn, changed in dirty_data.items():
+        for current_pn, changed in dirty_data.items():
+            pn = pn_remap.get(current_pn, current_pn)
             if pn in self._snapshot_data:
                 self._snapshot_data[pn].update(changed)
             if pn in self._modified_keys:
