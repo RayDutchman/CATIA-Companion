@@ -1168,19 +1168,6 @@ class BomEditDialog(QDialog):
                 QMessageBox.information(self, "无更改", "没有检测到任何修改，无需写回。")
             return
 
-        # Build PN → filepath mapping so write_bom_to_catia can write directly
-        # to each backing file without traversing the whole product tree.
-        # Embedded sub-assemblies (部件) share their parent's backing file and
-        # cannot be written standalone, so they are excluded here and handled
-        # by the tree-traversal fallback inside write_bom_to_catia.
-        pn_to_filepath: dict[str, str] = {}
-        for row in self._raw_rows:
-            pn  = str(row.get("Part Number", ""))
-            fp  = str(row.get("_filepath", ""))
-            typ = str(row.get("Type", ""))
-            if pn in dirty_data and pn not in pn_to_filepath and fp and typ != "部件":
-                pn_to_filepath[pn] = fp
-
         self._save_btn.setEnabled(False)
         self._finish_btn.setEnabled(False)
         QApplication.processEvents()
@@ -1197,11 +1184,8 @@ class BomEditDialog(QDialog):
             QApplication.processEvents()
 
         try:
-            write_bom_to_catia(
-                file_path, dirty_data, self._all_custom_columns,
-                pn_to_filepath=pn_to_filepath,
-                progress_callback=_on_node_written,
-            )
+            write_bom_to_catia(file_path, dirty_data, self._all_custom_columns,
+                               _on_node_written)
         except Exception as e:
             progress.close()
             logger.error(f"Failed to write BOM back to CATIA: {e}")
