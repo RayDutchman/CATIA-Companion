@@ -125,21 +125,32 @@ def write_bom_to_catia(
             pn   = name.rsplit(".", 1)[0] if "." in name else name
 
         # Resolve the backing filepath for this node.
+        # _is_own_file is True only when the filepath is the node's own
+        # document (a standalone .CATPart / .CATProduct reference).  The
+        # third fallback accessor returns the *parent* document's path for
+        # embedded 部件 that have no file of their own; those must NOT be
+        # de-duplicated via _written_fps because multiple siblings under the
+        # same parent would otherwise all share that parent path and only the
+        # first sibling would ever be visited.
         filepath = ""
-        for accessor in (
-            lambda p: p.reference_product.com_object.Parent.FullName,
-            lambda p: p.com_object.ReferenceProduct.Parent.FullName,
-            lambda p: p.com_object.Parent.FullName,
+        _is_own_file = False
+        for is_own_file_flag, accessor in (
+            (True,  lambda p: p.reference_product.com_object.Parent.FullName),
+            (True,  lambda p: p.com_object.ReferenceProduct.Parent.FullName),
+            (False, lambda p: p.com_object.Parent.FullName),
         ):
             try:
                 filepath = accessor(product)
+                _is_own_file = is_own_file_flag
                 break
             except Exception:
                 pass
 
         # If we have already processed this file (written its properties and
-        # recursed into its children), skip the whole sub-tree.
-        if filepath and filepath in _written_fps:
+        # recursed into its children), skip the whole sub-tree.  Only apply
+        # this guard for nodes that own their file; embedded 部件 share the
+        # parent's path and must not be skipped on that basis.
+        if filepath and _is_own_file and filepath in _written_fps:
             return
 
         # ── Recurse into children FIRST (post-order / bottom-up) ────────────
@@ -188,7 +199,9 @@ def write_bom_to_catia(
 
         # Mark this filepath as done after its sub-tree has been fully
         # traversed so that future identical references are skipped entirely.
-        if filepath:
+        # Only standalone-file nodes are recorded; embedded 部件 nodes must
+        # not pollute the set with the parent document's path.
+        if filepath and _is_own_file:
             _written_fps.add(filepath)
 
     # ── CATIA connection ────────────────────────────────────────────────────
