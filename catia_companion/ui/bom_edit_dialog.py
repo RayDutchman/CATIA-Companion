@@ -203,6 +203,12 @@ class BomEditDialog(QDialog):
         ]
 
         self._summarize: bool = self._edit_settings.value("summarize", False, type=bool)
+        self._summary_include_assemblies: bool = self._edit_settings.value(
+            "summary_include_assemblies", False, type=bool
+        )
+        self._summary_sort_column: str = self._edit_settings.value(
+            "summary_sort_column", "Part Number"
+        )
 
         # All custom columns (including all presets) so that pre-loading from
         # CATIA covers every column regardless of current visibility.
@@ -275,6 +281,43 @@ class BomEditDialog(QDialog):
         bom_type_layout.addStretch()
         self._radio_summary_bom.toggled.connect(self._on_bom_type_changed)
         layout.addWidget(bom_type_group)
+
+        # ── Summary BOM options (only visible in summary mode) ────────────────
+        self._summary_opts_group = QGroupBox("汇总BOM选项")
+        summary_opts_layout = QVBoxLayout(self._summary_opts_group)
+
+        self._include_assemblies_chk = QCheckBox("包含产品和部件（子装配体）")
+        self._include_assemblies_chk.setToolTip(
+            "勾选后，汇总BOM中也会列出产品和部件（子装配体），而不仅限于零件。"
+        )
+        self._include_assemblies_chk.setChecked(self._summary_include_assemblies)
+        self._include_assemblies_chk.toggled.connect(self._on_include_assemblies_toggled)
+        summary_opts_layout.addWidget(self._include_assemblies_chk)
+
+        sort_row_layout = QHBoxLayout()
+        sort_row_layout.addWidget(QLabel("排序列:"))
+        self._sort_col_combo = QComboBox()
+        # Build initial column list for sort combo
+        _sort_cols = list(BOM_EDIT_COLUMN_ORDER) + [
+            c for c in PRESET_USER_REF_PROPERTIES if c not in BOM_EDIT_COLUMN_ORDER
+        ] + [
+            c for c in self._custom_columns
+            if c not in BOM_EDIT_COLUMN_ORDER and c not in PRESET_USER_REF_PROPERTIES
+        ]
+        for col in _sort_cols:
+            self._sort_col_combo.addItem(
+                BOM_COLUMN_DISPLAY_NAMES.get(col, col), col
+            )
+        sort_saved_idx = self._sort_col_combo.findData(self._summary_sort_column)
+        if sort_saved_idx >= 0:
+            self._sort_col_combo.setCurrentIndex(sort_saved_idx)
+        self._sort_col_combo.currentIndexChanged.connect(self._on_sort_col_changed)
+        sort_row_layout.addWidget(self._sort_col_combo)
+        sort_row_layout.addStretch()
+        summary_opts_layout.addLayout(sort_row_layout)
+
+        self._summary_opts_group.setVisible(self._summarize)
+        layout.addWidget(self._summary_opts_group)
 
         hint = QLabel(
             "文件名 / 层级 / 类型 / 数量 为结构属性，不可编辑。"
@@ -369,10 +412,16 @@ class BomEditDialog(QDialog):
     def _on_bom_type_changed(self, summary_checked: bool) -> None:
         self._summarize = summary_checked
         self._edit_settings.setValue("summarize", summary_checked)
+        self._summary_opts_group.setVisible(summary_checked)
         # If BOM is already loaded, re-derive display rows from the raw rows and repopulate
         if self._raw_rows:
             self._rows = (
-                flatten_bom_to_summary(self._raw_rows) if summary_checked else self._raw_rows
+                flatten_bom_to_summary(
+                    self._raw_rows,
+                    include_assemblies=self._summary_include_assemblies,
+                    sort_column=self._summary_sort_column or None,
+                )
+                if summary_checked else self._raw_rows
             )
             self._collapsed_rows.clear()
             self._columns = self._build_visible_columns()
@@ -381,6 +430,40 @@ class BomEditDialog(QDialog):
             self._table.setHorizontalHeaderLabels(display_headers)
             self._populate_table()
             self._table.resizeColumnsToContents()
+
+    def _on_include_assemblies_toggled(self, checked: bool) -> None:
+        self._summary_include_assemblies = checked
+        self._edit_settings.setValue("summary_include_assemblies", checked)
+        # Rebuild summary display if BOM is loaded and summary mode is active
+        if self._summarize and self._raw_rows:
+            self._rows = flatten_bom_to_summary(
+                self._raw_rows,
+                include_assemblies=checked,
+                sort_column=self._summary_sort_column or None,
+            )
+            self._collapsed_rows.clear()
+            # When assemblies are included show the Type column; otherwise hide it
+            self._columns = self._build_visible_columns()
+            display_headers = [BOM_COLUMN_DISPLAY_NAMES.get(c, c) for c in self._columns]
+            self._table.setColumnCount(len(self._columns))
+            self._table.setHorizontalHeaderLabels(display_headers)
+            self._populate_table()
+            self._table.resizeColumnsToContents()
+
+    def _on_sort_col_changed(self, _index: int) -> None:
+        col = self._sort_col_combo.currentData()
+        if col:
+            self._summary_sort_column = col
+            self._edit_settings.setValue("summary_sort_column", col)
+            # Re-sort the currently displayed summary rows if applicable
+            if self._summarize and self._raw_rows:
+                self._rows = flatten_bom_to_summary(
+                    self._raw_rows,
+                    include_assemblies=self._summary_include_assemblies,
+                    sort_column=col,
+                )
+                self._collapsed_rows.clear()
+                self._populate_table()
 
     # ── Table helpers ─────────────────────────────────────────────────────────
 
@@ -401,9 +484,13 @@ class BomEditDialog(QDialog):
             fn_idx = base.index("Filename") if "Filename" in base else -1
             if fn_idx >= 0:
                 base.insert(fn_idx + 1, "Filepath")
-        # In summary mode hide Level (no hierarchy) and Type (all items are parts)
         if self._summarize:
-            base = [c for c in base if c not in ("Level", "Type")]
+            # Always hide Level (hierarchy is meaningless in summary)
+            # Keep Type when assemblies are included (so the user can see 产品/部件/零件)
+            cols_to_hide = {"Level"}
+            if not self._summary_include_assemblies:
+                cols_to_hide.add("Type")
+            base = [c for c in base if c not in cols_to_hide]
         visible_preset = [
             c for c in PRESET_USER_REF_PROPERTIES if c in self._visible_preset_cols
         ]
@@ -508,7 +595,14 @@ class BomEditDialog(QDialog):
         self._raw_rows = rows
 
         # In summary mode collapse the hierarchy into unique parts
-        display_rows = flatten_bom_to_summary(rows) if self._summarize else rows
+        display_rows = (
+            flatten_bom_to_summary(
+                rows,
+                include_assemblies=self._summary_include_assemblies,
+                sort_column=self._summary_sort_column or None,
+            )
+            if self._summarize else rows
+        )
 
         self._rows = display_rows
         self._collapsed_rows.clear()

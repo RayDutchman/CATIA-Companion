@@ -28,6 +28,8 @@ def export_bom_to_excel(
     custom_columns: list[str] | None = None,
     row_progress_callback: Callable[[int], None] | None = None,
     summarize: bool = False,
+    summary_include_assemblies: bool = False,
+    summary_sort_column: str | None = None,
 ) -> None:
     """Export a hierarchical or summarised BOM from CATProduct files to Excel (.xlsx).
 
@@ -52,6 +54,13 @@ def export_bom_to_excel(
         (unique parts with cumulative quantities) before writing to Excel.
         The output filename will have the suffix ``_BOM汇总`` instead of
         ``_BOM``.
+    summary_include_assemblies:
+        Passed to :func:`~catia_companion.catia.bom_collect.flatten_bom_to_summary`.
+        When ``True`` sub-assemblies and assemblies are included in the summary.
+        Only used when *summarize* is ``True``.
+    summary_sort_column:
+        Column name to sort the summary by.  Defaults to ``"Part Number"``
+        when ``None``.  Only used when *summarize* is ``True``.
     """
     import openpyxl
     from openpyxl.styles import Font, Alignment
@@ -133,9 +142,12 @@ def export_bom_to_excel(
             rows = collect_bom_rows(None, columns, custom_columns,
                                      row_progress_callback)
             if summarize:
-                rows = flatten_bom_to_summary(rows)
+                rows = flatten_bom_to_summary(
+                    rows,
+                    include_assemblies=summary_include_assemblies,
+                    sort_column=summary_sort_column,
+                )
             wb   = openpyxl.Workbook()
-            ws   = wb.active
             ws.title = "BOM汇总" if summarize else "BOM"
             _write_sheet(ws, rows)
             wb.save(str(dest))
@@ -184,7 +196,11 @@ def export_bom_to_excel(
         rows = collect_bom_rows(str(src), columns, custom_columns,
                                 row_progress_callback)
         if summarize:
-            rows = flatten_bom_to_summary(rows)
+            rows = flatten_bom_to_summary(
+                rows,
+                include_assemblies=summary_include_assemblies,
+                sort_column=summary_sort_column,
+            )
 
         wb       = openpyxl.Workbook()
         ws       = wb.active

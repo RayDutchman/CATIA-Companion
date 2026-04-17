@@ -253,7 +253,11 @@ def collect_bom_rows(
     return rows
 
 
-def flatten_bom_to_summary(rows: list[dict]) -> list[dict]:
+def flatten_bom_to_summary(
+    rows: list[dict],
+    include_assemblies: bool = False,
+    sort_column: str | None = None,
+) -> list[dict]:
     """Collapse a hierarchical BOM into a flat summary BOM.
 
     Each unique part (identified by its backing filepath when available, or by
@@ -262,22 +266,27 @@ def flatten_bom_to_summary(rows: list[dict]) -> list[dict]:
     computed by multiplying the per-level quantities along every path from the
     root to that part.
 
-    Assemblies and sub-assemblies (Type == "产品" or "部件") that appear as
-    root nodes or whose quantity would be the entire top-level assembly are
-    excluded from the output – only physical components are included.  The
-    root row (Level == 0) is always excluded.
+    The root row (Level == 0) is always excluded from the result.
 
     Parameters
     ----------
     rows:
         The hierarchical BOM rows returned by :func:`collect_bom_rows`.
+    include_assemblies:
+        When ``False`` (default) rows whose ``Type`` is ``"产品"`` or
+        ``"部件"`` are omitted so that only leaf parts appear in the summary.
+        Set to ``True`` to include sub-assemblies and assemblies as well.
+    sort_column:
+        Internal column name to sort the result by.  Sorting is case-
+        insensitive string comparison.  Defaults to ``"Part Number"`` when
+        ``None``.
 
     Returns
     -------
     list[dict]
-        Flat list of row dicts sorted by Part Number.  Each dict contains the
-        same keys as the input rows except that ``Level`` is removed and
-        ``Quantity`` reflects the total accumulated count.
+        Flat list of row dicts.  Each dict contains the same keys as the input
+        rows except that ``Level`` is removed and ``Quantity`` reflects the
+        total accumulated count.
     """
     if not rows:
         return []
@@ -313,11 +322,17 @@ def flatten_bom_to_summary(rows: list[dict]) -> list[dict]:
     summary:     dict[str, dict] = {}   # key → merged row dict
     key_to_qty:  dict[str, int]  = {}   # key → accumulated total qty
 
+    _assembly_types = {"产品", "部件"}
+
     for row, abs_qty in zip(rows, absolute_qtys):
         level = row.get("Level", 0)
 
         # Always skip the root assembly (level 0 – the top-level product itself)
         if level == 0:
+            continue
+
+        # Optionally skip sub-assemblies and assemblies
+        if not include_assemblies and row.get("Type", "") in _assembly_types:
             continue
 
         fp  = row.get("_filepath", "")
@@ -335,7 +350,8 @@ def flatten_bom_to_summary(rows: list[dict]) -> list[dict]:
             key_to_qty[key]          += abs_qty
             summary[key]["Quantity"]  = key_to_qty[key]
 
-    # ── Step 3: sort by Part Number and return ───────────────────────────────
-    result = [summary[k] for k in seen_order]
-    result.sort(key=lambda r: str(r.get("Part Number", "")))
+    # ── Step 3: sort and return ───────────────────────────────────────────────
+    result    = [summary[k] for k in seen_order]
+    sort_key  = sort_column if sort_column else "Part Number"
+    result.sort(key=lambda r: str(r.get(sort_key, "")).lower())
     return result
