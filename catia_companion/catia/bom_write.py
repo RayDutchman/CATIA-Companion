@@ -113,7 +113,7 @@ def write_bom_to_catia(
     # part has been written we can stop traversing the rest of the tree.
     remaining_pns: set[str] = set(pn_data.keys())
 
-    def _traverse_write(product) -> None:
+    def _traverse_write(product, parent_filepath: str = "") -> None:
         # Early exit: nothing left to write.
         if not remaining_pns:
             return
@@ -125,32 +125,30 @@ def write_bom_to_catia(
             pn   = name.rsplit(".", 1)[0] if "." in name else name
 
         # Resolve the backing filepath for this node.
-        # _is_own_file is True only when the filepath is the node's own
-        # document (a standalone .CATPart / .CATProduct reference).  The
-        # third fallback accessor returns the *parent* document's path for
-        # embedded 部件 that have no file of their own; those must NOT be
-        # de-duplicated via _written_fps because multiple siblings under the
-        # same parent would otherwise all share that parent path and only the
-        # first sibling would ever be visited.
         filepath = ""
-        _is_own_file = False
-        for is_own_file_flag, accessor in (
-            (True,  lambda p: p.reference_product.com_object.Parent.FullName),
-            (True,  lambda p: p.com_object.ReferenceProduct.Parent.FullName),
-            (False, lambda p: p.com_object.Parent.FullName),
+        for accessor in (
+            lambda p: p.reference_product.com_object.Parent.FullName,
+            lambda p: p.com_object.ReferenceProduct.Parent.FullName,
+            lambda p: p.com_object.Parent.FullName,
         ):
             try:
                 filepath = accessor(product)
-                _is_own_file = is_own_file_flag
                 break
             except Exception:
                 pass
 
+        # A node is an embedded 部件 (no own file) when its resolved filepath
+        # is identical to its parent's filepath – the same logic used by
+        # collect_bom_rows to set Type=="部件".  Such nodes must NOT be
+        # de-duplicated via _written_fps: all siblings under the same 组件
+        # resolve to the same parent path, so only the first one would ever
+        # be visited if the guard were applied to them.
+        _is_own_file = bool(filepath) and filepath != parent_filepath
+
         # If we have already processed this file (written its properties and
         # recursed into its children), skip the whole sub-tree.  Only apply
-        # this guard for nodes that own their file; embedded 部件 share the
-        # parent's path and must not be skipped on that basis.
-        if filepath and _is_own_file and filepath in _written_fps:
+        # this guard for nodes that have their own backing file.
+        if _is_own_file and filepath in _written_fps:
             return
 
         # ── Recurse into children FIRST (post-order / bottom-up) ────────────
@@ -165,7 +163,8 @@ def write_bom_to_catia(
                 if not remaining_pns:
                     break
                 try:
-                    _traverse_write(product.products.item(i))
+                    _traverse_write(product.products.item(i),
+                                    parent_filepath=filepath)
                 except Exception:
                     pass
         except Exception:
@@ -213,7 +212,7 @@ def write_bom_to_catia(
     if file_path is None:
         product_doc  = ProductDocument(application.active_document.com_object)
         root_product = product_doc.product
-        _traverse_write(root_product)
+        _traverse_write(root_product, parent_filepath="")
         logger.info("Write-back complete for active document (not saved)")
         return
 
@@ -242,7 +241,7 @@ def write_bom_to_catia(
 
     product_doc  = ProductDocument(target_doc.com_object)
     root_product = product_doc.product
-    _traverse_write(root_product)
+    _traverse_write(root_product, parent_filepath="")
     logger.info(
         f"Write-back complete for {src.name} "
         "(not saved; user must save manually in CATIA)"
