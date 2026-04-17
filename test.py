@@ -1,5 +1,5 @@
 """
-Diagnostic script: print all 3 COM filepath accessors for every node
+Diagnostic script: print 3 COM filepath accessors for every node
 in the active CATIA product tree.
 
 Run from the repo root with CATIA open and a CATProduct as the active doc:
@@ -25,8 +25,10 @@ Findings (2026-04-17)
     A0 succeeds → returns PARENT's file path (correct for 部件 detection)
     A1 succeeds → returns PARENT's file path (same result)
     A2 raises AttributeError – the COM object has no .Parent on embedded nodes.
-  Conclusion: A2 is never useful and was removed from production code.
-  get_product_filepath() and bom_write._traverse_write() now use A0+A1 only.
+  Conclusion: A2 is never useful and was removed first. Then A0 was also
+  dropped because A1 (pure COM, no pycatia wrapper) is simpler and more
+  robust. Production code now uses only A1:
+      product.com_object.ReferenceProduct.Parent.FullName
 """
 
 import sys

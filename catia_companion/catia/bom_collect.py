@@ -20,18 +20,15 @@ logger = logging.getLogger(__name__)
 def get_product_filepath(product) -> str:
     """Return the full file path of the CATIA document backing *product*.
 
-    Tries several COM access patterns in order and returns an empty string if
-    none succeed.
+    Uses ``com_object.ReferenceProduct.Parent.FullName`` – a pure COM path
+    that works for both standalone products/parts and embedded 部件 (which
+    have no own file and return their parent's path).  Returns an empty
+    string on failure.
     """
-    for accessor in (
-        lambda p: p.reference_product.com_object.Parent.FullName,
-        lambda p: p.com_object.ReferenceProduct.Parent.FullName,
-    ):
-        try:
-            return accessor(product)
-        except Exception:
-            pass
-    return ""
+    try:
+        return product.com_object.ReferenceProduct.Parent.FullName
+    except Exception:
+        return ""
 
 
 def collect_bom_rows(

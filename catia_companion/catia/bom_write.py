@@ -125,16 +125,10 @@ def write_bom_to_catia(
             pn   = name.rsplit(".", 1)[0] if "." in name else name
 
         # Resolve the backing filepath for this node.
-        filepath = ""
-        for accessor in (
-            lambda p: p.reference_product.com_object.Parent.FullName,
-            lambda p: p.com_object.ReferenceProduct.Parent.FullName,
-        ):
-            try:
-                filepath = accessor(product)
-                break
-            except Exception:
-                pass
+        try:
+            filepath = product.com_object.ReferenceProduct.Parent.FullName
+        except Exception:
+            filepath = ""
 
         # A node is an embedded 部件 (no own file) when its resolved filepath
         # is identical to its parent's filepath – the same logic used by
