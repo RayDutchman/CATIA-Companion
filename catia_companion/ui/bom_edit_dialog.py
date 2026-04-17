@@ -231,6 +231,9 @@ class BomEditDialog(QDialog):
         self._collapsed_rows: set[int] = set()
         # True once BOM has been successfully loaded at least once
         self._bom_loaded: bool = False
+        # Raw (hierarchical) BOM rows as returned by collect_bom_rows(); used to
+        # reconstruct the display rows when the user toggles the BOM type.
+        self._raw_rows: list[dict] = []
 
         # ── Layout ────────────────────────────────────────────────────────────
         layout = QVBoxLayout(self)
@@ -366,8 +369,12 @@ class BomEditDialog(QDialog):
     def _on_bom_type_changed(self, summary_checked: bool) -> None:
         self._summarize = summary_checked
         self._edit_settings.setValue("summarize", summary_checked)
-        # If BOM is already loaded, rebuild the visible columns and repopulate
-        if self._rows:
+        # If BOM is already loaded, re-derive display rows from the raw rows and repopulate
+        if self._raw_rows:
+            self._rows = (
+                flatten_bom_to_summary(self._raw_rows) if summary_checked else self._raw_rows
+            )
+            self._collapsed_rows.clear()
             self._columns = self._build_visible_columns()
             display_headers = [BOM_COLUMN_DISPLAY_NAMES.get(c, c) for c in self._columns]
             self._table.setColumnCount(len(self._columns))
@@ -497,14 +504,17 @@ class BomEditDialog(QDialog):
         self._load_btn.setEnabled(True)
         self._load_btn.setText("重新加载BOM")
 
-        # In summary mode collapse the hierarchy into unique parts
-        if self._summarize:
-            rows = flatten_bom_to_summary(rows)
+        # Always save the raw hierarchical rows so we can switch modes later
+        self._raw_rows = rows
 
-        self._rows = rows
+        # In summary mode collapse the hierarchy into unique parts
+        display_rows = flatten_bom_to_summary(rows) if self._summarize else rows
+
+        self._rows = display_rows
         self._collapsed_rows.clear()
 
-        # Build PN-keyed canonical data (first occurrence wins)
+        # Build PN-keyed canonical data from the raw rows (first occurrence wins).
+        # Using raw rows ensures all parts are indexed regardless of current mode.
         all_data_cols = list(dict.fromkeys(
             BOM_EDIT_COLUMN_ORDER
             + [c for c in self._all_custom_columns if c not in BOM_EDIT_COLUMN_ORDER]

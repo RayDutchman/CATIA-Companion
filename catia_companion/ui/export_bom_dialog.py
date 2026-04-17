@@ -271,13 +271,13 @@ class ExportBomDialog(QDialog):
         self._settings.setValue("summarize", summary_checked)
 
         if summary_checked:
-            # Move "Level" from selected to available (it has no meaning in summary BOM)
-            for i in range(self._selected_list.count()):
+            # Move all "Level" items from selected to available
+            # (iterate in reverse so takeItem indices stay valid)
+            for i in range(self._selected_list.count() - 1, -1, -1):
                 item = self._selected_list.item(i)
                 if self._item_internal(item) == "Level":
                     self._selected_list.takeItem(i)
                     self._avail_list.addItem(self._make_col_item("Level"))
-                    break
 
     def _confirm(self) -> None:
         use_active = self._radio_active.isChecked()
