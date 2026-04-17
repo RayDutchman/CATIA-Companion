@@ -100,7 +100,7 @@ def write_bom_to_catia(
     # Track backing filepaths that have already been written so that repeated
     # instances of the same physical document (e.g. the same fastener used
     # 50 times) are skipped together with their entire sub-tree.  This mirrors
-    # the _props_cache optimisation in collect_bom_rows and keeps the write-back
+    # the _props_cache optimization in collect_bom_rows and keeps the write-back
     # node count consistent with the read node count.
     # NOTE: nodes without a filepath (embedded sub-assemblies / 部件) are
     # always processed because they share the parent file but may represent
