@@ -84,10 +84,3 @@ QStatusBar {
     color: #555;
 }
 
-/* ── BOM tree branch lines ── */
-/* Suppress the spurious vertical sibling-continuation line that appears
-   above the expand arrow of nodes that have preceding siblings. */
-QTreeWidget::branch:has-siblings:!adjoins-item {
-    border-image: none;
-    image: none;
-}
