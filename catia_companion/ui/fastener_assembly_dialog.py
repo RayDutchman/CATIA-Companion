@@ -164,6 +164,7 @@ class FastenerAssemblyDialog(QDialog):
                 pn = app.active_document.product.part_number
                 fastener_path = app.active_document.full_name
             else:
+                # Leave the document open – the VBScript macro needs it.
                 doc = app.documents.open(fastener_path)
                 pn = doc.product.part_number
         except Exception as e:
