@@ -64,15 +64,16 @@ class _BomTreeDelegate(QStyledItemDelegate):
 
 
 class _BomTreeWidget(QTreeWidget):
-    """QTreeWidget that draws dotted connector lines to visualise the hierarchy.
+    """QTreeWidget that draws Windows-Regedit-style dotted connector lines.
 
     Qt's default Windows/Fusion styles omit the vertical guide lines that
     connect parent and child nodes.  This subclass overrides
-    :meth:`drawBranches` to paint them using a dotted pen so the tree
-    structure is easier to follow at a glance.
+    :meth:`drawBranches` to paint 1-pixel-on / 1-pixel-off dotted lines
+    (keyed on absolute viewport coordinates so vertical guides remain
+    phase-consistent across consecutive rows).
     """
 
-    _LINE_COLOR = QColor("#a8b4c4")
+    _LINE_COLOR = QColor("#a0aab4")
 
     def drawBranches(self, painter: QPainter, rect, index) -> None:
         # Let Qt draw the default expand/collapse indicator first.
@@ -100,31 +101,43 @@ class _BomTreeWidget(QTreeWidget):
         if depth == 0:
             return
 
-        pen = QPen(self._LINE_COLOR, 1, Qt.PenStyle.DotLine)
-        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
-
         mid_y = (rect.top() + rect.bottom()) // 2
 
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        painter.setPen(pen)
+        painter.setPen(QPen(self._LINE_COLOR, 1, Qt.PenStyle.SolidLine))
+
+        # Helper: draw a vertical dotted segment using the absolute y coordinate
+        # as the phase reference so lines remain continuous across rows.
+        def _vdots(x: int, y1: int, y2: int) -> None:
+            # Start on the first y that is even in *absolute* coordinates.
+            start = y1 if y1 % 2 == 0 else y1 + 1
+            for y in range(start, y2 + 1, 2):
+                painter.drawPoint(x, y)
+
+        # Helper: draw a horizontal dotted segment using absolute x as phase.
+        def _hdots(y: int, x1: int, x2: int) -> None:
+            start = x1 if x1 % 2 == 0 else x1 + 1
+            for x in range(start, x2 + 1, 2):
+                painter.drawPoint(x, y)
 
         # For every ancestor segment (all but the last), draw a full-height
-        # vertical line when that ancestor has more siblings below it.
+        # vertical line when that ancestor still has more siblings below it.
         for d in range(depth - 1):
             if has_next[d]:
                 x = rect.left() + d * indent + indent // 2
-                painter.drawLine(x, rect.top(), x, rect.bottom())
+                _vdots(x, rect.top(), rect.bottom())
 
-        # For the direct-parent segment, draw either a T-connector (parent has
+        # For the direct-parent segment draw either a T-connector (parent has
         # more siblings) or an L-connector (parent is the last child), plus a
-        # short horizontal arm reaching toward the item.
-        x = rect.left() + (depth - 1) * indent + indent // 2
+        # short horizontal arm reaching toward the item's text.
+        x     = rect.left() + (depth - 1) * indent + indent // 2
+        x_end = rect.left() + depth * indent
         if has_next[depth - 1]:
-            painter.drawLine(x, rect.top(), x, rect.bottom())
+            _vdots(x, rect.top(), rect.bottom())
         else:
-            painter.drawLine(x, rect.top(), x, mid_y)
-        painter.drawLine(x, mid_y, rect.left() + depth * indent, mid_y)
+            _vdots(x, rect.top(), mid_y)
+        _hdots(mid_y, x + 1, x_end)
 
         painter.restore()
 
