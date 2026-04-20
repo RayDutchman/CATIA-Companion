@@ -303,8 +303,8 @@ class BomEditDialog(QDialog):
         # Row 1: radio buttons + filepath checkbox on the same line
         bom_type_row = QHBoxLayout()
         self._bom_type_btn_group = QButtonGroup(self)
-        self._radio_hierarchical = QRadioButton("层级BOM（显示装配层级）")
-        self._radio_summary_bom  = QRadioButton("汇总BOM（仅显示零件及总数量）")
+        self._radio_hierarchical = QRadioButton("层级BOM")
+        self._radio_summary_bom  = QRadioButton("汇总BOM")
         if self._summarize:
             self._radio_summary_bom.setChecked(True)
         else:
@@ -359,9 +359,9 @@ class BomEditDialog(QDialog):
         layout.addWidget(display_group)
 
         hint = QLabel(
-            "类型 / 数量 为结构属性，不可编辑（文件名列可选）。"
-            "零件编号可编辑但不能与其他行冲突。"
-            "相同零件编号的行会联动更新。请确保 CATIA 已启动。"
+            "层级 / 类型 / 数量 为结构属性，不可编辑，"
+            "零件编号可编辑但不能与其他行冲突，"
+            "文件名/路径可编辑。"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray; font-size: 11px;")
@@ -414,7 +414,7 @@ class BomEditDialog(QDialog):
         autofit_btn.clicked.connect(self._autofit_columns)
         btn_row.addWidget(autofit_btn)
 
-        self._rename_btn = QPushButton("按零件编号将文件改名")
+        self._rename_btn = QPushButton("按零件编号修改文件名")
         self._rename_btn.setEnabled(False)
         self._rename_btn.clicked.connect(self._rename_by_part_number)
         btn_row.addWidget(self._rename_btn)
@@ -426,11 +426,11 @@ class BomEditDialog(QDialog):
         btn_row.addWidget(self._rename_file_btn)
         btn_row.addStretch()
 
-        self._save_btn   = QPushButton("应用（写回CATIA）")
+        self._save_btn   = QPushButton("应用")
         self._save_btn.setEnabled(False)
         self._save_btn.clicked.connect(self._apply_changes)
 
-        self._finish_btn = QPushButton("完成（写回CATIA）")
+        self._finish_btn = QPushButton("完成")
         self._finish_btn.setDefault(True)
         self._finish_btn.setEnabled(False)
         self._finish_btn.clicked.connect(self._finish_and_close)

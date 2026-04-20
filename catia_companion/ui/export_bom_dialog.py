@@ -115,8 +115,8 @@ class ExportBomDialog(QDialog):
         bom_type_group  = QGroupBox("BOM类型")
         bom_type_layout = QHBoxLayout(bom_type_group)
         self._bom_type_btn_group = QButtonGroup(self)
-        self._radio_hierarchical = QRadioButton("层级BOM（显示装配层级）")
-        self._radio_summary      = QRadioButton("汇总BOM（仅显示零件及总数量）")
+        self._radio_hierarchical = QRadioButton("层级BOM")
+        self._radio_summary      = QRadioButton("汇总BOM")
         if self._summarize:
             self._radio_summary.setChecked(True)
         else:
