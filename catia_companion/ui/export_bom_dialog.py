@@ -132,27 +132,26 @@ class ExportBomDialog(QDialog):
         bom_opts_layout.addLayout(type_row)
         self._radio_summary.toggled.connect(self._on_bom_type_changed)
 
-        # Summary-only sub-options (hidden when in hierarchical mode)
-        self._summary_opts_group = QGroupBox("汇总BOM选项")
-        summary_opts_layout = QVBoxLayout(self._summary_opts_group)
-
+        # Summary-only options (shown only in summary mode, no sub-groupbox)
         self._include_assemblies_chk = QCheckBox("包含产品和部件（子装配体）")
         self._include_assemblies_chk.setToolTip(
             "勾选后，汇总BOM中也会列出产品和部件（子装配体），而不仅限于零件。"
         )
         self._include_assemblies_chk.setChecked(self._summary_include_assemblies)
         self._include_assemblies_chk.toggled.connect(self._on_include_assemblies_toggled)
-        summary_opts_layout.addWidget(self._include_assemblies_chk)
+        bom_opts_layout.addWidget(self._include_assemblies_chk)
 
         sort_row = QHBoxLayout()
-        sort_row.addWidget(QLabel("排序列:"))
+        self._sort_row_label = QLabel("排序列:")
         self._sort_col_combo = QComboBox()
+        sort_row.addWidget(self._sort_row_label)
         sort_row.addWidget(self._sort_col_combo)
         sort_row.addStretch()
-        summary_opts_layout.addLayout(sort_row)
+        bom_opts_layout.addLayout(sort_row)
 
-        self._summary_opts_group.setVisible(self._summarize)
-        bom_opts_layout.addWidget(self._summary_opts_group)
+        self._include_assemblies_chk.setVisible(self._summarize)
+        self._sort_row_label.setVisible(self._summarize)
+        self._sort_col_combo.setVisible(self._summarize)
         layout.addWidget(bom_opts_group)
         col_group  = QGroupBox("导出列（拖动以排序）")
         col_outer  = QVBoxLayout(col_group)
@@ -312,7 +311,9 @@ class ExportBomDialog(QDialog):
         self._settings.setValue("summarize", summary_checked)
 
         # Show/hide summary options
-        self._summary_opts_group.setVisible(summary_checked)
+        self._include_assemblies_chk.setVisible(summary_checked)
+        self._sort_row_label.setVisible(summary_checked)
+        self._sort_col_combo.setVisible(summary_checked)
 
         if summary_checked:
             # Move all "Level" items from selected to available

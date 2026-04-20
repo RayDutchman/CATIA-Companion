@@ -88,24 +88,31 @@ class MainWindow(QMainWindow):
         btn_part.setToolTip("将 CATPart 或 CATProduct 文件批量导出为 STEP")
         btn_part.clicked.connect(self._open_convert_part_dialog)
 
-        btn_bom_export = QPushButton("从 CATProduct 导出 BOM")
-        btn_bom_export.setToolTip("从 CATProduct 导出 BOM 到 Excel 文件")
-        btn_bom_export.clicked.connect(self._open_export_bom_dialog)
-
-        for btn in (btn_drawing, btn_part, btn_bom_export):
+        for btn in (btn_drawing, btn_part):
             export_layout.addWidget(btn)
         layout.addWidget(export_group)
 
-        # ── Edit group ───────────────────────────────────────────────────
-        edit_group  = QGroupBox("编辑")
-        edit_layout = QVBoxLayout(edit_group)
-        edit_layout.setSpacing(6)
+        # ── BOM group ────────────────────────────────────────────────────
+        bom_group  = QGroupBox("BOM")
+        bom_layout = QVBoxLayout(bom_group)
+        bom_layout.setSpacing(6)
+
+        btn_bom_export = QPushButton("从 CATProduct 导出 BOM")
+        btn_bom_export.setToolTip("从 CATProduct 导出 BOM 到 Excel 文件")
+        btn_bom_export.clicked.connect(self._open_export_bom_dialog)
 
         btn_bom_edit = QPushButton("BOM 属性补全")
         btn_bom_edit.setToolTip("在表格中编辑 BOM 属性并写回 CATIA")
         btn_bom_edit.clicked.connect(self._open_bom_edit_dialog)
 
-        edit_layout.addWidget(btn_bom_edit)
+        for btn in (btn_bom_export, btn_bom_edit):
+            bom_layout.addWidget(btn)
+        layout.addWidget(bom_group)
+
+        # ── Drawing group ────────────────────────────────────────────────
+        drawing_group  = QGroupBox("图纸")
+        drawing_layout = QVBoxLayout(drawing_group)
+        drawing_layout.setSpacing(6)
 
         drawing_row = QHBoxLayout()
         drawing_row.setSpacing(6)
@@ -120,9 +127,8 @@ class MainWindow(QMainWindow):
 
         drawing_row.addWidget(btn_new_drawing)
         drawing_row.addWidget(btn_refresh_drawing)
-        edit_layout.addLayout(drawing_row)
-
-        layout.addWidget(edit_group)
+        drawing_layout.addLayout(drawing_row)
+        layout.addWidget(drawing_group)
 
         # ── Tools group ──────────────────────────────────────────────────
         tools_group  = QGroupBox("工具")
@@ -179,14 +185,14 @@ class MainWindow(QMainWindow):
             "从CATPart/CATProduct导出stp", self,
             triggered=self._open_convert_part_dialog,
         ))
-        export_menu.addAction(QAction(
+
+        # BOM
+        bom_menu = bar.addMenu("BOM")
+        bom_menu.addAction(QAction(
             "从CATProduct导出BOM", self,
             triggered=self._open_export_bom_dialog,
         ))
-
-        # Edit
-        edit_menu = bar.addMenu("编辑")
-        edit_menu.addAction(QAction(
+        bom_menu.addAction(QAction(
             "BOM属性补全", self, triggered=self._open_bom_edit_dialog
         ))
 
