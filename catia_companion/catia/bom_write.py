@@ -97,7 +97,7 @@ def write_bom_to_catia(
             except Exception:
                 continue
 
-    _total_count: list[int] = [0]
+    _total_count: int = 0
 
     # Track backing filepaths that have already been written so that repeated
     # instances of the same physical document (e.g. the same fastener used
@@ -114,6 +114,7 @@ def write_bom_to_catia(
     remaining_pns: set[str] = set(pn_data.keys())
 
     def _traverse_write(product, parent_filepath: str = "") -> None:
+        nonlocal _total_count
         # Early exit: nothing left to write.
         if not remaining_pns:
             return
@@ -185,9 +186,9 @@ def write_bom_to_catia(
                     _set_user_prop(product, col, value)
             remaining_pns.discard(pn)
 
-        _total_count[0] += 1
+        _total_count += 1
         if progress_callback is not None:
-            progress_callback(_total_count[0])
+            progress_callback(_total_count)
 
         # Mark this filepath as done after its sub-tree has been fully
         # traversed so that future identical references are skipped entirely.

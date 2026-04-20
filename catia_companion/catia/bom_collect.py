@@ -98,7 +98,7 @@ def collect_bom_rows(
                 pass
         return ""
 
-    _total_count: list[int] = [0]
+    _total_count: int = 0
 
     # Cache properties by filepath to avoid redundant DESIGN_MODE switches and
     # COM property reads for the same physical document referenced multiple
@@ -108,6 +108,7 @@ def collect_bom_rows(
     _props_cache: dict[str, dict] = {}
 
     def _traverse(product, rows: list, level: int, parent_filepath: str = "") -> None:
+        nonlocal _total_count
         try:
             pn = product.part_number
         except Exception:
@@ -117,8 +118,16 @@ def collect_bom_rows(
         filepath  = get_product_filepath(product)
         not_found = not bool(filepath)
 
-        # Use the cache to skip DESIGN_MODE + property reads for repeated files.
-        cached = bool(filepath) and filepath in _props_cache
+        # Embedded 部件 share the parent product's backing file, so the
+        # file-based property cache must NOT be used for them – each 部件
+        # has its own COM property values that must be read individually.
+        is_embedded = (bool(filepath) and bool(parent_filepath)
+                       and filepath == parent_filepath)
+
+        # Use the cache to skip DESIGN_MODE + property reads for repeated
+        # files, but only for standalone products/parts (not embedded 部件).
+        cached = (not is_embedded
+                  and bool(filepath) and filepath in _props_cache)
         is_readable = True
 
         if not cached:
@@ -135,7 +144,7 @@ def collect_bom_rows(
                     props[col] = _get_user_prop(product, col)
             props["_is_readable"] = is_readable
 
-            if filepath:
+            if filepath and not is_embedded:
                 _props_cache[filepath] = props
         else:
             props       = _props_cache[filepath]
@@ -169,9 +178,9 @@ def collect_bom_rows(
                 row[col] = props.get(col, "")
 
         rows.append(row)
-        _total_count[0] += 1
+        _total_count += 1
         if progress_callback is not None:
-            progress_callback(_total_count[0])
+            progress_callback(_total_count)
 
         try:
             products  = product.products
@@ -256,9 +265,14 @@ def flatten_bom_to_summary(
 ) -> list[dict]:
     """Collapse a hierarchical BOM into a flat summary BOM.
 
-    Each unique part (identified by its backing filepath when available, or by
-    Part Number otherwise) appears exactly once in the result.  The
-    ``Quantity`` value is the *total* count across the whole assembly tree,
+    Each unique part appears exactly once in the result.  All node types
+    (零件, 产品, 部件) are identified by their Part Number.  Using Part Number
+    as the universal key is consistent with CATIA's own identity model and
+    correctly handles embedded sub-assemblies (部件), which share their
+    parent product's backing filepath and therefore cannot be distinguished
+    by filepath alone.
+
+    The ``Quantity`` value is the *total* count across the whole assembly tree,
     computed by multiplying the per-level quantities along every path from the
     root to that part.
 
@@ -311,8 +325,8 @@ def flatten_bom_to_summary(
         absolute_qtys.append(abs_qty)
         cum_qty_stack.append((level, abs_qty))
 
-    # ── Step 2: deduplicate by filepath (preferred) or Part Number ───────────
-    # Key: filepath if non-empty, else Part Number.
+    # ── Step 2: deduplicate ─────────────────────────────────────────────────
+    # Key: Part Number for all node types.
     # For each key we keep the first row's attributes and accumulate quantity.
     seen_order:  list[str]       = []   # insertion-ordered keys
     summary:     dict[str, dict] = {}   # key → merged row dict
@@ -331,8 +345,10 @@ def flatten_bom_to_summary(
         if not include_assemblies and row.get("Type", "") in _assembly_types:
             continue
 
-        fp  = row.get("_filepath", "")
-        key = fp if fp else str(row.get("Part Number", ""))
+        # Always use Part Number as the deduplication key: consistent for
+        # 零件, 产品, and 部件 (embedded 部件 share the parent filepath so
+        # filepath-based dedup would incorrectly merge them with the parent).
+        key = str(row.get("Part Number", ""))
         if not key:
             continue
 

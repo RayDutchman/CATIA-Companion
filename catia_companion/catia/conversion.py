@@ -44,6 +44,39 @@ def _prompt_overwrite(dest: Path) -> str:
     return "overwrite"
 
 
+def _resolve_overwrite(
+    dest: Path,
+    bulk_action: str | None,
+) -> tuple[str, str | None]:
+    """Decide what to do when *dest* already exists in a batch conversion loop.
+
+    Returns ``(result, new_bulk_action)`` where *result* is one of:
+
+    * ``"proceed"``  – the caller may write the destination file (old file deleted).
+    * ``"skip"``     – skip this file and move to the next one.
+    * ``"cancel"``   – abort the entire batch.
+    """
+    if bulk_action == "skip_all":
+        logger.info(f"  Skipped (skip all): {dest}")
+        return "skip", bulk_action
+    if bulk_action == "overwrite_all":
+        dest.unlink()
+        return "proceed", bulk_action
+    action = _prompt_overwrite(dest)
+    if action == "cancel":
+        return "cancel", "cancel"
+    if action == "skip_all":
+        logger.info(f"  Skipped (skip all): {dest}")
+        return "skip", "skip_all"
+    if action == "skip":
+        logger.info(f"  Skipped: {dest}")
+        return "skip", bulk_action
+    if action == "overwrite_all":
+        bulk_action = "overwrite_all"
+    dest.unlink()
+    return "proceed", bulk_action
+
+
 def convert_drawing_to_pdf(
     file_paths: list[str],
     output_folder: str | None = None,
@@ -99,26 +132,11 @@ def convert_drawing_to_pdf(
         logger.info(f"Opening: {src}")
 
         if dest.exists():
-            if bulk_action == "skip_all":
-                logger.info(f"  Skipped (skip all): {dest}")
+            result, bulk_action = _resolve_overwrite(dest, bulk_action)
+            if result == "cancel":
+                break
+            if result == "skip":
                 continue
-            if bulk_action == "overwrite_all":
-                dest.unlink()
-            else:
-                action = _prompt_overwrite(dest)
-                if action == "cancel":
-                    bulk_action = "cancel"
-                    break
-                if action == "skip_all":
-                    bulk_action = "skip_all"
-                    logger.info(f"  Skipped (skip all): {dest}")
-                    continue
-                if action == "skip":
-                    logger.info(f"  Skipped: {dest}")
-                    continue
-                if action == "overwrite_all":
-                    bulk_action = "overwrite_all"
-                dest.unlink()
 
         try:
             documents.open(str(src))
@@ -196,26 +214,11 @@ def convert_part_to_step(
         logger.info(f"Opening: {src}")
 
         if dest.exists():
-            if bulk_action == "skip_all":
-                logger.info(f"  Skipped (skip all): {dest}")
+            result, bulk_action = _resolve_overwrite(dest, bulk_action)
+            if result == "cancel":
+                break
+            if result == "skip":
                 continue
-            if bulk_action == "overwrite_all":
-                dest.unlink()
-            else:
-                action = _prompt_overwrite(dest)
-                if action == "cancel":
-                    bulk_action = "cancel"
-                    break
-                if action == "skip_all":
-                    bulk_action = "skip_all"
-                    logger.info(f"  Skipped (skip all): {dest}")
-                    continue
-                if action == "skip":
-                    logger.info(f"  Skipped: {dest}")
-                    continue
-                if action == "overwrite_all":
-                    bulk_action = "overwrite_all"
-                dest.unlink()
 
         try:
             documents.open(str(src))
