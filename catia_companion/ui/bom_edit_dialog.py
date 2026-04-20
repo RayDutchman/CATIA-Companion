@@ -73,7 +73,7 @@ class _BomTreeWidget(QTreeWidget):
     phase-consistent across consecutive rows).
     """
 
-    _LINE_COLOR = QColor("#a0aab4")
+    _LINE_COLOR = QColor("#cc4444")
 
     def drawBranches(self, painter: QPainter, rect, index) -> None:
         # Let Qt draw the default expand/collapse indicator first.
@@ -107,26 +107,12 @@ class _BomTreeWidget(QTreeWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         painter.setPen(QPen(self._LINE_COLOR, 1, Qt.PenStyle.SolidLine))
 
-        # Helper: draw a vertical dotted segment using the absolute y coordinate
-        # as the phase reference so lines remain continuous across rows.
-        def _vdots(x: int, y1: int, y2: int) -> None:
-            # Start on the first y that is even in *absolute* coordinates.
-            start = y1 if y1 % 2 == 0 else y1 + 1
-            for y in range(start, y2 + 1, 2):
-                painter.drawPoint(x, y)
-
-        # Helper: draw a horizontal dotted segment using absolute x as phase.
-        def _hdots(y: int, x1: int, x2: int) -> None:
-            start = x1 if x1 % 2 == 0 else x1 + 1
-            for x in range(start, x2 + 1, 2):
-                painter.drawPoint(x, y)
-
         # For every ancestor segment (all but the last), draw a full-height
         # vertical line only when that ancestor itself has a next sibling.
         for d in range(depth - 1):
             if has_next[d]:
                 x = rect.left() + d * indent + indent // 2
-                _vdots(x, rect.top(), rect.bottom())
+                painter.drawLine(x, rect.top(), x, rect.bottom())
 
         # For the direct-parent segment draw a T-connector (full-height vertical)
         # when the current item has more siblings, or just a horizontal arm when
@@ -134,8 +120,8 @@ class _BomTreeWidget(QTreeWidget):
         x     = rect.left() + (depth - 1) * indent + indent // 2
         x_end = rect.left() + depth * indent
         if has_next[-1]:
-            _vdots(x, rect.top(), rect.bottom())
-        _hdots(mid_y, x + 1, x_end)
+            painter.drawLine(x, rect.top(), x, rect.bottom())
+        painter.drawLine(x + 1, mid_y, x_end, mid_y)
 
         painter.restore()
 
