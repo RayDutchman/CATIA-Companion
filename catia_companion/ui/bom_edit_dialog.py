@@ -121,19 +121,6 @@ class _BomTreeWidget(QTreeWidget):
             for x in range(start, x2 + 1, 2):
                 painter.drawPoint(x, y)
 
-        # For every ancestor segment (all but the last), draw a full-height
-        # vertical line when there is any sibling remaining in the subtree
-        # rooted at level d — i.e., when any node on the path from level d
-        # up to the direct parent still has a next sibling.  Using only
-        # has_next[d] would fail to draw the line when the level-d ancestor
-        # is the last at its level but a deeper ancestor (say level d+1)
-        # still has siblings, which produces a broken guide line after
-        # expanding a nested sub-product.
-        for d in range(depth - 1):
-            if any(has_next[d:depth]):
-                x = rect.left() + d * indent + indent // 2
-                _vdots(x, rect.top(), rect.bottom())
-
         # For the direct-parent segment draw either a T-connector (current item
         # has more siblings) or an L-connector (current item is the last child),
         # plus a short horizontal arm reaching toward the item's text.
