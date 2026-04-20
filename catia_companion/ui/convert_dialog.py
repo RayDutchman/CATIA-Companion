@@ -418,8 +418,14 @@ class FileConvertDialog(QDialog):
         self._progress_bar.setFormat(f"完成 ({success_count}/{total})")
         self._confirm_btn.setEnabled(True)
 
-        QMessageBox.information(
-            self, "导出完成",
-            f"已成功导出 {success_count} / {total} 个文件。",
-        )
+        if self._is_stamp_dialog:
+            QMessageBox.information(
+                self, "刷写完成",
+                f"已成功刷写 {success_count} / {total} 个文件。",
+            )
+        else:
+            QMessageBox.information(
+                self, "导出完成",
+                f"已成功导出 {success_count} / {total} 个文件。",
+            )
         self.accept()

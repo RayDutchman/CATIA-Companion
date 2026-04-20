@@ -45,7 +45,6 @@ def apply_part_template(
     """
     from pycatia import catia
     from pycatia.mec_mod_interfaces.part_document import PartDocument
-    from PySide6.QtWidgets import QMessageBox
 
     caa = catia()
     application = caa.application
@@ -100,16 +99,5 @@ def apply_part_template(
                 progress_callback(idx, total)
             except Exception:
                 pass
-
-    msg = "Stamping complete.\n\n"
-    if succeeded:
-        msg += "✔ Succeeded:\n" + "\n".join(f"  {s}" for s in succeeded)
-    if failed:
-        msg += "\n\n✘ Failed:\n" + "\n".join(f"  {f}" for f in failed)
-
-    if failed:
-        QMessageBox.warning(None, "刷写零件模板", msg)
-    else:
-        QMessageBox.information(None, "刷写零件模板", msg)
 
     return len(succeeded)
