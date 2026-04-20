@@ -73,7 +73,7 @@ class _BomTreeWidget(QTreeWidget):
     phase-consistent across consecutive rows).
     """
 
-    _LINE_COLOR = QColor("#cc4444")
+    _LINE_COLOR = QColor("#a0aab4")
 
     def drawBranches(self, painter: QPainter, rect, index) -> None:
         # Let Qt draw the default expand/collapse indicator first.
@@ -103,9 +103,12 @@ class _BomTreeWidget(QTreeWidget):
 
         mid_y = (rect.top() + rect.bottom()) // 2
 
+        pen = QPen(self._LINE_COLOR, 1, Qt.PenStyle.SolidLine)
+        pen.setDashPattern([1.0, 1.0])   # 1 px on, 1 px off dotted style
+
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        painter.setPen(QPen(self._LINE_COLOR, 1, Qt.PenStyle.SolidLine))
+        painter.setPen(pen)
 
         # For every ancestor segment (all but the last), draw a full-height
         # vertical line only when that ancestor itself has a next sibling.
