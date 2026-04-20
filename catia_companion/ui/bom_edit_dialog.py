@@ -128,12 +128,12 @@ class _BomTreeWidget(QTreeWidget):
                 x = rect.left() + d * indent + indent // 2
                 _vdots(x, rect.top(), rect.bottom())
 
-        # For the direct-parent segment draw either a T-connector (parent has
-        # more siblings) or an L-connector (parent is the last child), plus a
-        # short horizontal arm reaching toward the item's text.
+        # For the direct-parent segment draw either a T-connector (current item
+        # has more siblings) or an L-connector (current item is the last child),
+        # plus a short horizontal arm reaching toward the item's text.
         x     = rect.left() + (depth - 1) * indent + indent // 2
         x_end = rect.left() + depth * indent
-        if has_next[depth - 1]:
+        if has_next[-1]:
             _vdots(x, rect.top(), rect.bottom())
         else:
             _vdots(x, rect.top(), mid_y)
@@ -393,16 +393,7 @@ class BomEditDialog(QDialog):
         self._radio_summary_bom.toggled.connect(self._on_bom_type_changed)
         bom_type_row.addWidget(self._radio_hierarchical)
         bom_type_row.addWidget(self._radio_summary_bom)
-        bom_type_row.addStretch()
 
-        self._filepath_chk = QCheckBox("文件名列显示完整路径")
-        self._filepath_chk.setToolTip("勾选后文件名列将显示文件完整路径（含目录），而非仅文件名")
-        self._filepath_chk.setChecked(self._show_filepath_col)
-        self._filepath_chk.toggled.connect(self._on_show_filepath_toggled)
-        bom_type_row.addWidget(self._filepath_chk)
-        display_layout.addLayout(bom_type_row)
-
-        # Row 2: summary-only options (hidden in hierarchical mode)
         self._summary_opts_widget = QWidget()
         summary_opts_layout = QHBoxLayout(self._summary_opts_widget)
         summary_opts_layout.setContentsMargins(0, 0, 0, 0)
@@ -431,9 +422,11 @@ class BomEditDialog(QDialog):
             self._sort_col_combo.setCurrentIndex(sort_saved_idx)
         self._sort_col_combo.currentIndexChanged.connect(self._on_sort_col_changed)
         summary_opts_layout.addWidget(self._sort_col_combo)
-        summary_opts_layout.addStretch()
+
         self._summary_opts_widget.setVisible(self._summarize)
-        display_layout.addWidget(self._summary_opts_widget)
+        bom_type_row.addWidget(self._summary_opts_widget)
+        bom_type_row.addStretch()
+        display_layout.addLayout(bom_type_row)
 
         layout.addWidget(display_group)
 
@@ -457,6 +450,12 @@ class BomEditDialog(QDialog):
         fn_cb.toggled.connect(self._on_preset_col_toggled)
         preset_layout.addWidget(fn_cb)
         self._preset_checkboxes["Filename"] = fn_cb
+        # "显示完整路径" follows immediately after the Filename checkbox
+        self._filepath_chk = QCheckBox("显示完整路径")
+        self._filepath_chk.setToolTip("勾选后文件名列将显示文件完整路径（含目录），而非仅文件名")
+        self._filepath_chk.setChecked(self._show_filepath_col)
+        self._filepath_chk.toggled.connect(self._on_show_filepath_toggled)
+        preset_layout.addWidget(self._filepath_chk)
         for col_name in PRESET_USER_REF_PROPERTIES:
             cb = QCheckBox(col_name)
             cb.setChecked(col_name in self._visible_preset_cols)
