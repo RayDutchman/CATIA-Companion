@@ -56,11 +56,21 @@ def apply_part_template(
     total = len(file_paths)
 
     for idx, path in enumerate(file_paths):
-        src = Path(path).resolve()
-        logger.info(f"Opening: {src}")
+        src = Path(path)
         try:
-            documents.open(str(src))
-            doc        = PartDocument(application.active_document.com_object)
+            if keep_open:
+                # The document is already active in CATIA – skip re-opening it.
+                # Using documents.open() on an already-open file would trigger
+                # a CATIA "reload?" dialog, and would fail for unsaved documents
+                # that have no file on disk yet.
+                logger.info(f"Stamping active document: {src.name}")
+                doc = PartDocument(application.active_document.com_object)
+            else:
+                src = src.resolve()
+                logger.info(f"Opening: {src}")
+                documents.open(str(src))
+                doc = PartDocument(application.active_document.com_object)
+
             product    = doc.product
             user_props = product.user_ref_properties
 
@@ -80,8 +90,15 @@ def apply_part_template(
                 else:
                     logger.info(f"  Skipped (already exists): '{prop_name}'")
 
-            doc.save()
-            logger.info(f"  Saved: {src.name}")
+            try:
+                doc.save()
+                logger.info(f"  Saved: {src.name}")
+            except Exception as save_err:
+                # Unsaved (new) documents have no disk path yet – log a warning
+                # but still count the stamp as successful since properties were
+                # written into memory.
+                logger.warning(f"  Could not save {src.name} (may be unsaved): {save_err}")
+
             succeeded.append(f"{src.name} (+{len(added)} added)")
 
         except Exception as e:
