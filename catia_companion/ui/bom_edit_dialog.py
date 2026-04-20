@@ -13,9 +13,9 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QLineEdit,
-    QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+    QPushButton, QTreeWidget, QTreeWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QCheckBox, QGroupBox, QMessageBox, QApplication,
-    QFileDialog, QProgressDialog, QRadioButton, QButtonGroup,
+    QFileDialog, QProgressDialog, QRadioButton, QButtonGroup, QStyledItemDelegate,
 )
 from PySide6.QtGui import QColor
 from PySide6.QtCore import Qt, QSettings
@@ -34,6 +34,33 @@ from catia_companion.catia.bom_collect import collect_bom_rows, flatten_bom_to_s
 from catia_companion.catia.bom_write import write_bom_to_catia
 
 logger = logging.getLogger(__name__)
+
+# Custom UserRole for QTreeWidgetItem: marks a row as locked (unreadable / not found)
+_ITEM_LOCKED_ROLE: int = Qt.ItemDataRole.UserRole + 1
+
+
+class _BomTreeDelegate(QStyledItemDelegate):
+    """Per-column read-only enforcement for the BOM QTreeWidget.
+
+    QTreeWidgetItem flags are row-wide; this delegate returns ``None`` from
+    :meth:`createEditor` for any column whose internal name belongs to
+    :data:`~catia_companion.constants.BOM_READONLY_COLUMNS`, and also for
+    any row that has been marked locked (file not found / unreadable).
+    """
+
+    def __init__(self, cols_fn, tree: QTreeWidget) -> None:
+        super().__init__(tree)
+        self._cols_fn = cols_fn  # callable: () -> list[str]
+
+    def createEditor(self, parent, option, index):
+        tree = self.parent()
+        item = tree.itemFromIndex(index)
+        if item is not None and item.data(0, _ITEM_LOCKED_ROLE):
+            return None
+        col_name = self._cols_fn()[index.column()]
+        if col_name in BOM_READONLY_COLUMNS:
+            return None
+        return super().createEditor(parent, option, index)
 
 
 class _FileRenameDialog(QDialog):
@@ -236,8 +263,8 @@ class BomEditDialog(QDialog):
         self._rows: list[dict] = []
         # Guard against re-entrant change handling
         self._is_updating: bool = False
-        # Row indices of collapsed assembly rows
-        self._collapsed_rows: set[int] = set()
+        # Parallel list: self._item_by_row[i] is the QTreeWidgetItem for self._rows[i]
+        self._item_by_row: list[QTreeWidgetItem] = []
         # True once BOM has been successfully loaded at least once
         self._bom_loaded: bool = False
         # Raw (hierarchical) BOM rows as returned by collect_bom_rows(); used to
@@ -267,27 +294,40 @@ class BomEditDialog(QDialog):
         file_row.addWidget(self._load_btn)
         layout.addLayout(file_row)
 
-        # BOM type selection
-        bom_type_group  = QGroupBox("BOM类型")
-        bom_type_layout = QHBoxLayout(bom_type_group)
-        self._bom_type_btn_group  = QButtonGroup(self)
-        self._radio_hierarchical  = QRadioButton("层级BOM（显示装配层级）")
-        self._radio_summary_bom   = QRadioButton("汇总BOM（仅显示零件及总数量）")
+        # ── BOM type + display options (single compact group) ────────────────
+        display_group  = QGroupBox("BOM类型与显示选项")
+        display_layout = QVBoxLayout(display_group)
+        display_layout.setSpacing(4)
+        display_layout.setContentsMargins(8, 6, 8, 6)
+
+        # Row 1: radio buttons + filepath checkbox on the same line
+        bom_type_row = QHBoxLayout()
+        self._bom_type_btn_group = QButtonGroup(self)
+        self._radio_hierarchical = QRadioButton("层级BOM（显示装配层级）")
+        self._radio_summary_bom  = QRadioButton("汇总BOM（仅显示零件及总数量）")
         if self._summarize:
             self._radio_summary_bom.setChecked(True)
         else:
             self._radio_hierarchical.setChecked(True)
         self._bom_type_btn_group.addButton(self._radio_hierarchical)
         self._bom_type_btn_group.addButton(self._radio_summary_bom)
-        bom_type_layout.addWidget(self._radio_hierarchical)
-        bom_type_layout.addWidget(self._radio_summary_bom)
-        bom_type_layout.addStretch()
         self._radio_summary_bom.toggled.connect(self._on_bom_type_changed)
-        layout.addWidget(bom_type_group)
+        bom_type_row.addWidget(self._radio_hierarchical)
+        bom_type_row.addWidget(self._radio_summary_bom)
+        bom_type_row.addStretch()
 
-        # ── Summary BOM options (only visible in summary mode) ────────────────
-        self._summary_opts_group = QGroupBox("汇总BOM选项")
-        summary_opts_layout = QVBoxLayout(self._summary_opts_group)
+        self._filepath_chk = QCheckBox("文件名列显示完整路径")
+        self._filepath_chk.setToolTip("勾选后文件名列将显示文件完整路径（含目录），而非仅文件名")
+        self._filepath_chk.setChecked(self._show_filepath_col)
+        self._filepath_chk.toggled.connect(self._on_show_filepath_toggled)
+        bom_type_row.addWidget(self._filepath_chk)
+        display_layout.addLayout(bom_type_row)
+
+        # Row 2: summary-only options (hidden in hierarchical mode)
+        self._summary_opts_widget = QWidget()
+        summary_opts_layout = QHBoxLayout(self._summary_opts_widget)
+        summary_opts_layout.setContentsMargins(0, 0, 0, 0)
+        summary_opts_layout.setSpacing(8)
 
         self._include_assemblies_chk = QCheckBox("包含产品和部件（子装配体）")
         self._include_assemblies_chk.setToolTip(
@@ -296,11 +336,9 @@ class BomEditDialog(QDialog):
         self._include_assemblies_chk.setChecked(self._summary_include_assemblies)
         self._include_assemblies_chk.toggled.connect(self._on_include_assemblies_toggled)
         summary_opts_layout.addWidget(self._include_assemblies_chk)
-
-        sort_row_layout = QHBoxLayout()
-        sort_row_layout.addWidget(QLabel("排序列:"))
+        summary_opts_layout.addSpacing(8)
+        summary_opts_layout.addWidget(QLabel("排序列:"))
         self._sort_col_combo = QComboBox()
-        # Build initial column list for sort combo
         _sort_cols = list(BOM_EDIT_COLUMN_ORDER) + [
             c for c in PRESET_USER_REF_PROPERTIES if c not in BOM_EDIT_COLUMN_ORDER
         ] + [
@@ -308,34 +346,26 @@ class BomEditDialog(QDialog):
             if c not in BOM_EDIT_COLUMN_ORDER and c not in PRESET_USER_REF_PROPERTIES
         ]
         for col in _sort_cols:
-            self._sort_col_combo.addItem(
-                BOM_COLUMN_DISPLAY_NAMES.get(col, col), col
-            )
+            self._sort_col_combo.addItem(BOM_COLUMN_DISPLAY_NAMES.get(col, col), col)
         sort_saved_idx = self._sort_col_combo.findData(self._summary_sort_column)
         if sort_saved_idx >= 0:
             self._sort_col_combo.setCurrentIndex(sort_saved_idx)
         self._sort_col_combo.currentIndexChanged.connect(self._on_sort_col_changed)
-        sort_row_layout.addWidget(self._sort_col_combo)
-        sort_row_layout.addStretch()
-        summary_opts_layout.addLayout(sort_row_layout)
+        summary_opts_layout.addWidget(self._sort_col_combo)
+        summary_opts_layout.addStretch()
+        self._summary_opts_widget.setVisible(self._summarize)
+        display_layout.addWidget(self._summary_opts_widget)
 
-        self._summary_opts_group.setVisible(self._summarize)
-        layout.addWidget(self._summary_opts_group)
+        layout.addWidget(display_group)
 
         hint = QLabel(
-            "文件名 / 层级 / 类型 / 数量 为结构属性，不可编辑。"
+            "类型 / 数量 为结构属性，不可编辑（文件名列可选）。"
             "零件编号可编辑但不能与其他行冲突。"
             "相同零件编号的行会联动更新。请确保 CATIA 已启动。"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(hint)
-
-        self._filepath_chk = QCheckBox("文件名列显示完整路径")
-        self._filepath_chk.setToolTip("勾选后文件名列将显示文件完整路径（含目录），而非仅文件名")
-        self._filepath_chk.setChecked(self._show_filepath_col)
-        self._filepath_chk.toggled.connect(self._on_show_filepath_toggled)
-        layout.addWidget(self._filepath_chk)
 
         # Preset column visibility checkboxes
         preset_group  = QGroupBox("自定义属性列（勾选以显示）")
@@ -356,20 +386,24 @@ class BomEditDialog(QDialog):
             self._preset_checkboxes[col_name] = cb
         layout.addWidget(preset_group)
 
-        # Editable table
-        self._table = QTableWidget(0, len(self._columns))
-        self._table.setHorizontalHeaderLabels(self._display_headers())
-        hdr = self._table.horizontalHeader()
+        # BOM tree widget (replaces QTableWidget; tree handles expand/collapse natively)
+        self._table = QTreeWidget()
+        self._table.setHeaderLabels(self._display_headers())
+        hdr = self._table.header()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hdr.setStretchLastSection(True)
         hdr.setSectionsMovable(True)
         hdr.setFixedHeight(28)
-        self._table.verticalHeader().setDefaultSectionSize(24)
+        self._table.setUniformRowHeights(True)
+        self._table.setRootIsDecorated(True)
+        self._table.setSortingEnabled(False)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.setAlternatingRowColors(True)
+        self._table.setIndentation(16)
         self._table.itemChanged.connect(self._on_item_changed)
-        self._table.cellClicked.connect(self._on_cell_clicked)
+        _delegate = _BomTreeDelegate(lambda: self._columns, self._table)
+        self._table.setItemDelegate(_delegate)
         layout.addWidget(self._table, 1)
 
         # Bottom buttons
@@ -420,7 +454,7 @@ class BomEditDialog(QDialog):
     def _on_bom_type_changed(self, summary_checked: bool) -> None:
         self._summarize = summary_checked
         self._edit_settings.setValue("summarize", summary_checked)
-        self._summary_opts_group.setVisible(summary_checked)
+        self._summary_opts_widget.setVisible(summary_checked)
         # If BOM is already loaded, re-derive display rows from the raw rows and repopulate
         if self._raw_rows:
             self._rows = (
@@ -431,10 +465,8 @@ class BomEditDialog(QDialog):
                 )
                 if summary_checked else self._raw_rows
             )
-            self._collapsed_rows.clear()
             self._columns = self._build_visible_columns()
-            self._table.setColumnCount(len(self._columns))
-            self._table.setHorizontalHeaderLabels(self._display_headers())
+            self._table.setHeaderLabels(self._display_headers())
             self._populate_table()
             self._table.resizeColumnsToContents()
 
@@ -448,11 +480,9 @@ class BomEditDialog(QDialog):
                 include_assemblies=checked,
                 sort_column=self._summary_sort_column or None,
             )
-            self._collapsed_rows.clear()
             # When assemblies are included show the Type column; otherwise hide it
             self._columns = self._build_visible_columns()
-            self._table.setColumnCount(len(self._columns))
-            self._table.setHorizontalHeaderLabels(self._display_headers())
+            self._table.setHeaderLabels(self._display_headers())
             self._populate_table()
             self._table.resizeColumnsToContents()
 
@@ -468,7 +498,6 @@ class BomEditDialog(QDialog):
                     include_assemblies=self._summary_include_assemblies,
                     sort_column=col,
                 )
-                self._collapsed_rows.clear()
                 self._populate_table()
 
     # ── Table helpers ─────────────────────────────────────────────────────────
@@ -499,16 +528,15 @@ class BomEditDialog(QDialog):
         return result
 
     def _build_visible_columns(self) -> list[str]:
-        base = list(BOM_EDIT_COLUMN_ORDER)
+        # "Level" is omitted from all displayed columns – the QTreeWidget's native
+        # indentation communicates hierarchy far more clearly than a text column.
+        base = [c for c in BOM_EDIT_COLUMN_ORDER if c != "Level"]
         if not self._show_filename_col:
             base = [c for c in base if c != "Filename"]
         if self._summarize:
-            # Always hide Level (hierarchy is meaningless in summary)
             # Keep Type when assemblies are included (so the user can see 产品/部件/零件)
-            cols_to_hide = {"Level"}
             if not self._summary_include_assemblies:
-                cols_to_hide.add("Type")
-            base = [c for c in base if c not in cols_to_hide]
+                base = [c for c in base if c != "Type"]
         visible_preset = [
             c for c in PRESET_USER_REF_PROPERTIES if c in self._visible_preset_cols
         ]
@@ -531,8 +559,7 @@ class BomEditDialog(QDialog):
         ]
         self._edit_settings.setValue("visible_preset_columns", self._visible_preset_cols)
         self._columns = self._build_visible_columns()
-        self._table.setColumnCount(len(self._columns))
-        self._table.setHorizontalHeaderLabels(self._display_headers())
+        self._table.setHeaderLabels(self._display_headers())
         if self._rows:
             self._populate_table()
             self._table.resizeColumnsToContents()
@@ -541,8 +568,7 @@ class BomEditDialog(QDialog):
         self._show_filepath_col = checked
         self._edit_settings.setValue("show_filepath_column", checked)
         self._columns = self._build_visible_columns()
-        self._table.setColumnCount(len(self._columns))
-        self._table.setHorizontalHeaderLabels(self._display_headers())
+        self._table.setHeaderLabels(self._display_headers())
         if self._rows:
             self._populate_table()
             self._table.resizeColumnsToContents()
@@ -628,7 +654,6 @@ class BomEditDialog(QDialog):
         )
 
         self._rows = display_rows
-        self._collapsed_rows.clear()
 
         # Build PN-keyed canonical data from the raw rows (first occurrence wins).
         # Using raw rows ensures all parts are indexed regardless of current mode.
@@ -672,48 +697,72 @@ class BomEditDialog(QDialog):
 
     def _populate_table(self) -> None:
         self._is_updating = True
+        self._table.blockSignals(True)
 
-        self._table.setColumnCount(len(self._columns))
-        self._table.setHorizontalHeaderLabels(self._display_headers())
-        self._table.setRowCount(0)
-        self._table.setRowCount(len(self._rows))
+        self._table.clear()                          # removes all items; headers persist
+        self._table.setHeaderLabels(self._display_headers())
+        self._item_by_row = []
+
+        # parent_stack: list of (level, item_or_None)
+        # The sentinel at position 0 represents the invisible root (level −1).
+        parent_stack: list[tuple[int, QTreeWidgetItem | None]] = [(-1, None)]
 
         for row_idx, row_data in enumerate(self._rows):
+            level = 0 if self._summarize else int(row_data.get("Level", 0))
+
+            # Pop until the top of the stack has a level strictly below ours
+            while len(parent_stack) > 1 and parent_stack[-1][0] >= level:
+                parent_stack.pop()
+
+            parent_item = parent_stack[-1][1]
+            item = QTreeWidgetItem()
+            # Store row_idx in UserRole of column 0 for reverse lookup
+            item.setData(0, Qt.ItemDataRole.UserRole, row_idx)
+
+            if parent_item is None:
+                self._table.addTopLevelItem(item)
+            else:
+                parent_item.addChild(item)
+
+            parent_stack.append((level, item))
+            self._item_by_row.append(item)
+
             pn         = str(row_data.get("Part Number", ""))
             not_found  = bool(row_data.get("_not_found"))
             unreadable = bool(row_data.get("_unreadable"))
+            row_locked = unreadable or not_found
 
             for col_idx, col_name in enumerate(self._columns):
 
-                # Source → QComboBox
+                # Source → QComboBox (overlay widget; not stored as item text)
                 if col_name == "Source":
-                    raw       = str(row_data.get("Source", ""))
-                    pn_val    = self._canonical_data.get(pn, {}).get(
+                    raw    = str(row_data.get("Source", ""))
+                    pn_val = self._canonical_data.get(pn, {}).get(
                         "Source", SOURCE_TO_DISPLAY.get(raw, raw)
                     )
                     if pn_val not in SOURCE_OPTIONS:
                         pn_val = SOURCE_TO_DISPLAY.get(pn_val, SOURCE_OPTIONS[0])
                     combo = QComboBox()
+                    combo.blockSignals(True)
                     combo.addItems(SOURCE_OPTIONS)
                     combo.setCurrentText(pn_val)
-                    combo.currentTextChanged.connect(
-                        lambda text, r=row_idx: self._on_source_changed(r, text)
-                    )
-                    self._table.setCellWidget(row_idx, col_idx, combo)
+                    combo.blockSignals(False)
+                    if row_locked:
+                        combo.setEnabled(False)
+                    else:
+                        combo.currentTextChanged.connect(
+                            lambda text, r=row_idx: self._on_source_changed(r, text)
+                        )
+                    self._table.setItemWidget(item, col_idx, combo)
                     continue
 
-                # All other columns → QTableWidgetItem
-                if col_name == "Level":
-                    value = self._level_cell_text(row_idx)
-                elif col_name == "Quantity":
+                # All other columns → item text
+                if col_name == "Quantity":
                     value = str(row_data.get("Quantity", "1"))
                 elif col_name == "Filename":
                     fp = str(row_data.get("_filepath", ""))
                     fn = str(row_data.get("Filename", ""))
-                    if self._show_filepath_col:
-                        value = fp if fp else fn
-                    else:
-                        value = fn
+                    value = (fp if fp else fn) if self._show_filepath_col else fn
                 elif col_name == "Filepath":
                     value = str(row_data.get("_filepath", ""))
                 elif col_name in BOM_READONLY_COLUMNS:
@@ -724,95 +773,52 @@ class BomEditDialog(QDialog):
                             col_name, row_data.get(col_name, "")
                         )
                     )
+                item.setText(col_idx, value)
 
-                item = QTableWidgetItem(value)
-                if col_name in BOM_READONLY_COLUMNS:
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 if col_name == "Filename":
                     fp = str(row_data.get("_filepath", ""))
                     fn = str(row_data.get("Filename", ""))
                     if fp:
                         if self._show_filepath_col:
-                            # Column already shows full path; tooltip shows just filename
                             if fn and fn != FILENAME_NOT_FOUND:
-                                item.setToolTip(fn)
+                                item.setToolTip(col_idx, fn)
                         else:
-                            # Column shows filename; tooltip shows full path
-                            item.setToolTip(fp)
-                self._table.setItem(row_idx, col_idx, item)
+                            item.setToolTip(col_idx, fp)
 
-            # Lock rows that cannot be accessed or whose backing file is missing
-            row_locked = unreadable or not_found
-            if row_locked:
+            # Non-locked rows: allow in-place editing (delegate blocks read-only columns)
+            if not row_locked:
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                item.setData(0, _ITEM_LOCKED_ROLE, False)
+            else:
                 grey = QColor(160, 160, 160)
                 bg   = QColor(250, 245, 245) if not_found else QColor(245, 245, 245)
+                item.setData(0, _ITEM_LOCKED_ROLE, True)
                 for ci in range(len(self._columns)):
-                    it = self._table.item(row_idx, ci)
-                    if it:
-                        it.setForeground(grey)
-                        it.setBackground(bg)
-                        it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    w = self._table.cellWidget(row_idx, ci)
-                    if isinstance(w, QComboBox):
-                        w.setEnabled(False)
-                # Show a tooltip explaining why the row is locked
+                    item.setForeground(ci, grey)
+                    item.setBackground(ci, bg)
                 fn_col = self._columns.index("Filename") if "Filename" in self._columns else -1
                 if fn_col >= 0:
-                    it = self._table.item(row_idx, fn_col)
-                    if it:
-                        if not_found:
-                            it.setToolTip("该零件/装配体的文件未被CATIA检索到，行内容不可编辑。")
-                        else:
-                            it.setToolTip("该零件/装配体处于轻量化模式，无法读取属性。")
+                    tip = (
+                        "该零件/装配体的文件未被CATIA检索到，行内容不可编辑。"
+                        if not_found else
+                        "该零件/装配体处于轻量化模式，无法读取属性。"
+                    )
+                    item.setToolTip(fn_col, tip)
 
+        self._table.expandAll()
+        self._table.blockSignals(False)
         self._is_updating = False
 
-    # ── Collapse / expand helpers ─────────────────────────────────────────────
+    # ── Tree helpers ──────────────────────────────────────────────────────────
 
-    def _row_has_children(self, row_idx: int) -> bool:
-        if row_idx + 1 >= len(self._rows):
-            return False
-        return (
-            self._rows[row_idx + 1].get("Level", 0)
-            > self._rows[row_idx].get("Level", 0)
-        )
-
-    def _level_cell_text(self, row_idx: int) -> str:
-        level = self._rows[row_idx].get("Level", 0)
-        if self._row_has_children(row_idx):
-            indicator = "▶ " if row_idx in self._collapsed_rows else "▼ "
-        else:
-            indicator = "  "
-        return "  " * level + indicator + str(level)
-
-    def _update_row_visibility(self) -> None:
-        hide_depth_stack: list[int] = []
-        for r, row_data in enumerate(self._rows):
-            level = row_data.get("Level", 0)
-            while hide_depth_stack and hide_depth_stack[-1] >= level:
-                hide_depth_stack.pop()
-            should_hide = bool(hide_depth_stack)
-            self._table.setRowHidden(r, should_hide)
-            if not should_hide and r in self._collapsed_rows:
-                hide_depth_stack.append(level)
-
-    def _on_cell_clicked(self, row: int, col: int) -> None:
-        # Collapse/expand is only meaningful in hierarchical BOM mode
-        if self._summarize:
-            return
-        if "Level" not in self._columns:
-            return
-        level_col = self._columns.index("Level")
-        if col != level_col or not self._row_has_children(row):
-            return
-        if row in self._collapsed_rows:
-            self._collapsed_rows.discard(row)
-        else:
-            self._collapsed_rows.add(row)
-        item = self._table.item(row, level_col)
-        if item:
-            item.setText(self._level_cell_text(row))
-        self._update_row_visibility()
+    def _iter_all_items(self):
+        """Yield every QTreeWidgetItem in DFS (pre-order) traversal."""
+        def _walk(parent: QTreeWidgetItem):
+            yield parent
+            for i in range(parent.childCount()):
+                yield from _walk(parent.child(i))
+        for i in range(self._table.topLevelItemCount()):
+            yield from _walk(self._table.topLevelItem(i))
 
     # ── Source combo change ───────────────────────────────────────────────────
 
@@ -823,8 +829,12 @@ class BomEditDialog(QDialog):
             return
         src_col_idx = self._columns.index("Source")
 
-        selected_rows = {idx.row() for idx in self._table.selectedIndexes()}
-        direct_rows   = selected_rows if row_idx in selected_rows else {row_idx}
+        selected_row_indices = {
+            it.data(0, Qt.ItemDataRole.UserRole)
+            for it in self._table.selectedItems()
+            if it.data(0, Qt.ItemDataRole.UserRole) is not None
+        }
+        direct_rows = selected_row_indices if row_idx in selected_row_indices else {row_idx}
 
         pns_to_update: set[str] = set()
         for r in direct_rows:
@@ -838,12 +848,13 @@ class BomEditDialog(QDialog):
                 self._modified_keys.setdefault(pn, set()).add("Source")
 
         self._is_updating = True
-        for r in range(self._table.rowCount()):
-            if r == row_idx:
+        for other_item in self._iter_all_items():
+            other_row_idx = other_item.data(0, Qt.ItemDataRole.UserRole)
+            if other_row_idx is None or other_row_idx == row_idx:
                 continue
-            other_pn = str(self._rows[r].get("Part Number", ""))
+            other_pn = str(self._rows[other_row_idx].get("Part Number", ""))
             if other_pn in pns_to_update:
-                combo = self._table.cellWidget(r, src_col_idx)
+                combo = self._table.itemWidget(other_item, src_col_idx)
                 if isinstance(combo, QComboBox) and combo.currentText() != text:
                     combo.blockSignals(True)
                     combo.setCurrentText(text)
@@ -852,21 +863,53 @@ class BomEditDialog(QDialog):
 
     # ── Regular cell edit ─────────────────────────────────────────────────────
 
-    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+    def _on_item_changed(self, item: QTreeWidgetItem, col_idx: int) -> None:
         if self._is_updating:
             return
-        col_idx  = item.column()
-        row_idx  = item.row()
+        row_idx = item.data(0, Qt.ItemDataRole.UserRole)
+        if row_idx is None:
+            return
         col_name = self._columns[col_idx]
 
         if col_name in BOM_READONLY_COLUMNS or col_name == "Source":
             return
 
-        new_value = item.text()
+        new_value = item.text(col_idx)
         pn        = str(self._rows[row_idx].get("Part Number", ""))
 
-        # Part Number conflict checking
         if col_name == "Part Number":
+            # ── Empty / whitespace-only PN ────────────────────────────────────
+            if not new_value.strip():
+                QMessageBox.warning(
+                    self, "零件编号不能为空",
+                    "零件编号不能为空或仅含空格，请输入有效的零件编号。",
+                )
+                self._is_updating = True
+                item.setText(col_idx, self._canonical_data.get(pn, {}).get("Part Number", pn))
+                self._is_updating = False
+                return
+
+            # ── Strip leading/trailing whitespace silently ────────────────────
+            if new_value != new_value.strip():
+                new_value = new_value.strip()
+                self._is_updating = True
+                item.setText(col_idx, new_value)
+                self._is_updating = False
+
+            # ── Character validity ────────────────────────────────────────────
+            if not PART_NUMBER_VALID_PATTERN.fullmatch(new_value):
+                QMessageBox.warning(
+                    self, "零件编号含非法字符",
+                    f"零件编号 \"{new_value}\" 含有非法字符。\n"
+                    "不允许：控制字符、非ASCII字符，以及Windows文件名禁用字符"
+                    "（\\ / : * ? \" < > |）。",
+                )
+                self._is_updating = True
+                item.setText(col_idx, self._canonical_data.get(pn, {}).get("Part Number", pn))
+                self._is_updating = False
+                return
+
+            # ── Conflict with current canonical values ────────────────────────
             for other_pn, data in self._canonical_data.items():
                 if other_pn == pn:
                     continue
@@ -877,9 +920,11 @@ class BomEditDialog(QDialog):
                         f"的当前零件编号冲突，不允许修改。",
                     )
                     self._is_updating = True
-                    item.setText(self._canonical_data.get(pn, {}).get("Part Number", pn))
+                    item.setText(col_idx, self._canonical_data.get(pn, {}).get("Part Number", pn))
                     self._is_updating = False
                     return
+
+            # ── Conflict with snapshot (what CATIA currently holds) ───────────
             for other_pn, data in self._snapshot_data.items():
                 if other_pn == pn:
                     continue
@@ -890,26 +935,16 @@ class BomEditDialog(QDialog):
                         f"的原始零件编号冲突，不允许修改。",
                     )
                     self._is_updating = True
-                    item.setText(self._canonical_data.get(pn, {}).get("Part Number", pn))
+                    item.setText(col_idx, self._canonical_data.get(pn, {}).get("Part Number", pn))
                     self._is_updating = False
                     return
 
-        # Part Number character validity
-        if col_name == "Part Number" and new_value:
-            if not PART_NUMBER_VALID_PATTERN.fullmatch(new_value):
-                QMessageBox.warning(
-                    self, "零件编号含非法字符",
-                    f"零件编号 \"{new_value}\" 含有非法字符。\n"
-                    "不允许：控制字符、非英文字符，以及Windows文件名禁用字符"
-                    "（\\ / : * ? \" < > |）。",
-                )
-                self._is_updating = True
-                item.setText(self._canonical_data.get(pn, {}).get("Part Number", pn))
-                self._is_updating = False
-                return
-
-        selected_rows = {idx.row() for idx in self._table.selectedIndexes()}
-        direct_rows   = selected_rows if row_idx in selected_rows else {row_idx}
+        selected_row_indices = {
+            it.data(0, Qt.ItemDataRole.UserRole)
+            for it in self._table.selectedItems()
+            if it.data(0, Qt.ItemDataRole.UserRole) is not None
+        }
+        direct_rows = selected_row_indices if row_idx in selected_row_indices else {row_idx}
 
         pns_to_update: set[str] = set()
         for r in direct_rows:
@@ -921,14 +956,16 @@ class BomEditDialog(QDialog):
                     self._modified_keys.setdefault(r_pn, set()).add(col_name)
 
         self._is_updating = True
-        for r in range(self._table.rowCount()):
-            if r == row_idx:
+        for other_item in self._iter_all_items():
+            if other_item is item:
                 continue
-            other_pn = str(self._rows[r].get("Part Number", ""))
+            other_row_idx = other_item.data(0, Qt.ItemDataRole.UserRole)
+            if other_row_idx is None:
+                continue
+            other_pn = str(self._rows[other_row_idx].get("Part Number", ""))
             if other_pn in pns_to_update:
-                other_item = self._table.item(r, col_idx)
-                if other_item and other_item.text() != new_value:
-                    other_item.setText(new_value)
+                if other_item.text(col_idx) != new_value:
+                    other_item.setText(col_idx, new_value)
         self._is_updating = False
 
     # ── Write-back ────────────────────────────────────────────────────────────
@@ -981,7 +1018,7 @@ class BomEditDialog(QDialog):
                 QMessageBox.warning(
                     self, "零件编号含非法字符",
                     f"零件编号 「{pn}」 含有非法字符。\n"
-                    "不允许：控制字符、非英文字符，以及Windows文件名禁用字符"
+                    "不允许：控制字符、非ASCII字符，以及Windows文件名禁用字符"
                     "（\\ / : * ? \" < > |）。\n请在表格中修改此零件编号后重试。",
                 )
                 continue
@@ -1063,15 +1100,19 @@ class BomEditDialog(QDialog):
 
     def _rename_selected_file(self) -> None:
         """Rename or move the file for a single selected BOM row via CATIA SaveAs."""
-        selected_rows = {idx.row() for idx in self._table.selectedIndexes()}
-        if len(selected_rows) != 1:
+        selected_row_indices = {
+            it.data(0, Qt.ItemDataRole.UserRole)
+            for it in self._table.selectedItems()
+            if it.data(0, Qt.ItemDataRole.UserRole) is not None
+        }
+        if len(selected_row_indices) != 1:
             QMessageBox.warning(
                 self, "请选择单行",
                 "请在表格中选中恰好一行，再执行此操作。",
             )
             return
 
-        row_idx  = next(iter(selected_rows))
+        row_idx  = next(iter(selected_row_indices))
         row_data = self._rows[row_idx]
         fp       = str(row_data.get("_filepath", ""))
 
