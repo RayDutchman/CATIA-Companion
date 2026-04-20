@@ -107,7 +107,7 @@ def apply_part_template(
             for i in range(1, user_props.count + 1):
                 try:
                     # CATIA returns a qualified path such as
-                    # "Part6\属性\物料编码" (or using "/" depending on locale).
+                    # "Part1\属性\物料编码" (or using "/" depending on locale).
                     # Only the trailing leaf name is relevant for dedup.
                     raw = user_props.item(i).name
                     leaf = raw.replace("/", "\\").rsplit("\\", 1)[-1]
