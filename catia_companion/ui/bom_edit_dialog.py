@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QComboBox, QCheckBox, QGroupBox, QMessageBox, QApplication,
     QFileDialog, QProgressDialog, QRadioButton, QButtonGroup, QStyledItemDelegate,
 )
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QPen, QPainter
 from PySide6.QtCore import Qt, QSettings
 
 from catia_companion.constants import (
@@ -61,6 +61,72 @@ class _BomTreeDelegate(QStyledItemDelegate):
         if col_name in BOM_READONLY_COLUMNS:
             return None
         return super().createEditor(parent, option, index)
+
+
+class _BomTreeWidget(QTreeWidget):
+    """QTreeWidget that draws dotted connector lines to visualise the hierarchy.
+
+    Qt's default Windows/Fusion styles omit the vertical guide lines that
+    connect parent and child nodes.  This subclass overrides
+    :meth:`drawBranches` to paint them using a dotted pen so the tree
+    structure is easier to follow at a glance.
+    """
+
+    _LINE_COLOR = QColor("#a8b4c4")
+
+    def drawBranches(self, painter: QPainter, rect, index) -> None:
+        # Let Qt draw the default expand/collapse indicator first.
+        super().drawBranches(painter, rect, index)
+
+        indent = self.indentation()
+        model  = self.model()
+
+        # Walk from the current item up to the root, recording whether each
+        # node has a next sibling (i.e. more items below it at the same level).
+        has_next: list[bool] = []
+        tmp = index
+        while True:
+            par = tmp.parent()
+            cnt = model.rowCount(par) if par.isValid() else model.rowCount()
+            has_next.append(tmp.row() < cnt - 1)
+            if not par.isValid():
+                break
+            tmp = par
+        has_next.reverse()   # has_next[0] = top-level ancestor, has_next[-1] = current
+
+        depth = len(has_next) - 1  # 0 for top-level items
+
+        # Nothing to draw for items sitting at the root level.
+        if depth == 0:
+            return
+
+        pen = QPen(self._LINE_COLOR, 1, Qt.PenStyle.DotLine)
+        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+
+        mid_y = (rect.top() + rect.bottom()) // 2
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setPen(pen)
+
+        # For every ancestor segment (all but the last), draw a full-height
+        # vertical line when that ancestor has more siblings below it.
+        for d in range(depth - 1):
+            if has_next[d]:
+                x = rect.left() + d * indent + indent // 2
+                painter.drawLine(x, rect.top(), x, rect.bottom())
+
+        # For the direct-parent segment, draw either a T-connector (parent has
+        # more siblings) or an L-connector (parent is the last child), plus a
+        # short horizontal arm reaching toward the item.
+        x = rect.left() + (depth - 1) * indent + indent // 2
+        if has_next[depth - 1]:
+            painter.drawLine(x, rect.top(), x, rect.bottom())
+        else:
+            painter.drawLine(x, rect.top(), x, mid_y)
+        painter.drawLine(x, mid_y, rect.left() + depth * indent, mid_y)
+
+        painter.restore()
 
 
 class _FileRenameDialog(QDialog):
@@ -387,7 +453,7 @@ class BomEditDialog(QDialog):
         layout.addWidget(preset_group)
 
         # BOM tree widget (replaces QTableWidget; tree handles expand/collapse natively)
-        self._table = QTreeWidget()
+        self._table = _BomTreeWidget()
         self._table.setHeaderLabels(self._display_headers())
         hdr = self._table.header()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
