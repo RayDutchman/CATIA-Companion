@@ -50,6 +50,7 @@ def convert_drawing_to_pdf(
     prefix: str = "DR_",
     suffix: str = "",
     progress_callback: Callable[[int, int], None] | None = None,
+    update_before_export: bool = False,
 ) -> int:
     """Convert CATDrawing files to PDF using pyCATIA.
 
@@ -59,6 +60,9 @@ def convert_drawing_to_pdf(
 
     *progress_callback*, if provided, is called as ``progress_callback(i, total)``
     before processing each file (0-based index).
+
+    When *update_before_export* is ``True`` the drawing document is updated
+    (all views refreshed) before the PDF is written.
 
     Returns the number of files successfully exported.
     """
@@ -120,6 +124,11 @@ def convert_drawing_to_pdf(
             documents.open(str(src))
             drawing_doc = DrawingDocument(application.active_document.com_object)
             sheet_count = drawing_doc.drawing_root.sheets.count
+
+            if update_before_export:
+                logger.info(f"  Updating drawing ({sheet_count} sheet(s))…")
+                drawing_doc.com_object.Update()
+
             drawing_doc.export_data(str(dest), "pdf")
 
             if not dest.exists():

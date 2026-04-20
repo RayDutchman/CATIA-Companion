@@ -10,12 +10,13 @@ during conversion.
 """
 
 import logging
+import re
 from pathlib import Path
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QFileDialog,
     QAbstractItemView, QRadioButton, QButtonGroup, QLineEdit, QGroupBox,
-    QCheckBox, QPushButton, QMessageBox, QProgressBar, QApplication,
+    QCheckBox, QPushButton, QMessageBox, QProgressBar, QApplication, QWidget,
 )
 from PySide6.QtCore import Qt, QSettings
 
@@ -61,26 +62,49 @@ class FileConvertDialog(QDialog):
         show_prefix_option: bool = False,
         prefix: str = "",
         note: str = "",
+        show_update_option: bool = False,
+        show_active_doc_option: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setMinimumSize(520, 450)
 
-        self._file_filter        = file_filter
-        self._no_files_msg       = no_files_msg
-        self._conversion_fn      = conversion_fn
-        self._show_prefix_option = show_prefix_option
+        self._file_filter           = file_filter
+        self._no_files_msg          = no_files_msg
+        self._conversion_fn         = conversion_fn
+        self._show_prefix_option    = show_prefix_option
+        self._show_update_option    = show_update_option
+        self._show_active_doc_option = show_active_doc_option
 
         self._settings         = QSettings("CATIACompanion", f"ConvertDialog_{settings_key}")
         self._last_browse_dir  = self._settings.value("last_browse_dir", "")
         self._last_output_dir  = self._settings.value("last_output_dir", "")
         self._is_stamp_dialog  = settings_key == "StampPartTemplate"
 
+        # Cache accepted extensions once so dropEvent doesn't re-parse the filter string.
+        self._accepted_exts: set[str] = {
+            m.group(1).lower() for m in re.finditer(r"\*(\.\w+)", file_filter)
+        }
+
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        layout.addWidget(QLabel(file_label))
+        # ── "Use active document" option ─────────────────────────────────────
+        if show_active_doc_option:
+            self._use_active_chk = QCheckBox("使用当前CATIA活动文档（不选择文件）")
+            self._use_active_chk.toggled.connect(self._toggle_file_section)
+            layout.addWidget(self._use_active_chk)
+        else:
+            self._use_active_chk = None
+
+        # ── File list section (can be hidden in active-doc mode) ─────────────
+        self._file_section = QWidget()
+        file_section_layout = QVBoxLayout(self._file_section)
+        file_section_layout.setContentsMargins(0, 0, 0, 0)
+        file_section_layout.setSpacing(6)
+
+        file_section_layout.addWidget(QLabel(file_label))
 
         self._file_list = QListWidget()
         self._file_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -93,7 +117,7 @@ class FileConvertDialog(QDialog):
         for f in saved_files:
             if Path(f).exists():
                 self._file_list.addItem(f)
-        layout.addWidget(self._file_list)
+        file_section_layout.addWidget(self._file_list)
 
         btn_row = QHBoxLayout()
         browse_btn     = QPushButton("浏览...")
@@ -106,7 +130,9 @@ class FileConvertDialog(QDialog):
         btn_row.addWidget(remove_btn)
         btn_row.addWidget(remove_all_btn)
         btn_row.addStretch()
-        layout.addLayout(btn_row)
+        file_section_layout.addLayout(btn_row)
+
+        layout.addWidget(self._file_section)
 
         # ── Output folder (hidden for stamp dialog) ─────────────────────────
         if not self._is_stamp_dialog:
@@ -179,6 +205,21 @@ class FileConvertDialog(QDialog):
             self._suffix_checkbox = None
             self._suffix_edit     = None
 
+        # ── Update-before-export option (e.g. CATDrawing → PDF) ─────────────
+        if show_update_option:
+            saved_update = self._settings.value("update_before_export", False)
+            if isinstance(saved_update, str):
+                saved_update = saved_update.lower() == "true"
+            self._update_checkbox = QCheckBox("更新图纸后再输出")
+            self._update_checkbox.setToolTip(
+                "导出PDF前先强制更新CATDrawing中每一页的所有视图，"
+                "确保导出结果与最新模型状态一致。"
+            )
+            self._update_checkbox.setChecked(saved_update)
+            layout.addWidget(self._update_checkbox)
+        else:
+            self._update_checkbox = None
+
         if note:
             note_label = QLabel(note)
             note_label.setWordWrap(True)
@@ -206,12 +247,8 @@ class FileConvertDialog(QDialog):
     # ── Drag & drop support ─────────────────────────────────────────────────
 
     def _accepted_extensions(self) -> set[str]:
-        """Parse the file_filter to extract accepted file extensions."""
-        import re
-        exts: set[str] = set()
-        for m in re.finditer(r"\*(\.\w+)", self._file_filter):
-            exts.add(m.group(1).lower())
-        return exts
+        """Return cached accepted file extensions parsed from the file filter."""
+        return self._accepted_exts
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if event.mimeData().hasUrls():
@@ -273,6 +310,10 @@ class FileConvertDialog(QDialog):
 
     # ── Output folder ────────────────────────────────────────────────────────
 
+    def _toggle_file_section(self, use_active: bool) -> None:
+        """Show/hide the file-list section when active-doc mode is toggled."""
+        self._file_section.setVisible(not use_active)
+
     def _toggle_folder_row(self, checked: bool) -> None:
         self._folder_edit.setEnabled(checked)
         self._folder_browse_btn.setEnabled(checked)
@@ -289,21 +330,40 @@ class FileConvertDialog(QDialog):
     # ── Confirm ──────────────────────────────────────────────────────────────
 
     def _confirm(self) -> None:
-        files = [self._file_list.item(i).text()
-                 for i in range(self._file_list.count())]
-        if not files:
-            QMessageBox.warning(self, "未选择文件", self._no_files_msg)
-            return
+        use_active = (
+            self._use_active_chk is not None and self._use_active_chk.isChecked()
+        )
 
-        if self._radio_same is None:
-            output_folder = None
-        elif self._radio_same.isChecked():
+        if use_active:
+            # Resolve the path of the current CATIA active document
+            try:
+                from pycatia import catia as _catia
+                _caa = _catia()
+                active_path = _caa.application.active_document.full_name
+            except Exception as e:
+                QMessageBox.warning(
+                    self, "无法获取活动文档",
+                    f"无法从CATIA获取当前活动文档路径：\n{e}\n\n请确保CATIA已启动且有活动文档。",
+                )
+                return
+            files = [active_path]
             output_folder = None
         else:
-            output_folder = self._folder_edit.text().strip()
-            if not output_folder:
-                QMessageBox.warning(self, "未选择输出文件夹", "请选择一个输出文件夹。")
+            files = [self._file_list.item(i).text()
+                     for i in range(self._file_list.count())]
+            if not files:
+                QMessageBox.warning(self, "未选择文件", self._no_files_msg)
                 return
+
+            if self._radio_same is None:
+                output_folder = None
+            elif self._radio_same.isChecked():
+                output_folder = None
+            else:
+                output_folder = self._folder_edit.text().strip()
+                if not output_folder:
+                    QMessageBox.warning(self, "未选择输出文件夹", "请选择一个输出文件夹。")
+                    return
 
         # Show progress bar and disable confirm button during conversion
         total = len(files)
@@ -320,40 +380,51 @@ class FileConvertDialog(QDialog):
             QApplication.processEvents()
 
         success_count = 0
+        failed_items: list[str] = []
         try:
+            kwargs: dict = dict(progress_callback=_progress)
             if self._prefix_checkbox is not None:
-                prefix_value = (
+                kwargs["prefix"] = (
                     self._prefix_edit.text() if self._prefix_checkbox.isChecked() else ""
                 )
-                suffix_value = (
+                kwargs["suffix"] = (
                     self._suffix_edit.text() if self._suffix_checkbox.isChecked() else ""
                 )
-                success_count = self._conversion_fn(
-                    files, output_folder,
-                    prefix=prefix_value, suffix=suffix_value,
-                    progress_callback=_progress,
-                )
+            if self._update_checkbox is not None:
+                kwargs["update_before_export"] = self._update_checkbox.isChecked()
+            if use_active:
+                kwargs["keep_open"] = True
+            result = self._conversion_fn(files, output_folder, **kwargs)
+            if isinstance(result, tuple):
+                success_count, failed_items = result
             else:
-                success_count = self._conversion_fn(
-                    files, output_folder,
-                    progress_callback=_progress,
-                )
+                success_count = result
         except Exception as e:
             logger.error("Conversion failed: %s", e)
 
-        # Persist prefix/suffix settings after conversion
+        # Persist prefix/suffix and update settings after conversion
         if self._prefix_checkbox is not None:
             self._settings.setValue("add_prefix",   self._prefix_checkbox.isChecked())
             self._settings.setValue("prefix_value", self._prefix_edit.text())
             self._settings.setValue("add_suffix",   self._suffix_checkbox.isChecked())
             self._settings.setValue("suffix_value", self._suffix_edit.text())
+        if self._update_checkbox is not None:
+            self._settings.setValue("update_before_export", self._update_checkbox.isChecked())
 
         self._progress_bar.setValue(total)
         self._progress_bar.setFormat(f"完成 ({success_count}/{total})")
         self._confirm_btn.setEnabled(True)
 
-        QMessageBox.information(
-            self, "导出完成",
-            f"已成功导出 {success_count} / {total} 个文件。",
-        )
+        if self._is_stamp_dialog:
+            msg = f"已成功刷写 {success_count} / {total} 个文件。"
+            if failed_items:
+                msg += "\n\n失败文件：\n" + "\n".join(failed_items)
+                QMessageBox.warning(self, "刷写完成（含失败）", msg)
+            else:
+                QMessageBox.information(self, "刷写完成", msg)
+        else:
+            QMessageBox.information(
+                self, "导出完成",
+                f"已成功导出 {success_count} / {total} 个文件。",
+            )
         self.accept()

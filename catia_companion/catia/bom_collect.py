@@ -323,8 +323,8 @@ def flatten_bom_to_summary(
     for row, abs_qty in zip(rows, absolute_qtys):
         level = row.get("Level", 0)
 
-        # Always skip the root assembly (level 0 – the top-level product itself)
-        if level == 0:
+        # Skip the root assembly (level 0) only when assemblies are not included
+        if level == 0 and not include_assemblies:
             continue
 
         # Optionally skip sub-assemblies and assemblies
