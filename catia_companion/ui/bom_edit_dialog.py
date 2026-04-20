@@ -121,6 +121,13 @@ class _BomTreeWidget(QTreeWidget):
             for x in range(start, x2 + 1, 2):
                 painter.drawPoint(x, y)
 
+        # For every ancestor segment (all but the last), draw a full-height
+        # vertical line only when that ancestor itself has a next sibling.
+        for d in range(depth - 1):
+            if has_next[d]:
+                x = rect.left() + d * indent + indent // 2
+                _vdots(x, rect.top(), rect.bottom())
+
         # For the direct-parent segment draw either a T-connector (current item
         # has more siblings) or an L-connector (current item is the last child),
         # plus a short horizontal arm reaching toward the item's text.
