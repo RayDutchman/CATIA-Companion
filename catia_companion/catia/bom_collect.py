@@ -98,7 +98,7 @@ def collect_bom_rows(
                 pass
         return ""
 
-    _total_count: list[int] = [0]
+    _total_count: int = 0
 
     # Cache properties by filepath to avoid redundant DESIGN_MODE switches and
     # COM property reads for the same physical document referenced multiple
@@ -108,6 +108,7 @@ def collect_bom_rows(
     _props_cache: dict[str, dict] = {}
 
     def _traverse(product, rows: list, level: int, parent_filepath: str = "") -> None:
+        nonlocal _total_count
         try:
             pn = product.part_number
         except Exception:
@@ -177,9 +178,9 @@ def collect_bom_rows(
                 row[col] = props.get(col, "")
 
         rows.append(row)
-        _total_count[0] += 1
+        _total_count += 1
         if progress_callback is not None:
-            progress_callback(_total_count[0])
+            progress_callback(_total_count)
 
         try:
             products  = product.products
@@ -264,11 +265,12 @@ def flatten_bom_to_summary(
 ) -> list[dict]:
     """Collapse a hierarchical BOM into a flat summary BOM.
 
-    Each unique part appears exactly once in the result.  Standalone
-    products/parts are identified by their backing filepath (falling back to
-    Part Number when the filepath is unavailable).  Embedded sub-assemblies
-    (部件) are identified by Part Number, because they share the parent
-    product's filepath and would otherwise be incorrectly merged with it.
+    Each unique part appears exactly once in the result.  All node types
+    (零件, 产品, 部件) are identified by their Part Number.  Using Part Number
+    as the universal key is consistent with CATIA's own identity model and
+    correctly handles embedded sub-assemblies (部件), which share their
+    parent product's backing filepath and therefore cannot be distinguished
+    by filepath alone.
 
     The ``Quantity`` value is the *total* count across the whole assembly tree,
     computed by multiplying the per-level quantities along every path from the
@@ -324,8 +326,7 @@ def flatten_bom_to_summary(
         cum_qty_stack.append((level, abs_qty))
 
     # ── Step 2: deduplicate ─────────────────────────────────────────────────
-    # Key: filepath for standalone products/parts, Part Number for embedded
-    # 部件 (which share the parent product's filepath).
+    # Key: Part Number for all node types.
     # For each key we keep the first row's attributes and accumulate quantity.
     seen_order:  list[str]       = []   # insertion-ordered keys
     summary:     dict[str, dict] = {}   # key → merged row dict
@@ -344,15 +345,10 @@ def flatten_bom_to_summary(
         if not include_assemblies and row.get("Type", "") in _assembly_types:
             continue
 
-        fp  = row.get("_filepath", "")
-        typ = row.get("Type", "")
-        # Embedded 部件 share the parent product's filepath, so using the
-        # filepath as key would incorrectly merge them with the parent
-        # product or with sibling 部件.  Use Part Number instead.
-        if typ == "部件":
-            key = str(row.get("Part Number", ""))
-        else:
-            key = fp if fp else str(row.get("Part Number", ""))
+        # Always use Part Number as the deduplication key: consistent for
+        # 零件, 产品, and 部件 (embedded 部件 share the parent filepath so
+        # filepath-based dedup would incorrectly merge them with the parent).
+        key = str(row.get("Part Number", ""))
         if not key:
             continue
 

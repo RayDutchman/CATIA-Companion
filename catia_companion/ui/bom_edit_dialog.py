@@ -39,6 +39,18 @@ logger = logging.getLogger(__name__)
 _ITEM_LOCKED_ROLE: int = Qt.ItemDataRole.UserRole + 1
 
 
+def _find_catia_doc_by_path(docs, path: Path):
+    """Return the CATIA document object whose resolved path matches *path*, or ``None``."""
+    for i in range(1, docs.count + 1):
+        try:
+            d = docs.item(i)
+            if Path(d.full_name).resolve() == path:
+                return d
+        except Exception:
+            pass
+    return None
+
+
 class _BomTreeDelegate(QStyledItemDelegate):
     """Per-column read-only enforcement for the BOM QTreeWidget.
 
@@ -540,11 +552,7 @@ class BomEditDialog(QDialog):
                 )
                 if summary_checked else self._raw_rows
             )
-            self._columns = self._build_visible_columns()
-            self._table.setHeaderLabels(self._display_headers())
-            self._populate_table()
-            for _c in range(self._table.columnCount()):
-                self._table.resizeColumnToContents(_c)
+            self._rebuild_columns_and_repopulate()
 
     def _on_include_assemblies_toggled(self, checked: bool) -> None:
         self._summary_include_assemblies = checked
@@ -557,11 +565,7 @@ class BomEditDialog(QDialog):
                 sort_column=self._summary_sort_column or None,
             )
             # When assemblies are included show the Type column; otherwise hide it
-            self._columns = self._build_visible_columns()
-            self._table.setHeaderLabels(self._display_headers())
-            self._populate_table()
-            for _c in range(self._table.columnCount()):
-                self._table.resizeColumnToContents(_c)
+            self._rebuild_columns_and_repopulate()
 
     def _on_sort_col_changed(self, _index: int) -> None:
         col = self._sort_col_combo.currentData()
@@ -587,6 +591,15 @@ class BomEditDialog(QDialog):
             self._table.resizeColumnToContents(col)
             if self._table.columnWidth(col) < min_width:
                 self._table.setColumnWidth(col, min_width)
+
+    def _rebuild_columns_and_repopulate(self) -> None:
+        """Rebuild the visible column list, update headers, and repopulate if rows are loaded."""
+        self._columns = self._build_visible_columns()
+        self._table.setHeaderLabels(self._display_headers())
+        if self._rows:
+            self._populate_table()
+            for col in range(self._table.columnCount()):
+                self._table.resizeColumnToContents(col)
 
     # ── Preset column helpers ─────────────────────────────────────────────────
 
@@ -635,22 +648,12 @@ class BomEditDialog(QDialog):
             if name != "Filename" and cb.isChecked()
         ]
         self._edit_settings.setValue("visible_preset_columns", self._visible_preset_cols)
-        self._columns = self._build_visible_columns()
-        self._table.setHeaderLabels(self._display_headers())
-        if self._rows:
-            self._populate_table()
-            for _c in range(self._table.columnCount()):
-                self._table.resizeColumnToContents(_c)
+        self._rebuild_columns_and_repopulate()
 
     def _on_show_filepath_toggled(self, checked: bool) -> None:
         self._show_filepath_col = checked
         self._edit_settings.setValue("show_filepath_column", checked)
-        self._columns = self._build_visible_columns()
-        self._table.setHeaderLabels(self._display_headers())
-        if self._rows:
-            self._populate_table()
-            for _c in range(self._table.columnCount()):
-                self._table.resizeColumnToContents(_c)
+        self._rebuild_columns_and_repopulate()
 
     # ── File picker ───────────────────────────────────────────────────────────
 
@@ -1118,20 +1121,10 @@ class BomEditDialog(QDialog):
                 documents   = application.documents
                 src         = Path(fp).resolve()
 
-                def _find_doc(docs, path: Path):
-                    for i in range(1, docs.count + 1):
-                        try:
-                            d = docs.item(i)
-                            if Path(d.full_name).resolve() == path:
-                                return d
-                        except Exception:
-                            pass
-                    return None
-
-                target_doc = _find_doc(documents, src)
+                target_doc = _find_catia_doc_by_path(documents, src)
                 if target_doc is None:
                     documents.open(str(src))
-                    target_doc = _find_doc(documents, src)
+                    target_doc = _find_catia_doc_by_path(documents, src)
 
                 if target_doc is None:
                     QMessageBox.warning(
@@ -1244,20 +1237,10 @@ class BomEditDialog(QDialog):
             documents   = application.documents
             src         = Path(fp).resolve()
 
-            def _find_document_by_path(docs, path: Path):
-                for i in range(1, docs.count + 1):
-                    try:
-                        d = docs.item(i)
-                        if Path(d.full_name).resolve() == path:
-                            return d
-                    except Exception:
-                        pass
-                return None
-
-            target_doc = _find_document_by_path(documents, src)
+            target_doc = _find_catia_doc_by_path(documents, src)
             if target_doc is None:
                 documents.open(str(src))
-                target_doc = _find_document_by_path(documents, src)
+                target_doc = _find_catia_doc_by_path(documents, src)
 
             if target_doc is None:
                 QMessageBox.warning(
