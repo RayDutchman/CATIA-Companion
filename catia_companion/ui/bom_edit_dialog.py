@@ -128,15 +128,13 @@ class _BomTreeWidget(QTreeWidget):
                 x = rect.left() + d * indent + indent // 2
                 _vdots(x, rect.top(), rect.bottom())
 
-        # For the direct-parent segment draw either a T-connector (current item
-        # has more siblings) or an L-connector (current item is the last child),
-        # plus a short horizontal arm reaching toward the item's text.
+        # For the direct-parent segment draw a T-connector (full-height vertical)
+        # when the current item has more siblings, or just a horizontal arm when
+        # it is the last child (no vertical line in the parent column).
         x     = rect.left() + (depth - 1) * indent + indent // 2
         x_end = rect.left() + depth * indent
         if has_next[-1]:
             _vdots(x, rect.top(), rect.bottom())
-        else:
-            _vdots(x, rect.top(), mid_y)
         _hdots(mid_y, x + 1, x_end)
 
         painter.restore()
