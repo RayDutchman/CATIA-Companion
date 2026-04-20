@@ -117,8 +117,16 @@ def collect_bom_rows(
         filepath  = get_product_filepath(product)
         not_found = not bool(filepath)
 
-        # Use the cache to skip DESIGN_MODE + property reads for repeated files.
-        cached = bool(filepath) and filepath in _props_cache
+        # Embedded 部件 share the parent product's backing file, so the
+        # file-based property cache must NOT be used for them – each 部件
+        # has its own COM property values that must be read individually.
+        is_embedded = (bool(filepath) and bool(parent_filepath)
+                       and filepath == parent_filepath)
+
+        # Use the cache to skip DESIGN_MODE + property reads for repeated
+        # files, but only for standalone products/parts (not embedded 部件).
+        cached = (not is_embedded
+                  and bool(filepath) and filepath in _props_cache)
         is_readable = True
 
         if not cached:
@@ -135,7 +143,7 @@ def collect_bom_rows(
                     props[col] = _get_user_prop(product, col)
             props["_is_readable"] = is_readable
 
-            if filepath:
+            if filepath and not is_embedded:
                 _props_cache[filepath] = props
         else:
             props       = _props_cache[filepath]
@@ -256,9 +264,13 @@ def flatten_bom_to_summary(
 ) -> list[dict]:
     """Collapse a hierarchical BOM into a flat summary BOM.
 
-    Each unique part (identified by its backing filepath when available, or by
-    Part Number otherwise) appears exactly once in the result.  The
-    ``Quantity`` value is the *total* count across the whole assembly tree,
+    Each unique part appears exactly once in the result.  Standalone
+    products/parts are identified by their backing filepath (falling back to
+    Part Number when the filepath is unavailable).  Embedded sub-assemblies
+    (部件) are identified by Part Number, because they share the parent
+    product's filepath and would otherwise be incorrectly merged with it.
+
+    The ``Quantity`` value is the *total* count across the whole assembly tree,
     computed by multiplying the per-level quantities along every path from the
     root to that part.
 
@@ -311,8 +323,9 @@ def flatten_bom_to_summary(
         absolute_qtys.append(abs_qty)
         cum_qty_stack.append((level, abs_qty))
 
-    # ── Step 2: deduplicate by filepath (preferred) or Part Number ───────────
-    # Key: filepath if non-empty, else Part Number.
+    # ── Step 2: deduplicate ─────────────────────────────────────────────────
+    # Key: filepath for standalone products/parts, Part Number for embedded
+    # 部件 (which share the parent product's filepath).
     # For each key we keep the first row's attributes and accumulate quantity.
     seen_order:  list[str]       = []   # insertion-ordered keys
     summary:     dict[str, dict] = {}   # key → merged row dict
@@ -332,7 +345,14 @@ def flatten_bom_to_summary(
             continue
 
         fp  = row.get("_filepath", "")
-        key = fp if fp else str(row.get("Part Number", ""))
+        typ = row.get("Type", "")
+        # Embedded 部件 share the parent product's filepath, so using the
+        # filepath as key would incorrectly merge them with the parent
+        # product or with sibling 部件.  Use Part Number instead.
+        if typ == "部件":
+            key = str(row.get("Part Number", ""))
+        else:
+            key = fp if fp else str(row.get("Part Number", ""))
         if not key:
             continue
 
