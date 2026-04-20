@@ -16,13 +16,32 @@ logger = logging.getLogger(__name__)
 def apply_part_template(
     file_paths: list[str],
     output_folder: str | None = None,
-) -> None:
+    *,
+    progress_callback=None,
+    keep_open: bool = False,
+) -> int:
     """Add the standard user-defined properties to each CATPart if they are absent.
 
     Properties are added as empty strings and the file is saved automatically
     after stamping.  *output_folder* is accepted for API compatibility with the
     generic :class:`~catia_companion.ui.convert_dialog.FileConvertDialog` but
     is otherwise unused (parts are saved in place).
+
+    Parameters
+    ----------
+    progress_callback:
+        Optional ``(index, total)`` callback invoked after each file is
+        processed, compatible with
+        :class:`~catia_companion.ui.convert_dialog.FileConvertDialog`.
+    keep_open:
+        When ``True`` the document is **not** closed after stamping.  Use
+        this when operating on a document that is already open in CATIA (e.g.
+        the current active document).
+
+    Returns
+    -------
+    int
+        Number of files stamped successfully.
     """
     from pycatia import catia
     from pycatia.mec_mod_interfaces.part_document import PartDocument
@@ -35,8 +54,9 @@ def apply_part_template(
 
     succeeded: list[str] = []
     failed:    list[str] = []
+    total = len(file_paths)
 
-    for path in file_paths:
+    for idx, path in enumerate(file_paths):
         src = Path(path).resolve()
         logger.info(f"Opening: {src}")
         try:
@@ -69,8 +89,15 @@ def apply_part_template(
             logger.error(f"  ERROR processing {src.name}: {e}")
             failed.append(f"{src.name}: {e}")
         finally:
+            if not keep_open:
+                try:
+                    application.active_document.close()
+                except Exception:
+                    pass
+
+        if progress_callback is not None:
             try:
-                application.active_document.close()
+                progress_callback(idx, total)
             except Exception:
                 pass
 
@@ -84,3 +111,5 @@ def apply_part_template(
         QMessageBox.warning(None, "刷写零件模板", msg)
     else:
         QMessageBox.information(None, "刷写零件模板", msg)
+
+    return len(succeeded)

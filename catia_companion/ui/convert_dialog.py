@@ -62,16 +62,18 @@ class FileConvertDialog(QDialog):
         prefix: str = "",
         note: str = "",
         show_update_option: bool = False,
+        show_active_doc_option: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setMinimumSize(520, 450)
 
-        self._file_filter        = file_filter
-        self._no_files_msg       = no_files_msg
-        self._conversion_fn      = conversion_fn
-        self._show_prefix_option = show_prefix_option
-        self._show_update_option = show_update_option
+        self._file_filter           = file_filter
+        self._no_files_msg          = no_files_msg
+        self._conversion_fn         = conversion_fn
+        self._show_prefix_option    = show_prefix_option
+        self._show_update_option    = show_update_option
+        self._show_active_doc_option = show_active_doc_option
 
         self._settings         = QSettings("CATIACompanion", f"ConvertDialog_{settings_key}")
         self._last_browse_dir  = self._settings.value("last_browse_dir", "")
@@ -82,7 +84,21 @@ class FileConvertDialog(QDialog):
         layout.setSpacing(10)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        layout.addWidget(QLabel(file_label))
+        # ── "Use active document" option ─────────────────────────────────────
+        if show_active_doc_option:
+            self._use_active_chk = QCheckBox("使用当前CATIA活动文档（不选择文件）")
+            self._use_active_chk.toggled.connect(self._toggle_file_section)
+            layout.addWidget(self._use_active_chk)
+        else:
+            self._use_active_chk = None
+
+        # ── File list section (can be hidden in active-doc mode) ─────────────
+        self._file_section = QWidget()
+        file_section_layout = QVBoxLayout(self._file_section)
+        file_section_layout.setContentsMargins(0, 0, 0, 0)
+        file_section_layout.setSpacing(6)
+
+        file_section_layout.addWidget(QLabel(file_label))
 
         self._file_list = QListWidget()
         self._file_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -95,7 +111,7 @@ class FileConvertDialog(QDialog):
         for f in saved_files:
             if Path(f).exists():
                 self._file_list.addItem(f)
-        layout.addWidget(self._file_list)
+        file_section_layout.addWidget(self._file_list)
 
         btn_row = QHBoxLayout()
         browse_btn     = QPushButton("浏览...")
@@ -108,7 +124,9 @@ class FileConvertDialog(QDialog):
         btn_row.addWidget(remove_btn)
         btn_row.addWidget(remove_all_btn)
         btn_row.addStretch()
-        layout.addLayout(btn_row)
+        file_section_layout.addLayout(btn_row)
+
+        layout.addWidget(self._file_section)
 
         # ── Output folder (hidden for stamp dialog) ─────────────────────────
         if not self._is_stamp_dialog:
@@ -290,6 +308,10 @@ class FileConvertDialog(QDialog):
 
     # ── Output folder ────────────────────────────────────────────────────────
 
+    def _toggle_file_section(self, use_active: bool) -> None:
+        """Show/hide the file-list section when active-doc mode is toggled."""
+        self._file_section.setVisible(not use_active)
+
     def _toggle_folder_row(self, checked: bool) -> None:
         self._folder_edit.setEnabled(checked)
         self._folder_browse_btn.setEnabled(checked)
@@ -306,21 +328,40 @@ class FileConvertDialog(QDialog):
     # ── Confirm ──────────────────────────────────────────────────────────────
 
     def _confirm(self) -> None:
-        files = [self._file_list.item(i).text()
-                 for i in range(self._file_list.count())]
-        if not files:
-            QMessageBox.warning(self, "未选择文件", self._no_files_msg)
-            return
+        use_active = (
+            self._use_active_chk is not None and self._use_active_chk.isChecked()
+        )
 
-        if self._radio_same is None:
-            output_folder = None
-        elif self._radio_same.isChecked():
+        if use_active:
+            # Resolve the path of the current CATIA active document
+            try:
+                from pycatia import catia as _catia
+                _caa = _catia()
+                active_path = _caa.application.active_document.full_name
+            except Exception as e:
+                QMessageBox.warning(
+                    self, "无法获取活动文档",
+                    f"无法从CATIA获取当前活动文档路径：\n{e}\n\n请确保CATIA已启动且有活动文档。",
+                )
+                return
+            files = [active_path]
             output_folder = None
         else:
-            output_folder = self._folder_edit.text().strip()
-            if not output_folder:
-                QMessageBox.warning(self, "未选择输出文件夹", "请选择一个输出文件夹。")
+            files = [self._file_list.item(i).text()
+                     for i in range(self._file_list.count())]
+            if not files:
+                QMessageBox.warning(self, "未选择文件", self._no_files_msg)
                 return
+
+            if self._radio_same is None:
+                output_folder = None
+            elif self._radio_same.isChecked():
+                output_folder = None
+            else:
+                output_folder = self._folder_edit.text().strip()
+                if not output_folder:
+                    QMessageBox.warning(self, "未选择输出文件夹", "请选择一个输出文件夹。")
+                    return
 
         # Show progress bar and disable confirm button during conversion
         total = len(files)
@@ -351,11 +392,15 @@ class FileConvertDialog(QDialog):
                 )
                 if self._update_checkbox is not None:
                     kwargs["update_before_export"] = self._update_checkbox.isChecked()
+                if use_active:
+                    kwargs["keep_open"] = True
                 success_count = self._conversion_fn(files, output_folder, **kwargs)
             else:
                 kwargs = dict(progress_callback=_progress)
                 if self._update_checkbox is not None:
                     kwargs["update_before_export"] = self._update_checkbox.isChecked()
+                if use_active:
+                    kwargs["keep_open"] = True
                 success_count = self._conversion_fn(files, output_folder, **kwargs)
         except Exception as e:
             logger.error("Conversion failed: %s", e)

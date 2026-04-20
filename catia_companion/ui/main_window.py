@@ -388,6 +388,7 @@ class MainWindow(QMainWindow):
             no_files_msg="请至少选择一个CATPart文件。",
             conversion_fn=apply_part_template,
             settings_key="StampPartTemplate",
+            show_active_doc_option=True,
         ).exec()
 
     def _open_find_dependencies_dialog(self) -> None:
