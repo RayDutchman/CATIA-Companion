@@ -13,6 +13,23 @@ from catia_companion.constants import PRESET_USER_REF_PROPERTIES
 logger = logging.getLogger(__name__)
 
 
+def _find_open_document(application, resolved_path: Path):
+    """Return the CATIA document object if *resolved_path* is already open, else ``None``."""
+    try:
+        docs = application.documents
+        for i in range(1, docs.count + 1):
+            try:
+                doc_com = docs.item(i).com_object
+                full_name = doc_com.FullName
+                if Path(full_name).resolve() == resolved_path:
+                    return docs.item(i)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+
 def apply_part_template(
     file_paths: list[str],
     output_folder: str | None = None,
@@ -36,7 +53,9 @@ def apply_part_template(
     keep_open:
         When ``True`` the document is **not** closed after stamping.  Use
         this when operating on a document that is already open in CATIA (e.g.
-        the current active document).
+        the current active document selected via "使用当前活动文档").  When
+        ``False`` (the default), each file is opened if not already open and
+        closed afterwards only if it was not already open before stamping.
 
     Returns
     -------
@@ -57,6 +76,7 @@ def apply_part_template(
 
     for idx, path in enumerate(file_paths):
         src = Path(path)
+        was_already_open = False
         try:
             if keep_open:
                 # The document is already active in CATIA – skip re-opening it.
@@ -65,10 +85,19 @@ def apply_part_template(
                 # that have no file on disk yet.
                 logger.info(f"Stamping active document: {src.name}")
                 doc = PartDocument(application.active_document.com_object)
+                was_already_open = True
             else:
                 src = src.resolve()
-                logger.info(f"Opening: {src}")
-                documents.open(str(src))
+                existing_doc = _find_open_document(application, src)
+                if existing_doc is not None:
+                    logger.info(f"File already open, reusing: {src.name}")
+                    was_already_open = True
+                    # Make the already-open document the active one so that
+                    # active_document refers to it after this branch.
+                    existing_doc.com_object.Activate()
+                else:
+                    logger.info(f"Opening: {src}")
+                    documents.open(str(src))
                 doc = PartDocument(application.active_document.com_object)
 
             product    = doc.product
@@ -110,7 +139,7 @@ def apply_part_template(
             logger.error(f"  ERROR processing {src.name}: {e}")
             failed.append(f"{src.name}: {e}")
         finally:
-            if not keep_open:
+            if not was_already_open:
                 try:
                     application.active_document.close()
                 except Exception:
