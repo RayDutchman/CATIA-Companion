@@ -122,9 +122,15 @@ class _BomTreeWidget(QTreeWidget):
                 painter.drawPoint(x, y)
 
         # For every ancestor segment (all but the last), draw a full-height
-        # vertical line when that ancestor still has more siblings below it.
+        # vertical line when there is any sibling remaining in the subtree
+        # rooted at level d — i.e., when any node on the path from level d
+        # up to the direct parent still has a next sibling.  Using only
+        # has_next[d] would fail to draw the line when the level-d ancestor
+        # is the last at its level but a deeper ancestor (say level d+1)
+        # still has siblings, which produces a broken guide line after
+        # expanding a nested sub-product.
         for d in range(depth - 1):
-            if has_next[d]:
+            if any(has_next[d:depth]):
                 x = rect.left() + d * indent + indent // 2
                 _vdots(x, rect.top(), rect.bottom())
 
@@ -491,6 +497,16 @@ class BomEditDialog(QDialog):
         autofit_btn.setToolTip("根据内容自动调整所有列的宽度")
         autofit_btn.clicked.connect(self._autofit_columns)
         btn_row.addWidget(autofit_btn)
+
+        expand_btn = QPushButton("全部展开")
+        expand_btn.setToolTip("展开结构树中的所有节点")
+        expand_btn.clicked.connect(self._table.expandAll)
+        btn_row.addWidget(expand_btn)
+
+        collapse_btn = QPushButton("全部折叠")
+        collapse_btn.setToolTip("折叠结构树中的所有节点")
+        collapse_btn.clicked.connect(self._table.collapseAll)
+        btn_row.addWidget(collapse_btn)
 
         self._rename_btn = QPushButton("按零件编号修改文件名")
         self._rename_btn.setEnabled(False)
