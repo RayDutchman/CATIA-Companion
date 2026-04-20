@@ -10,6 +10,7 @@ during conversion.
 """
 
 import logging
+import re
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -79,6 +80,11 @@ class FileConvertDialog(QDialog):
         self._last_browse_dir  = self._settings.value("last_browse_dir", "")
         self._last_output_dir  = self._settings.value("last_output_dir", "")
         self._is_stamp_dialog  = settings_key == "StampPartTemplate"
+
+        # Cache accepted extensions once so dropEvent doesn't re-parse the filter string.
+        self._accepted_exts: set[str] = {
+            m.group(1).lower() for m in re.finditer(r"\*(\.\w+)", file_filter)
+        }
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -241,12 +247,8 @@ class FileConvertDialog(QDialog):
     # ── Drag & drop support ─────────────────────────────────────────────────
 
     def _accepted_extensions(self) -> set[str]:
-        """Parse the file_filter to extract accepted file extensions."""
-        import re
-        exts: set[str] = set()
-        for m in re.finditer(r"\*(\.\w+)", self._file_filter):
-            exts.add(m.group(1).lower())
-        return exts
+        """Return cached accepted file extensions parsed from the file filter."""
+        return self._accepted_exts
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if event.mimeData().hasUrls():
@@ -378,30 +380,25 @@ class FileConvertDialog(QDialog):
             QApplication.processEvents()
 
         success_count = 0
+        failed_items: list[str] = []
         try:
+            kwargs: dict = dict(progress_callback=_progress)
             if self._prefix_checkbox is not None:
-                prefix_value = (
+                kwargs["prefix"] = (
                     self._prefix_edit.text() if self._prefix_checkbox.isChecked() else ""
                 )
-                suffix_value = (
+                kwargs["suffix"] = (
                     self._suffix_edit.text() if self._suffix_checkbox.isChecked() else ""
                 )
-                kwargs: dict = dict(
-                    prefix=prefix_value, suffix=suffix_value,
-                    progress_callback=_progress,
-                )
-                if self._update_checkbox is not None:
-                    kwargs["update_before_export"] = self._update_checkbox.isChecked()
-                if use_active:
-                    kwargs["keep_open"] = True
-                success_count = self._conversion_fn(files, output_folder, **kwargs)
+            if self._update_checkbox is not None:
+                kwargs["update_before_export"] = self._update_checkbox.isChecked()
+            if use_active:
+                kwargs["keep_open"] = True
+            result = self._conversion_fn(files, output_folder, **kwargs)
+            if isinstance(result, tuple):
+                success_count, failed_items = result
             else:
-                kwargs = dict(progress_callback=_progress)
-                if self._update_checkbox is not None:
-                    kwargs["update_before_export"] = self._update_checkbox.isChecked()
-                if use_active:
-                    kwargs["keep_open"] = True
-                success_count = self._conversion_fn(files, output_folder, **kwargs)
+                success_count = result
         except Exception as e:
             logger.error("Conversion failed: %s", e)
 
@@ -419,10 +416,12 @@ class FileConvertDialog(QDialog):
         self._confirm_btn.setEnabled(True)
 
         if self._is_stamp_dialog:
-            QMessageBox.information(
-                self, "刷写完成",
-                f"已成功刷写 {success_count} / {total} 个文件。",
-            )
+            msg = f"已成功刷写 {success_count} / {total} 个文件。"
+            if failed_items:
+                msg += "\n\n失败文件：\n" + "\n".join(failed_items)
+                QMessageBox.warning(self, "刷写完成（含失败）", msg)
+            else:
+                QMessageBox.information(self, "刷写完成", msg)
         else:
             QMessageBox.information(
                 self, "导出完成",

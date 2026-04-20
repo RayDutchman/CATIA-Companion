@@ -19,10 +19,10 @@ def _find_open_document(application, resolved_path: Path):
         docs = application.documents
         for i in range(1, docs.count + 1):
             try:
-                doc_com = docs.item(i).com_object
-                full_name = doc_com.FullName
+                doc = docs.item(i)  # single COM call; reused below
+                full_name = doc.com_object.FullName
                 if Path(full_name).resolve() == resolved_path:
-                    return docs.item(i)
+                    return doc
             except Exception:
                 continue
     except Exception:
@@ -36,7 +36,7 @@ def apply_part_template(
     *,
     progress_callback=None,
     keep_open: bool = False,
-) -> int:
+) -> tuple[int, list[str]]:
     """Add the standard user-defined properties to each CATPart if they are absent.
 
     Properties are added as empty strings and the file is saved automatically
@@ -59,8 +59,9 @@ def apply_part_template(
 
     Returns
     -------
-    int
-        Number of files stamped successfully.
+    tuple[int, list[str]]
+        ``(success_count, failed_messages)`` where *failed_messages* contains
+        one human-readable string per file that could not be stamped.
     """
     from pycatia import catia
     from pycatia.mec_mod_interfaces.part_document import PartDocument
@@ -68,7 +69,6 @@ def apply_part_template(
     caa = catia()
     application = caa.application
     application.visible = True
-    documents = application.documents
 
     succeeded: list[str] = []
     failed:    list[str] = []
@@ -77,6 +77,7 @@ def apply_part_template(
     for idx, path in enumerate(file_paths):
         src = Path(path)
         was_already_open = False
+        opened_doc = None  # the document we opened ourselves (if any)
         try:
             if keep_open:
                 # The document is already active in CATIA – skip re-opening it.
@@ -97,7 +98,10 @@ def apply_part_template(
                     existing_doc.com_object.Activate()
                 else:
                     logger.info(f"Opening: {src}")
-                    documents.open(str(src))
+                    application.documents.open(str(src))
+                    # Capture the document we just opened so that the finally
+                    # block closes exactly this doc (not whatever is active later).
+                    opened_doc = application.active_document
                 doc = PartDocument(application.active_document.com_object)
 
             product    = doc.product
@@ -139,9 +143,9 @@ def apply_part_template(
             logger.error(f"  ERROR processing {src.name}: {e}")
             failed.append(f"{src.name}: {e}")
         finally:
-            if not was_already_open:
+            if not was_already_open and opened_doc is not None:
                 try:
-                    application.active_document.close()
+                    opened_doc.close()
                 except Exception:
                     pass
 
@@ -151,4 +155,4 @@ def apply_part_template(
             except Exception:
                 pass
 
-    return len(succeeded)
+    return len(succeeded), failed
