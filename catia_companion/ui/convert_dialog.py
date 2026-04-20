@@ -61,6 +61,7 @@ class FileConvertDialog(QDialog):
         show_prefix_option: bool = False,
         prefix: str = "",
         note: str = "",
+        show_update_option: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -70,6 +71,7 @@ class FileConvertDialog(QDialog):
         self._no_files_msg       = no_files_msg
         self._conversion_fn      = conversion_fn
         self._show_prefix_option = show_prefix_option
+        self._show_update_option = show_update_option
 
         self._settings         = QSettings("CATIACompanion", f"ConvertDialog_{settings_key}")
         self._last_browse_dir  = self._settings.value("last_browse_dir", "")
@@ -178,6 +180,21 @@ class FileConvertDialog(QDialog):
             self._prefix_edit     = None
             self._suffix_checkbox = None
             self._suffix_edit     = None
+
+        # ── Update-before-export option (e.g. CATDrawing → PDF) ─────────────
+        if show_update_option:
+            saved_update = self._settings.value("update_before_export", False)
+            if isinstance(saved_update, str):
+                saved_update = saved_update.lower() == "true"
+            self._update_checkbox = QCheckBox("更新图纸后再输出")
+            self._update_checkbox.setToolTip(
+                "导出PDF前先强制更新CATDrawing中每一页的所有视图，"
+                "确保导出结果与最新模型状态一致。"
+            )
+            self._update_checkbox.setChecked(saved_update)
+            layout.addWidget(self._update_checkbox)
+        else:
+            self._update_checkbox = None
 
         if note:
             note_label = QLabel(note)
@@ -328,25 +345,29 @@ class FileConvertDialog(QDialog):
                 suffix_value = (
                     self._suffix_edit.text() if self._suffix_checkbox.isChecked() else ""
                 )
-                success_count = self._conversion_fn(
-                    files, output_folder,
+                kwargs: dict = dict(
                     prefix=prefix_value, suffix=suffix_value,
                     progress_callback=_progress,
                 )
+                if self._update_checkbox is not None:
+                    kwargs["update_before_export"] = self._update_checkbox.isChecked()
+                success_count = self._conversion_fn(files, output_folder, **kwargs)
             else:
-                success_count = self._conversion_fn(
-                    files, output_folder,
-                    progress_callback=_progress,
-                )
+                kwargs = dict(progress_callback=_progress)
+                if self._update_checkbox is not None:
+                    kwargs["update_before_export"] = self._update_checkbox.isChecked()
+                success_count = self._conversion_fn(files, output_folder, **kwargs)
         except Exception as e:
             logger.error("Conversion failed: %s", e)
 
-        # Persist prefix/suffix settings after conversion
+        # Persist prefix/suffix and update settings after conversion
         if self._prefix_checkbox is not None:
             self._settings.setValue("add_prefix",   self._prefix_checkbox.isChecked())
             self._settings.setValue("prefix_value", self._prefix_edit.text())
             self._settings.setValue("add_suffix",   self._suffix_checkbox.isChecked())
             self._settings.setValue("suffix_value", self._suffix_edit.text())
+        if self._update_checkbox is not None:
+            self._settings.setValue("update_before_export", self._update_checkbox.isChecked())
 
         self._progress_bar.setValue(total)
         self._progress_bar.setFormat(f"完成 ({success_count}/{total})")

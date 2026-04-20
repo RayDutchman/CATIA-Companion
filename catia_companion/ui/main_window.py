@@ -359,6 +359,7 @@ class MainWindow(QMainWindow):
             settings_key="CATDrawing",
             show_prefix_option=True,
             prefix="DR_",
+            show_update_option=True,
             note=(
                 "如果用于导出的CATDrawing有多页，请将CATIA设置为"
                 "\u201c将多页文档保存在单向量文件中\u201d"

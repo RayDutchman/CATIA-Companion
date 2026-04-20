@@ -111,9 +111,12 @@ class ExportBomDialog(QDialog):
             self._radio_custom.setChecked(True)
             self._folder_edit.setText(self._last_output_dir)
 
-        # ── BOM type ────────────────────────────────────────────────────────
-        bom_type_group  = QGroupBox("BOM类型")
-        bom_type_layout = QHBoxLayout(bom_type_group)
+        # ── BOM type + summary options (combined group) ─────────────────────
+        bom_opts_group  = QGroupBox("BOM类型与汇总选项")
+        bom_opts_layout = QVBoxLayout(bom_opts_group)
+
+        # Radio buttons (层级 vs 汇总)
+        type_row = QHBoxLayout()
         self._bom_type_btn_group = QButtonGroup(self)
         self._radio_hierarchical = QRadioButton("层级BOM")
         self._radio_summary      = QRadioButton("汇总BOM")
@@ -123,13 +126,13 @@ class ExportBomDialog(QDialog):
             self._radio_hierarchical.setChecked(True)
         self._bom_type_btn_group.addButton(self._radio_hierarchical)
         self._bom_type_btn_group.addButton(self._radio_summary)
-        bom_type_layout.addWidget(self._radio_hierarchical)
-        bom_type_layout.addWidget(self._radio_summary)
-        bom_type_layout.addStretch()
+        type_row.addWidget(self._radio_hierarchical)
+        type_row.addWidget(self._radio_summary)
+        type_row.addStretch()
+        bom_opts_layout.addLayout(type_row)
         self._radio_summary.toggled.connect(self._on_bom_type_changed)
-        layout.addWidget(bom_type_group)
 
-        # ── Summary BOM options (only visible in summary mode) ───────────────
+        # Summary-only sub-options (hidden when in hierarchical mode)
         self._summary_opts_group = QGroupBox("汇总BOM选项")
         summary_opts_layout = QVBoxLayout(self._summary_opts_group)
 
@@ -149,7 +152,8 @@ class ExportBomDialog(QDialog):
         summary_opts_layout.addLayout(sort_row)
 
         self._summary_opts_group.setVisible(self._summarize)
-        layout.addWidget(self._summary_opts_group)
+        bom_opts_layout.addWidget(self._summary_opts_group)
+        layout.addWidget(bom_opts_group)
         col_group  = QGroupBox("导出列（拖动以排序）")
         col_outer  = QVBoxLayout(col_group)
         col_layout = QHBoxLayout()
