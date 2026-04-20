@@ -190,7 +190,7 @@ class ExportBomDialog(QDialog):
         selected_layout.addWidget(self._selected_list)
         col_layout.addLayout(selected_layout)
         col_outer.addLayout(col_layout)
-        layout.addWidget(col_group)
+        layout.addWidget(col_group, 1)
 
         # Populate column lists
         saved = self._settings.value("selected_columns", BOM_DEFAULT_COLUMNS)

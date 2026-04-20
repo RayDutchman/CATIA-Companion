@@ -219,6 +219,9 @@ class BomEditDialog(QDialog):
         self._show_filepath_col: bool = self._edit_settings.value(
             "show_filepath_column", False, type=bool,
         )
+        self._show_filename_col: bool = self._edit_settings.value(
+            "show_filename_column", True, type=bool,
+        )
 
         self._columns: list[str] = self._build_visible_columns()
 
@@ -328,8 +331,8 @@ class BomEditDialog(QDialog):
         hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(hint)
 
-        self._filepath_chk = QCheckBox("显示完整路径列")
-        self._filepath_chk.setToolTip("在表格中显示每个零件/产品文件的完整路径（默认隐藏）")
+        self._filepath_chk = QCheckBox("文件名列显示完整路径")
+        self._filepath_chk.setToolTip("勾选后文件名列将显示文件完整路径（含目录），而非仅文件名")
         self._filepath_chk.setChecked(self._show_filepath_col)
         self._filepath_chk.toggled.connect(self._on_show_filepath_toggled)
         layout.addWidget(self._filepath_chk)
@@ -339,6 +342,12 @@ class BomEditDialog(QDialog):
         preset_layout = QHBoxLayout(preset_group)
         preset_layout.setSpacing(12)
         self._preset_checkboxes: dict[str, QCheckBox] = {}
+        # "Filename" is a built-in column but can be toggled like a preset
+        fn_cb = QCheckBox(BOM_COLUMN_DISPLAY_NAMES.get("Filename", "Filename"))
+        fn_cb.setChecked(self._show_filename_col)
+        fn_cb.toggled.connect(self._on_preset_col_toggled)
+        preset_layout.addWidget(fn_cb)
+        self._preset_checkboxes["Filename"] = fn_cb
         for col_name in PRESET_USER_REF_PROPERTIES:
             cb = QCheckBox(col_name)
             cb.setChecked(col_name in self._visible_preset_cols)
@@ -348,9 +357,8 @@ class BomEditDialog(QDialog):
         layout.addWidget(preset_group)
 
         # Editable table
-        display_headers = [BOM_COLUMN_DISPLAY_NAMES.get(c, c) for c in self._columns]
         self._table = QTableWidget(0, len(self._columns))
-        self._table.setHorizontalHeaderLabels(display_headers)
+        self._table.setHorizontalHeaderLabels(self._display_headers())
         hdr = self._table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hdr.setStretchLastSection(True)
@@ -362,7 +370,7 @@ class BomEditDialog(QDialog):
         self._table.setAlternatingRowColors(True)
         self._table.itemChanged.connect(self._on_item_changed)
         self._table.cellClicked.connect(self._on_cell_clicked)
-        layout.addWidget(self._table)
+        layout.addWidget(self._table, 1)
 
         # Bottom buttons
         btn_row = QHBoxLayout()
@@ -425,9 +433,8 @@ class BomEditDialog(QDialog):
             )
             self._collapsed_rows.clear()
             self._columns = self._build_visible_columns()
-            display_headers = [BOM_COLUMN_DISPLAY_NAMES.get(c, c) for c in self._columns]
             self._table.setColumnCount(len(self._columns))
-            self._table.setHorizontalHeaderLabels(display_headers)
+            self._table.setHorizontalHeaderLabels(self._display_headers())
             self._populate_table()
             self._table.resizeColumnsToContents()
 
@@ -444,9 +451,8 @@ class BomEditDialog(QDialog):
             self._collapsed_rows.clear()
             # When assemblies are included show the Type column; otherwise hide it
             self._columns = self._build_visible_columns()
-            display_headers = [BOM_COLUMN_DISPLAY_NAMES.get(c, c) for c in self._columns]
             self._table.setColumnCount(len(self._columns))
-            self._table.setHorizontalHeaderLabels(display_headers)
+            self._table.setHorizontalHeaderLabels(self._display_headers())
             self._populate_table()
             self._table.resizeColumnsToContents()
 
@@ -478,12 +484,24 @@ class BomEditDialog(QDialog):
 
     # ── Preset column helpers ─────────────────────────────────────────────────
 
+    def _display_headers(self) -> list[str]:
+        """Return display header labels for the current column list.
+
+        When "文件名列显示完整路径" is active the Filename column header is
+        shown as "完整路径" so users can tell what they're looking at.
+        """
+        result = []
+        for c in self._columns:
+            if c == "Filename" and self._show_filepath_col:
+                result.append("完整路径")
+            else:
+                result.append(BOM_COLUMN_DISPLAY_NAMES.get(c, c))
+        return result
+
     def _build_visible_columns(self) -> list[str]:
         base = list(BOM_EDIT_COLUMN_ORDER)
-        if self._show_filepath_col:
-            fn_idx = base.index("Filename") if "Filename" in base else -1
-            if fn_idx >= 0:
-                base.insert(fn_idx + 1, "Filepath")
+        if not self._show_filename_col:
+            base = [c for c in base if c != "Filename"]
         if self._summarize:
             # Always hide Level (hierarchy is meaningless in summary)
             # Keep Type when assemblies are included (so the user can see 产品/部件/零件)
@@ -501,14 +519,20 @@ class BomEditDialog(QDialog):
         return base + visible_preset + other_custom
 
     def _on_preset_col_toggled(self) -> None:
+        # "Filename" checkbox controls the built-in filename column visibility
+        if "Filename" in self._preset_checkboxes:
+            new_show_fn = self._preset_checkboxes["Filename"].isChecked()
+            if new_show_fn != self._show_filename_col:
+                self._show_filename_col = new_show_fn
+                self._edit_settings.setValue("show_filename_column", self._show_filename_col)
         self._visible_preset_cols = [
-            name for name, cb in self._preset_checkboxes.items() if cb.isChecked()
+            name for name, cb in self._preset_checkboxes.items()
+            if name != "Filename" and cb.isChecked()
         ]
         self._edit_settings.setValue("visible_preset_columns", self._visible_preset_cols)
         self._columns = self._build_visible_columns()
-        display_headers = [BOM_COLUMN_DISPLAY_NAMES.get(c, c) for c in self._columns]
         self._table.setColumnCount(len(self._columns))
-        self._table.setHorizontalHeaderLabels(display_headers)
+        self._table.setHorizontalHeaderLabels(self._display_headers())
         if self._rows:
             self._populate_table()
             self._table.resizeColumnsToContents()
@@ -517,9 +541,8 @@ class BomEditDialog(QDialog):
         self._show_filepath_col = checked
         self._edit_settings.setValue("show_filepath_column", checked)
         self._columns = self._build_visible_columns()
-        display_headers = [BOM_COLUMN_DISPLAY_NAMES.get(c, c) for c in self._columns]
         self._table.setColumnCount(len(self._columns))
-        self._table.setHorizontalHeaderLabels(display_headers)
+        self._table.setHorizontalHeaderLabels(self._display_headers())
         if self._rows:
             self._populate_table()
             self._table.resizeColumnsToContents()
@@ -650,9 +673,8 @@ class BomEditDialog(QDialog):
     def _populate_table(self) -> None:
         self._is_updating = True
 
-        display_headers = [BOM_COLUMN_DISPLAY_NAMES.get(c, c) for c in self._columns]
         self._table.setColumnCount(len(self._columns))
-        self._table.setHorizontalHeaderLabels(display_headers)
+        self._table.setHorizontalHeaderLabels(self._display_headers())
         self._table.setRowCount(0)
         self._table.setRowCount(len(self._rows))
 
@@ -685,6 +707,13 @@ class BomEditDialog(QDialog):
                     value = self._level_cell_text(row_idx)
                 elif col_name == "Quantity":
                     value = str(row_data.get("Quantity", "1"))
+                elif col_name == "Filename":
+                    fp = str(row_data.get("_filepath", ""))
+                    fn = str(row_data.get("Filename", ""))
+                    if self._show_filepath_col:
+                        value = fp if fp else fn
+                    else:
+                        value = fn
                 elif col_name == "Filepath":
                     value = str(row_data.get("_filepath", ""))
                 elif col_name in BOM_READONLY_COLUMNS:
@@ -701,8 +730,15 @@ class BomEditDialog(QDialog):
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 if col_name == "Filename":
                     fp = str(row_data.get("_filepath", ""))
+                    fn = str(row_data.get("Filename", ""))
                     if fp:
-                        item.setToolTip(fp)
+                        if self._show_filepath_col:
+                            # Column already shows full path; tooltip shows just filename
+                            if fn and fn != FILENAME_NOT_FOUND:
+                                item.setToolTip(fn)
+                        else:
+                            # Column shows filename; tooltip shows full path
+                            item.setToolTip(fp)
                 self._table.setItem(row_idx, col_idx, item)
 
             # Lock rows that cannot be accessed or whose backing file is missing
