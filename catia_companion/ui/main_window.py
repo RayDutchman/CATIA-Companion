@@ -37,6 +37,7 @@ from catia_companion.ui.convert_dialog import FileConvertDialog
 from catia_companion.ui.export_bom_dialog import ExportBomDialog
 from catia_companion.ui.find_deps_dialog import FindDependenciesDialog
 from catia_companion.ui.bom_edit_dialog import BomEditDialog
+from catia_companion.ui.fastener_assembly_dialog import FastenerAssemblyDialog
 from catia_companion.ui.help_dialog import HelpDialog
 
 logger = logging.getLogger(__name__)
@@ -155,7 +156,11 @@ class MainWindow(QMainWindow):
         btn_deps.setToolTip("通过 CATIA COM 查找文件的所有引用文档")
         btn_deps.clicked.connect(self._open_find_dependencies_dialog)
 
-        for btn in (btn_font, btn_iso, btn_crack, btn_stamp, btn_deps):
+        btn_fastener = QPushButton("快速装配紧固件")
+        btn_fastener.setToolTip("在装配体中连续放置紧固件实例")
+        btn_fastener.clicked.connect(self._open_fastener_assembly_dialog)
+
+        for btn in (btn_font, btn_iso, btn_crack, btn_stamp, btn_deps, btn_fastener):
             tools_layout.addWidget(btn)
         layout.addWidget(tools_group)
 
@@ -219,6 +224,7 @@ class MainWindow(QMainWindow):
             ("Crack",                     self._crack),
             ("刷写零件模板",              self._open_stamp_part_template_dialog),
             ("查找所有依赖项（未实现）",     self._open_find_dependencies_dialog),
+            ("快速装配紧固件",              self._open_fastener_assembly_dialog),
         ):
             tools_menu.addAction(QAction(label, self, triggered=slot))
 
@@ -393,6 +399,23 @@ class MainWindow(QMainWindow):
 
     def _open_find_dependencies_dialog(self) -> None:
         FindDependenciesDialog(self).exec()
+
+    def _open_fastener_assembly_dialog(self) -> None:
+        def _execute(fastener_path: str) -> None:
+            from pycatia import catia as _catia
+            caa = _catia()
+            app = caa.application
+            macro_path = self._macros_dir() / "fastener_assembly.catvbs"
+            if not macro_path.exists():
+                raise FileNotFoundError(
+                    f"未找到宏文件：{macro_path}\n"
+                    "请将 fastener_assembly.catvbs 放入 macros 文件夹后重试。"
+                )
+            self._execute_catscript(
+                app, macro_path, "CATMain", [fastener_path],
+            )
+
+        FastenerAssemblyDialog(self, execute_fn=_execute).exec()
 
     # ── Drawing generation ─────────────────────────────────────────────────
 
