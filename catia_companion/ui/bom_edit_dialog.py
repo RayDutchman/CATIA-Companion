@@ -468,7 +468,8 @@ class BomEditDialog(QDialog):
             self._columns = self._build_visible_columns()
             self._table.setHeaderLabels(self._display_headers())
             self._populate_table()
-            self._table.resizeColumnsToContents()
+            for _c in range(self._table.columnCount()):
+                self._table.resizeColumnToContents(_c)
 
     def _on_include_assemblies_toggled(self, checked: bool) -> None:
         self._summary_include_assemblies = checked
@@ -484,7 +485,8 @@ class BomEditDialog(QDialog):
             self._columns = self._build_visible_columns()
             self._table.setHeaderLabels(self._display_headers())
             self._populate_table()
-            self._table.resizeColumnsToContents()
+            for _c in range(self._table.columnCount()):
+                self._table.resizeColumnToContents(_c)
 
     def _on_sort_col_changed(self, _index: int) -> None:
         col = self._sort_col_combo.currentData()
@@ -504,10 +506,10 @@ class BomEditDialog(QDialog):
 
     def _autofit_columns(self) -> None:
         """Resize all columns to fit their content, with a minimum width."""
-        self._table.resizeColumnsToContents()
-        # Enforce a reasonable minimum width
+        # QTreeWidget has resizeColumnToContents(int) not resizeColumnsToContents()
         min_width = 60
         for col in range(self._table.columnCount()):
+            self._table.resizeColumnToContents(col)
             if self._table.columnWidth(col) < min_width:
                 self._table.setColumnWidth(col, min_width)
 
@@ -528,15 +530,15 @@ class BomEditDialog(QDialog):
         return result
 
     def _build_visible_columns(self) -> list[str]:
-        # "Level" is omitted from all displayed columns – the QTreeWidget's native
-        # indentation communicates hierarchy far more clearly than a text column.
-        base = [c for c in BOM_EDIT_COLUMN_ORDER if c != "Level"]
+        base = list(BOM_EDIT_COLUMN_ORDER)
         if not self._show_filename_col:
             base = [c for c in base if c != "Filename"]
         if self._summarize:
-            # Keep Type when assemblies are included (so the user can see 产品/部件/零件)
+            # In summary mode Level has no meaning; also hide Type unless assemblies shown
+            cols_to_hide = {"Level"}
             if not self._summary_include_assemblies:
-                base = [c for c in base if c != "Type"]
+                cols_to_hide.add("Type")
+            base = [c for c in base if c not in cols_to_hide]
         visible_preset = [
             c for c in PRESET_USER_REF_PROPERTIES if c in self._visible_preset_cols
         ]
@@ -562,7 +564,8 @@ class BomEditDialog(QDialog):
         self._table.setHeaderLabels(self._display_headers())
         if self._rows:
             self._populate_table()
-            self._table.resizeColumnsToContents()
+            for _c in range(self._table.columnCount()):
+                self._table.resizeColumnToContents(_c)
 
     def _on_show_filepath_toggled(self, checked: bool) -> None:
         self._show_filepath_col = checked
@@ -571,7 +574,8 @@ class BomEditDialog(QDialog):
         self._table.setHeaderLabels(self._display_headers())
         if self._rows:
             self._populate_table()
-            self._table.resizeColumnsToContents()
+            for _c in range(self._table.columnCount()):
+                self._table.resizeColumnToContents(_c)
 
     # ── File picker ───────────────────────────────────────────────────────────
 
@@ -683,7 +687,8 @@ class BomEditDialog(QDialog):
 
         self._populate_table()
         if not self._bom_loaded:
-            self._table.resizeColumnsToContents()
+            for _c in range(self._table.columnCount()):
+                self._table.resizeColumnToContents(_c)
             self._bom_loaded = True
         else:
             for i, w in enumerate(saved_widths):
