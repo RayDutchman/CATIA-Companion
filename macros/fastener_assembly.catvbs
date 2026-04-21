@@ -95,7 +95,7 @@ Sub CATMain(iParameters)
     Set faceMeas = spa.GetMeasurable(faceRef)
 
     Dim fastFaceNorm(2)
-    faceMeas.GetDirection fastFaceNorm
+    faceMeas.GetNormal fastFaceNorm
 
     Dim fastFacePt(2)
     faceMeas.GetCOG fastFacePt
@@ -201,7 +201,7 @@ Sub CATMain(iParameters)
         Set planeMeas = spa.GetMeasurable(planeRef)
 
         Dim planeNorm(2)
-        planeMeas.GetDirection planeNorm
+        planeMeas.GetNormal planeNorm
         Dim planePt(2)
         planeMeas.GetCOG planePt
 
