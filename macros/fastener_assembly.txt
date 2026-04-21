@@ -1,22 +1,35 @@
 Option Explicit
 ' fastener_assembly - VBA Module
 '
-' Paste the entire content of this file into a module inside CATIA's VBA editor
-' (Tools > Macro > Macros... > Edit).  Run "CATMain" directly from the editor.
+' SETUP (two steps required in the VBA editor):
+'   1. Paste the entire content of this file into a MODULE
+'      (Tools > Macro > Macros... > Edit, or insert a new module).
+'   2. Insert a UserForm named "FlipForm":
+'      - In the VBA IDE, click Insert > UserForm.
+'      - Set the form's (Name) property to "FlipForm" and Caption to "方向控制".
+'      - Add a CommandButton: (Name) = "btnFlip", Caption = "翻转方向: 否",
+'        Width ~160, Height ~36.  Position it near the top of the form.
+'      - Paste the UserForm code from the bottom of this file into the form's
+'        code module (double-click the button or use View > Code).
+'   Run "CATMain" directly from the editor.
 '
 ' The fastener CATPart file path is entered via InputBox at runtime.
 ' Leave the InputBox blank to use the currently active document.
 '
 ' Workflow:
 '   1. Open / reference the fastener CATPart, read its Part Number.
-'   2. User selects the cylindrical face (axis) and end face on the fastener.
+'   2. User selects ONE circular edge on the fastener (RectilinearTriDimFeatEdge).
+'      GetAxis gives the fastener axis; GetCenter gives the anchor point.
 '   3. Prompt user to switch to the CATProduct assembly.
 '   4. User selects the target product / sub-assembly in the tree.
-'   5. Assembly loop: select hole entry circular edge (RectilinearTriDimFeatEdge)
-'      -> GetCenter gives the exact axis point; GetAxis gives the direction
-'      -> add fastener instance and position it.  Repeat until ESC.
+'   5. Assembly loop: select hole entry circular edge -> add fastener instance
+'      and position it.  Click "翻转方向" on the floating FlipForm at any time
+'      to toggle the insertion direction.  Repeat until ESC.
 '
 ' ----------------------------------------------------------------------------
+
+' Module-level flip flag; toggled by the FlipForm button without blocking.
+Public g_flipDir As Boolean
 
 Public Sub CATMain()
 
@@ -53,12 +66,14 @@ Public Sub CATMain()
     Set sel = CATIA.ActiveDocument.Selection
     sel.Clear
 
-    ' 2a. Select cylindrical face for axis
-    Dim cylFilter As Variant
-    cylFilter = Array("CylindricalFace" , "RectilinearTriDimFeatEdge" , "Line")' , "ConicalFace")
+    ' 2a. Select one circular edge on the fastener.
+    '     GetAxis  -> fastener axis direction (faBody)
+    '     GetCenter -> anchor point that will coincide with the hole centre
+    Dim fastEdgeFilter As Variant
+    fastEdgeFilter = Array("RectilinearTriDimFeatEdge")
     Dim status As String
-    status = sel.SelectElement2(cylFilter, _
-        "请选择紧固件的圆柱面（用于确定轴线方向）", False)
+    status = sel.SelectElement2(fastEdgeFilter, _
+        "请选择紧固件的圆形边（用于确定轴向和定位点）", False)
     If status <> "Normal" Then
         MsgBox "已取消选择。", vbInformation, "快速装配紧固件"
         Exit Sub
@@ -67,72 +82,26 @@ Public Sub CATMain()
     Dim spa As Object
     Set spa = CATIA.ActiveDocument.GetWorkbench("SPAWorkbench")
 
-    Dim cylRef As Object
-    Set cylRef = sel.Item(1).Reference
-    Dim cylMeas As Object
-    Set cylMeas = spa.GetMeasurable(cylRef)
+    Dim fastEdgeRef As Object
+    Set fastEdgeRef = sel.Item(1).Reference
+    Dim fastEdgeMeas As Object
+    Set fastEdgeMeas = spa.GetMeasurable(fastEdgeRef)
 
-    Dim fastAxis(2) As Double
-    cylMeas.GetAxis fastAxis
-
-    Dim fastAxisPt(2) As Double
-    cylMeas.GetCOG fastAxisPt
-
-    sel.Clear
-
-    ' 2b. Select end face (planar face on the fastener head)
-    Dim faceFilter As Variant
-    faceFilter = Array("PlanarFace")
-    status = sel.SelectElement2(faceFilter, _
-        "请选择紧固件的端面（头部压紧面）", False)
-    If status <> "Normal" Then
-        MsgBox "已取消选择。", vbInformation, "快速装配紧固件"
-        Exit Sub
-    End If
-
-    Dim faceRef As Object
-    Set faceRef = sel.Item(1).Reference
-    Dim faceMeas As Object
-    Set faceMeas = spa.GetMeasurable(faceRef)
-
-    Dim fastFacePt(2) As Double
-    faceMeas.GetCOG fastFacePt
-
-    sel.Clear
-
-    ' ── Compute fastener "into-body" axis direction ───────────────────────
-    ' The end face is assumed perpendicular to the cylinder axis (fastAxis).
-    ' Determine which way along fastAxis points from the end face into the
-    ' fastener body by checking where the cylinder COG (fastAxisPt) lies
-    ' relative to the end-face COG (fastFacePt).
-    Dim toBody(2) As Double
-    toBody(0) = fastAxisPt(0) - fastFacePt(0)
-    toBody(1) = fastAxisPt(1) - fastFacePt(1)
-    toBody(2) = fastAxisPt(2) - fastFacePt(2)
-    Dim dotBody As Double
-    dotBody = fastAxis(0) * toBody(0) _
-            + fastAxis(1) * toBody(1) _
-            + fastAxis(2) * toBody(2)
-
-    ' faBody: direction pointing from the end-face into the fastener body.
+    ' faBody: axis direction as returned by GetAxis on the circular edge.
+    ' Use the FlipForm button at runtime to reverse if needed.
     Dim faBody(2) As Double
-    If dotBody >= 0 Then
-        faBody(0) = fastAxis(0)
-        faBody(1) = fastAxis(1)
-        faBody(2) = fastAxis(2)
-    Else
-        faBody(0) = -fastAxis(0)
-        faBody(1) = -fastAxis(1)
-        faBody(2) = -fastAxis(2)
-    End If
+    fastEdgeMeas.GetAxis faBody
+
+    ' fastFacePt: anchor point on the fastener (circle centre).
+    Dim fastFacePt(2) As Double
+    fastEdgeMeas.GetCenter fastFacePt
+
+    sel.Clear
 
     ' ── DEBUG: fastener reference geometry ───────────────────────────────
     MsgBox "[DEBUG] 紧固件参考几何" & Chr(10) & _
-           "fastAxis  = (" & Round(fastAxis(0),4) & ", " & Round(fastAxis(1),4) & ", " & Round(fastAxis(2),4) & ")" & Chr(10) & _
-           "fastAxisPt= (" & Round(fastAxisPt(0),4) & ", " & Round(fastAxisPt(1),4) & ", " & Round(fastAxisPt(2),4) & ")" & Chr(10) & _
-           "fastFacePt= (" & Round(fastFacePt(0),4) & ", " & Round(fastFacePt(1),4) & ", " & Round(fastFacePt(2),4) & ")" & Chr(10) & _
-           "dotBody   = " & Round(dotBody,4) & Chr(10) & _
-           "faBody    = (" & Round(faBody(0),4) & ", " & Round(faBody(1),4) & ", " & Round(faBody(2),4) & ")", _
+           "faBody    = (" & Round(faBody(0),4) & ", " & Round(faBody(1),4) & ", " & Round(faBody(2),4) & ")" & Chr(10) & _
+           "fastFacePt= (" & Round(fastFacePt(0),4) & ", " & Round(fastFacePt(1),4) & ", " & Round(fastFacePt(2),4) & ")", _
            vbInformation, "快速装配紧固件 [DEBUG]"
 
     ' ── 3. Find and activate the target assembly document ────────────────
@@ -222,6 +191,11 @@ Public Sub CATMain()
            vbInformation, "快速装配紧固件 [DEBUG]"
 
     ' ── 5. Assembly loop ─────────────────────────────────────────────────
+    ' Show the non-blocking flip-direction panel.  The user can click
+    ' "翻转方向" at any time; it sets g_flipDir without interrupting selection.
+    g_flipDir = False
+    FlipForm.Show vbModeless
+
     Dim count As Long
     count = 0
 
@@ -262,9 +236,13 @@ Public Sub CATMain()
         targetPt(1) = holePt(1)
         targetPt(2) = holePt(2)
 
-        ' ta: hole axis direction as returned by GetAxis
+        ' ta: insertion direction, optionally flipped by FlipForm button
         Dim ta(2) As Double
-        ta(0) = holeAxis(0): ta(1) = holeAxis(1): ta(2) = holeAxis(2)
+        If g_flipDir Then
+            ta(0) = -holeAxis(0): ta(1) = -holeAxis(1): ta(2) = -holeAxis(2)
+        Else
+            ta(0) = holeAxis(0): ta(1) = holeAxis(1): ta(2) = holeAxis(2)
+        End If
 
         ' ── DEBUG: target point ───────────────────────────────────────────
         MsgBox "[DEBUG] 目标点（装配坐标）" & Chr(10) & _
@@ -373,9 +351,12 @@ Public Sub CATMain()
         newComp.Position.SetComponents posMatrix
 
         count = count + 1
-        CATIA.StatusBar = "已装配 " & count & " 个 " & fastenerPN & " -> " & targetPN
+        CATIA.StatusBar = "已装配 " & count & " 个 " & fastenerPN & " -> " & targetPN & _
+                          IIf(g_flipDir, "  [方向已翻转]", "")
         
     Loop
+
+    Unload FlipForm
 
     CATIA.StatusBar = "装配完成！共装配 " & count & " 个 " & fastenerPN
     MsgBox "装配完成！" & Chr(10) & _
@@ -526,3 +507,28 @@ Private Sub ComputeAbsoluteTransform(ByVal prod As Object, _
     On Error GoTo 0
 
 End Sub
+
+
+' ============================================================================
+' ── FlipForm UserForm code ──────────────────────────────────────────────────
+'
+' SETUP: In the VBA IDE, Insert > UserForm.  Set (Name) = "FlipForm" and
+'        Caption = "方向控制".  Add ONE CommandButton to the form:
+'          (Name)   = "btnFlip"
+'          Caption  = "翻转方向: 否"
+'          Width    = 160  Height = 36  (adjust to taste)
+' Then open the form's code module and paste the code below.
+' ============================================================================
+'
+' ---- Paste the following into FlipForm's code module (NOT this module) ----
+'
+'  Private Sub btnFlip_Click()
+'      g_flipDir = Not g_flipDir
+'      If g_flipDir Then
+'          btnFlip.Caption = "翻转方向: 是 ✓"
+'      Else
+'          btnFlip.Caption = "翻转方向: 否"
+'      End If
+'  End Sub
+'
+' ---------------------------------------------------------------------------
