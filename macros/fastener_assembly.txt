@@ -96,10 +96,6 @@ Public Sub CATMain()
     Dim faceMeas As Object
     Set faceMeas = spa.GetMeasurable(faceRef)
 
-    Dim fastFaceNorm As Variant
-    ReDim fastFaceNorm(2)
-    faceMeas.GetAxis fastFaceNorm
-
     Dim fastFacePt As Variant
     ReDim fastFacePt(2)
     faceMeas.GetCOG fastFacePt
@@ -107,24 +103,29 @@ Public Sub CATMain()
     sel.Clear
 
     ' ── Compute fastener "into-body" axis direction ───────────────────────
-    ' If the face normal is roughly aligned with the cylinder axis, the axis
-    ' points "outward" like the face normal.  The "into-body" direction is
-    ' opposite.
-    Dim dotFaFn As Double
-    dotFaFn = fastAxis(0) * fastFaceNorm(0) _
-            + fastAxis(1) * fastFaceNorm(1) _
-            + fastAxis(2) * fastFaceNorm(2)
+    ' The end face is assumed perpendicular to the cylinder axis (fastAxis).
+    ' Determine which way along fastAxis points from the end face into the
+    ' fastener body by checking where the cylinder COG (fastAxisPt) lies
+    ' relative to the end-face COG (fastFacePt).
+    Dim toBody(2) As Double
+    toBody(0) = fastAxisPt(0) - fastFacePt(0)
+    toBody(1) = fastAxisPt(1) - fastFacePt(1)
+    toBody(2) = fastAxisPt(2) - fastFacePt(2)
+    Dim dotBody As Double
+    dotBody = fastAxis(0) * toBody(0) _
+            + fastAxis(1) * toBody(1) _
+            + fastAxis(2) * toBody(2)
 
     ' faBody: direction pointing from the end-face into the fastener body.
     Dim faBody(2) As Double
-    If dotFaFn >= 0 Then
-        faBody(0) = -fastAxis(0)
-        faBody(1) = -fastAxis(1)
-        faBody(2) = -fastAxis(2)
-    Else
+    If dotBody >= 0 Then
         faBody(0) = fastAxis(0)
         faBody(1) = fastAxis(1)
         faBody(2) = fastAxis(2)
+    Else
+        faBody(0) = -fastAxis(0)
+        faBody(1) = -fastAxis(1)
+        faBody(2) = -fastAxis(2)
     End If
 
     ' ── 3. Prompt user to switch to the assembly ─────────────────────────
@@ -206,9 +207,6 @@ Public Sub CATMain()
         Dim planeMeas As Object
         Set planeMeas = spa.GetMeasurable(planeRef)
 
-        Dim planeNorm As Variant
-        ReDim planeNorm(2)
-        planeMeas.GetAxis planeNorm
         Dim planePt As Variant
         ReDim planePt(2)
         planeMeas.GetCOG planePt
@@ -216,20 +214,13 @@ Public Sub CATMain()
         sel.Clear
 
         ' ── Compute line-plane intersection (target point) ────────────────
-        Dim denom As Double
-        denom = holeAxis(0) * planeNorm(0) _
-              + holeAxis(1) * planeNorm(1) _
-              + holeAxis(2) * planeNorm(2)
-
-        If Abs(denom) < 0.0001 Then
-            MsgBox "孔轴线与压紧平面近似平行，无法计算交点。请重新选择。", _
-                   vbExclamation, "快速装配紧固件"
-        Else
-
+        ' The pressing plane is assumed perpendicular to the hole axis.
+        ' Project the plane COG onto the hole axis line through holeCOG to get
+        ' the parameter t; denom = holeAxis·holeAxis = 1 (unit vector).
         Dim tParam As Double
-        tParam = ((planePt(0) - holeCOG(0)) * planeNorm(0) _
-                + (planePt(1) - holeCOG(1)) * planeNorm(1) _
-                + (planePt(2) - holeCOG(2)) * planeNorm(2)) / denom
+        tParam = (planePt(0) - holeCOG(0)) * holeAxis(0) _
+               + (planePt(1) - holeCOG(1)) * holeAxis(1) _
+               + (planePt(2) - holeCOG(2)) * holeAxis(2)
 
         Dim targetPt(2) As Double
         targetPt(0) = holeCOG(0) + tParam * holeAxis(0)
@@ -237,30 +228,13 @@ Public Sub CATMain()
         targetPt(2) = holeCOG(2) + tParam * holeAxis(2)
 
         ' ── Determine target axis direction ───────────────────────────────
-        ' Points from the pressing-plane surface toward the hole interior.
-        Dim dx As Double, dy As Double, dz As Double, dist As Double
-        dx = holeCOG(0) - targetPt(0)
-        dy = holeCOG(1) - targetPt(1)
-        dz = holeCOG(2) - targetPt(2)
-        dist = Sqr(dx * dx + dy * dy + dz * dz)
-
+        ' holeCOG - targetPt = -tParam * holeAxis, so sign(-tParam) gives
+        ' the direction from the pressing-plane toward the hole interior.
         Dim ta(2) As Double
-        If dist > 0.001 Then
-            ta(0) = dx / dist
-            ta(1) = dy / dist
-            ta(2) = dz / dist
+        If tParam >= 0 Then
+            ta(0) = -holeAxis(0): ta(1) = -holeAxis(1): ta(2) = -holeAxis(2)
         Else
-            ' holeCOG lies on the plane; fall back to hole-axis direction
-            ' pointing away from the plane normal.
-            Dim dotHaPn As Double
-            dotHaPn = holeAxis(0) * planeNorm(0) _
-                    + holeAxis(1) * planeNorm(1) _
-                    + holeAxis(2) * planeNorm(2)
-            If dotHaPn > 0 Then
-                ta(0) = -holeAxis(0): ta(1) = -holeAxis(1): ta(2) = -holeAxis(2)
-            Else
-                ta(0) = holeAxis(0): ta(1) = holeAxis(1): ta(2) = holeAxis(2)
-            End If
+            ta(0) = holeAxis(0): ta(1) = holeAxis(1): ta(2) = holeAxis(2)
         End If
 
         ' ── Compute rotation matrix  R : faBody -> ta ─────────────────────
@@ -359,7 +333,6 @@ Public Sub CATMain()
         count = count + 1
         CATIA.StatusBar = "已装配 " & count & " 个 " & fastenerPN & " -> " & targetPN
 
-        End If  ' Abs(denom) >= 0.0001
     Loop
 
     CATIA.StatusBar = "装配完成！共装配 " & count & " 个 " & fastenerPN
