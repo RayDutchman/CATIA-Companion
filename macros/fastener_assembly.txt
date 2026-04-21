@@ -71,10 +71,12 @@ Public Sub CATMain()
     Dim cylMeas As Object
     Set cylMeas = spa.GetMeasurable(cylRef)
 
-    Dim fastAxis(2) As Double
+    Dim fastAxis As Variant
+    ReDim fastAxis(2)
     cylMeas.GetAxis fastAxis
 
-    Dim fastAxisPt(2) As Double
+    Dim fastAxisPt As Variant
+    ReDim fastAxisPt(2)
     cylMeas.GetCOG fastAxisPt
 
     sel.Clear
@@ -94,7 +96,8 @@ Public Sub CATMain()
     Dim faceMeas As Object
     Set faceMeas = spa.GetMeasurable(faceRef)
 
-    Dim fastFacePlane(5) As Double
+    Dim fastFacePlane As Variant
+    ReDim fastFacePlane(5)
     faceMeas.GetPlane fastFacePlane
     Dim fastFaceNorm(2) As Double
     fastFaceNorm(0) = fastFacePlane(0)
@@ -186,9 +189,11 @@ Public Sub CATMain()
         Dim holeMeas As Object
         Set holeMeas = spa.GetMeasurable(holeRef)
 
-        Dim holeAxis(2) As Double
+        Dim holeAxis As Variant
+        ReDim holeAxis(2)
         holeMeas.GetAxis holeAxis
-        Dim holeCOG(2) As Double
+        Dim holeCOG As Variant
+        ReDim holeCOG(2)
         holeMeas.GetCOG holeCOG
 
         sel.Clear
@@ -206,7 +211,8 @@ Public Sub CATMain()
         Dim planeMeas As Object
         Set planeMeas = spa.GetMeasurable(planeRef)
 
-        Dim planePlaneArr(5) As Double
+        Dim planePlaneArr As Variant
+        ReDim planePlaneArr(5)
         planeMeas.GetPlane planePlaneArr
         Dim planeNorm(2) As Double
         planeNorm(0) = planePlaneArr(0)
@@ -343,7 +349,8 @@ Public Sub CATMain()
         '   3-5  = local Y axis in parent coords
         '   6-8  = local Z axis in parent coords
         '   9-11 = origin in parent coords
-        Dim posMatrix(11) As Double
+        Dim posMatrix As Variant
+        ReDim posMatrix(11)
         posMatrix(0)  = localR(0, 0)
         posMatrix(1)  = localR(1, 0)
         posMatrix(2)  = localR(2, 0)
@@ -456,7 +463,8 @@ Private Sub ComputeAbsoluteTransform(ByVal prod As Object, _
         End If
 
         ' Read position of current relative to its parent
-        Dim pos(11) As Double
+        Dim pos As Variant
+        ReDim pos(11)
         current.Position.GetComponents pos
         If Err.Number <> 0 Then
             Err.Clear
