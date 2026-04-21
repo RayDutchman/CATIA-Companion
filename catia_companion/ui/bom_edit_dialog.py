@@ -134,7 +134,7 @@ class _BomTreeWidget(QTreeWidget):
         # 如果该层的祖先节点下方还有兄弟节点（has_next[d] 为 True），
         # 则在该层对应的 x 列绘制一条贯穿整行高度的竖线（表示该分支尚未结束）。
         for d in range(depth - 1):
-            if has_next[d]:  # 该祖先层仍有后续兄弟节点，需要绘制连续竖线。
+            if has_next[d + 1]:  # 该祖先层仍有后续兄弟节点，需要绘制连续竖线。
                 x = rect.left() + d * indent + indent // 2  # 计算该祖先层连接线的 x 坐标（列中心）。
                 painter.drawLine(x, rect.top(), x, rect.bottom())  # 绘制贯通整行的竖线。
 
