@@ -117,6 +117,9 @@ class _BomTreeWidget(QTreeWidget):
 
         pen = QPen(self._LINE_COLOR, 1, Qt.PenStyle.SolidLine)
         pen.setDashPattern([1.0, 1.0])   # 1 px on, 1 px off dotted style
+        # Phase-align dots to absolute viewport y so vertical guides are
+        # continuous across consecutive rows (same phase in every row).
+        pen.setDashOffset(rect.top() % 2)
 
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
@@ -129,14 +132,17 @@ class _BomTreeWidget(QTreeWidget):
                 x = rect.left() + d * indent + indent // 2
                 painter.drawLine(x, rect.top(), x, rect.bottom())
 
-        # For the direct-parent segment draw a T-connector (full-height vertical)
-        # when the current item has more siblings, or just a horizontal arm when
-        # it is the last child (no vertical line in the parent column).
+        # For the direct-parent segment draw:
+        #   T-connector (├─): current item has more siblings → full-height vertical + arm
+        #   L-connector (└─): current item is last child   → half-height vertical (corner)
+        #                                                     from row top to mid, then arm
         x     = rect.left() + (depth - 1) * indent + indent // 2
         x_end = rect.left() + depth * indent
         if has_next[-1]:
-            painter.drawLine(x, rect.top(), x, rect.bottom())
-        painter.drawLine(x + 1, mid_y, x_end, mid_y)
+            painter.drawLine(x, rect.top(), x, rect.bottom())  # full vertical (T)
+        else:
+            painter.drawLine(x, rect.top(), x, mid_y)          # half vertical (L corner)
+        painter.drawLine(x, mid_y, x_end, mid_y)               # horizontal arm
 
         painter.restore()
 
@@ -430,7 +436,7 @@ class BomEditDialog(QDialog):
         layout.addWidget(display_group)
 
         hint = QLabel(
-            "类型 / 数量 为结构属性，不可编辑，"
+            "层级 / 类型 / 数量 为结构属性，不可编辑，"
             "零件编号可编辑但不能与其他行冲突，"
             "文件名/路径可编辑。"
         )
@@ -621,13 +627,12 @@ class BomEditDialog(QDialog):
         base = list(BOM_EDIT_COLUMN_ORDER)
         if not self._show_filename_col:
             base = [c for c in base if c != "Filename"]
-        # "Level" is always hidden: tree indentation already conveys depth, just like
-        # Windows Regedit.  In summary mode Type is also hidden unless assemblies are
-        # included in the summary.
-        cols_to_hide = {"Level"}
-        if self._summarize and not self._summary_include_assemblies:
-            cols_to_hide.add("Type")
-        base = [c for c in base if c not in cols_to_hide]
+        if self._summarize:
+            # In summary mode Level has no meaning; also hide Type unless assemblies shown
+            cols_to_hide = {"Level"}
+            if not self._summary_include_assemblies:
+                cols_to_hide.add("Type")
+            base = [c for c in base if c not in cols_to_hide]
         visible_preset = [
             c for c in PRESET_USER_REF_PROPERTIES if c in self._visible_preset_cols
         ]
