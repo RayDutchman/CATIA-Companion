@@ -128,6 +128,15 @@ Public Sub CATMain()
         faBody(2) = -fastAxis(2)
     End If
 
+    ' ── DEBUG: fastener reference geometry ───────────────────────────────
+    MsgBox "[DEBUG] 紧固件参考几何" & Chr(10) & _
+           "fastAxis  = (" & Round(fastAxis(0),4) & ", " & Round(fastAxis(1),4) & ", " & Round(fastAxis(2),4) & ")" & Chr(10) & _
+           "fastAxisPt= (" & Round(fastAxisPt(0),4) & ", " & Round(fastAxisPt(1),4) & ", " & Round(fastAxisPt(2),4) & ")" & Chr(10) & _
+           "fastFacePt= (" & Round(fastFacePt(0),4) & ", " & Round(fastFacePt(1),4) & ", " & Round(fastFacePt(2),4) & ")" & Chr(10) & _
+           "dotBody   = " & Round(dotBody,4) & Chr(10) & _
+           "faBody    = (" & Round(faBody(0),4) & ", " & Round(faBody(1),4) & ", " & Round(faBody(2),4) & ")", _
+           vbInformation, "快速装配紧固件 [DEBUG]"
+
     ' ── 3. Find and activate the target assembly document ────────────────
     ' Enumerate all open ProductDocuments so the user never needs to switch
     ' documents manually (switching during SelectElement2 cancels the prompt).
@@ -206,6 +215,14 @@ Public Sub CATMain()
     Dim absT(2) As Double
     Call ComputeAbsoluteTransform(targetProduct, absR, absT)
 
+    ' ── DEBUG: absolute transform of target product ───────────────────────
+    MsgBox "[DEBUG] 目标产品绝对变换 (absR / absT)" & Chr(10) & _
+           "absR row0 = (" & Round(absR(0,0),4) & ", " & Round(absR(0,1),4) & ", " & Round(absR(0,2),4) & ")" & Chr(10) & _
+           "absR row1 = (" & Round(absR(1,0),4) & ", " & Round(absR(1,1),4) & ", " & Round(absR(1,2),4) & ")" & Chr(10) & _
+           "absR row2 = (" & Round(absR(2,0),4) & ", " & Round(absR(2,1),4) & ", " & Round(absR(2,2),4) & ")" & Chr(10) & _
+           "absT      = (" & Round(absT(0),4) & ", " & Round(absT(1),4) & ", " & Round(absT(2),4) & ")", _
+           vbInformation, "快速装配紧固件 [DEBUG]"
+
     ' ── 5. Assembly loop ─────────────────────────────────────────────────
     Dim count As Long
     count = 0
@@ -238,6 +255,12 @@ Public Sub CATMain()
 
         sel.Clear
 
+        ' ── DEBUG: hole geometry (assembly coords) ───────────────────────
+        MsgBox "[DEBUG] 孔的几何（装配坐标）" & Chr(10) & _
+               "holeAxis = (" & Round(holeAxis(0),4) & ", " & Round(holeAxis(1),4) & ", " & Round(holeAxis(2),4) & ")" & Chr(10) & _
+               "holeCOG  = (" & Round(holeCOG(0),4) & ", " & Round(holeCOG(1),4) & ", " & Round(holeCOG(2),4) & ")", _
+               vbInformation, "快速装配紧固件 [DEBUG]"
+
         ' 5b. Select pressing plane
         Dim planeFilter As Variant
         planeFilter = Array("PlanarFace")
@@ -256,6 +279,9 @@ Public Sub CATMain()
         planeMeas.GetCOG planePt
 
         sel.Clear
+
+        ' ── DEBUG: plane COG and computed target point ───────────────────
+        ' (tParam and targetPt computed below, show after)
 
         ' ── Compute line-plane intersection (target point) ────────────────
         ' The pressing plane is assumed perpendicular to the hole axis.
@@ -280,6 +306,14 @@ Public Sub CATMain()
         Else
             ta(0) = holeAxis(0): ta(1) = holeAxis(1): ta(2) = holeAxis(2)
         End If
+
+        ' ── DEBUG: plane/target point computation ────────────────────────
+        MsgBox "[DEBUG] 目标点计算（装配坐标）" & Chr(10) & _
+               "planePt  = (" & Round(planePt(0),4) & ", " & Round(planePt(1),4) & ", " & Round(planePt(2),4) & ")" & Chr(10) & _
+               "tParam   = " & Round(tParam,4) & Chr(10) & _
+               "targetPt = (" & Round(targetPt(0),4) & ", " & Round(targetPt(1),4) & ", " & Round(targetPt(2),4) & ")" & Chr(10) & _
+               "ta (目标轴向) = (" & Round(ta(0),4) & ", " & Round(ta(1),4) & ", " & Round(ta(2),4) & ")", _
+               vbInformation, "快速装配紧固件 [DEBUG]"
 
         ' ── Compute rotation matrix  R : faBody -> ta ─────────────────────
         ' Build orthonormal frame F1 from faBody
@@ -371,6 +405,14 @@ Public Sub CATMain()
         posMatrix(9)  = localT(0)
         posMatrix(10) = localT(1)
         posMatrix(11) = localT(2)
+
+        ' ── DEBUG: final local matrix sent to SetComponents ──────────────
+        MsgBox "[DEBUG] 最终定位矩阵（相对父产品坐标）" & Chr(10) & _
+               "localR X轴 = (" & Round(localR(0,0),4) & ", " & Round(localR(1,0),4) & ", " & Round(localR(2,0),4) & ")" & Chr(10) & _
+               "localR Y轴 = (" & Round(localR(0,1),4) & ", " & Round(localR(1,1),4) & ", " & Round(localR(2,1),4) & ")" & Chr(10) & _
+               "localR Z轴 = (" & Round(localR(0,2),4) & ", " & Round(localR(1,2),4) & ", " & Round(localR(2,2),4) & ")" & Chr(10) & _
+               "localT 原点= (" & Round(localT(0),4) & ", " & Round(localT(1),4) & ", " & Round(localT(2),4) & ")", _
+               vbInformation, "快速装配紧固件 [DEBUG]"
 
         newComp.Position.SetComponents posMatrix
 
