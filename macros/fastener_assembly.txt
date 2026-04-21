@@ -71,12 +71,10 @@ Public Sub CATMain()
     Dim cylMeas As Object
     Set cylMeas = spa.GetMeasurable(cylRef)
 
-    Dim fastAxis As Variant
-    ReDim fastAxis(2)
+    Dim fastAxis(2) As Double
     cylMeas.GetAxis fastAxis
 
-    Dim fastAxisPt As Variant
-    ReDim fastAxisPt(2)
+    Dim fastAxisPt(2) As Double
     cylMeas.GetCOG fastAxisPt
 
     sel.Clear
@@ -96,8 +94,7 @@ Public Sub CATMain()
     Dim faceMeas As Object
     Set faceMeas = spa.GetMeasurable(faceRef)
 
-    Dim fastFacePt As Variant
-    ReDim fastFacePt(2)
+    Dim fastFacePt(2) As Double
     faceMeas.GetCOG fastFacePt
 
     sel.Clear
@@ -245,12 +242,9 @@ Public Sub CATMain()
         Dim holeMeas As Object
         Set holeMeas = spa.GetMeasurable(holeRef)
 
-        Dim holeAxis As Variant
-        ReDim holeAxis(2)
+        Dim holeAxis(2) As Double
         holeMeas.GetAxis holeAxis
-        Dim holeCOG As Variant
-        ReDim holeCOG(2)
-
+        Dim holeCOG(2) As Double
         holeMeas.GetCOG holeCOG
 
         sel.Clear
@@ -274,8 +268,7 @@ Public Sub CATMain()
         Dim planeMeas As Object
         Set planeMeas = spa.GetMeasurable(planeRef)
 
-        Dim planePt As Variant
-        ReDim planePt(2)
+        Dim planePt(2) As Double
         planeMeas.GetCOG planePt
 
         sel.Clear
@@ -391,8 +384,7 @@ Public Sub CATMain()
         '   3-5  = local Y axis in parent coords
         '   6-8  = local Z axis in parent coords
         '   9-11 = origin in parent coords
-        Dim posMatrix As Variant
-        ReDim posMatrix(11)
+        Dim posMatrix(11) As Double
         posMatrix(0)  = localR(0, 0)
         posMatrix(1)  = localR(1, 0)
         posMatrix(2)  = localR(2, 0)
@@ -518,8 +510,7 @@ Private Sub ComputeAbsoluteTransform(ByVal prod As Object, _
         End If
 
         ' Read position of current relative to its parent
-        Dim pos As Variant
-        ReDim pos(11)
+        Dim pos(11) As Double
         current.Position.GetComponents pos
         If Err.Number <> 0 Then
             Err.Clear
