@@ -54,7 +54,7 @@ Public Sub CATMain()
 
     ' 2a. Select cylindrical face for axis
     Dim cylFilter As Variant
-    cylFilter = Array("CylindricalFace")
+    cylFilter = Array("CylindricalFace" , "RectilinearTriDimFeatEdge" , "Line")' , "ConicalFace")
     Dim status As String
     status = sel.SelectElement2(cylFilter, _
         "请选择紧固件的圆柱面（用于确定轴线方向）", False)
@@ -216,7 +216,7 @@ Public Sub CATMain()
         sel.Clear
 
         Dim holeFilter As Variant
-        holeFilter = Array("CylindricalFace", "RectilinearTriDimFeatEdge", "ConicalFace")
+        holeFilter = Array("CylindricalFace", "RectilinearTriDimFeatEdge" , "Line")' , "ConicalFace"
         status = sel.SelectElement2(holeFilter, _
             "选择孔的圆柱面 (" & fastenerPN & " -> " & targetPN & _
             "  已装配:" & count & ")  [ESC终止]", False)
@@ -230,26 +230,13 @@ Public Sub CATMain()
 
         Dim holeAxis As Variant
         ReDim holeAxis(2)
+        holeMeas.GetAxis holeAxis
         Dim holeCOG As Variant
         ReDim holeCOG(2)
 
-        ' GetAxis is not supported on ConicalFace (error 80004005); catch it.
-        Dim bAxisOk As Boolean
-        bAxisOk = False
-        On Error Resume Next
-        Err.Clear
-        holeMeas.GetAxis holeAxis
-        If Err.Number = 0 Then bAxisOk = True Else Err.Clear
-        On Error GoTo 0
         holeMeas.GetCOG holeCOG
 
         sel.Clear
-
-        If Not bAxisOk Then
-            MsgBox "所选面不支持轴向测量（圆锥面不支持 GetAxis）。" & Chr(10) & _
-                   "请改为选择孔的圆柱侧面（CylindricalFace）。", _
-                   vbExclamation, "快速装配紧固件"
-        Else
 
         ' 5b. Select pressing plane
         Dim planeFilter As Variant
@@ -389,8 +376,7 @@ Public Sub CATMain()
 
         count = count + 1
         CATIA.StatusBar = "已装配 " & count & " 个 " & fastenerPN & " -> " & targetPN
-
-        End If  ' bAxisOk
+        
     Loop
 
     CATIA.StatusBar = "装配完成！共装配 " & count & " 个 " & fastenerPN
