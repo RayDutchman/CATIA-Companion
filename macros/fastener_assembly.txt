@@ -96,18 +96,13 @@ Public Sub CATMain()
     Dim faceMeas As Object
     Set faceMeas = spa.GetMeasurable(faceRef)
 
-    Dim fastFacePlane As Variant
-    ReDim fastFacePlane(5)
-    faceMeas.GetPlane fastFacePlane
-    Dim fastFaceNorm(2) As Double
-    fastFaceNorm(0) = fastFacePlane(0)
-    fastFaceNorm(1) = fastFacePlane(1)
-    fastFaceNorm(2) = fastFacePlane(2)
+    Dim fastFaceNorm As Variant
+    ReDim fastFaceNorm(2)
+    faceMeas.GetAxis fastFaceNorm
 
-    Dim fastFacePt(2) As Double
-    fastFacePt(0) = fastFacePlane(3)
-    fastFacePt(1) = fastFacePlane(4)
-    fastFacePt(2) = fastFacePlane(5)
+    Dim fastFacePt As Variant
+    ReDim fastFacePt(2)
+    faceMeas.GetCOG fastFacePt
 
     sel.Clear
 
@@ -211,17 +206,12 @@ Public Sub CATMain()
         Dim planeMeas As Object
         Set planeMeas = spa.GetMeasurable(planeRef)
 
-        Dim planePlaneArr As Variant
-        ReDim planePlaneArr(5)
-        planeMeas.GetPlane planePlaneArr
-        Dim planeNorm(2) As Double
-        planeNorm(0) = planePlaneArr(0)
-        planeNorm(1) = planePlaneArr(1)
-        planeNorm(2) = planePlaneArr(2)
-        Dim planePt(2) As Double
-        planePt(0) = planePlaneArr(3)
-        planePt(1) = planePlaneArr(4)
-        planePt(2) = planePlaneArr(5)
+        Dim planeNorm As Variant
+        ReDim planeNorm(2)
+        planeMeas.GetAxis planeNorm
+        Dim planePt As Variant
+        ReDim planePt(2)
+        planeMeas.GetCOG planePt
 
         sel.Clear
 
