@@ -128,22 +128,18 @@ Public Sub CATMain()
         faBody(2) = -fastAxis(2)
     End If
 
-    ' ── 3. Prompt user to switch to the assembly ─────────────────────────
-    MsgBox "紧固件参考几何已记录。" & Chr(10) & _
-           "紧固件零件编号：" & fastenerPN & Chr(10) & Chr(10) & _
-           "请执行以下操作：" & Chr(10) & _
-           "1. 切换到要装配的 CATProduct" & Chr(10) & _
-           "2. 点击确定继续", _
-           vbInformation, "快速装配紧固件"
-
-    ' ── 4. User selects the target product in the assembly tree ──────────
+    ' ── 3. User switches to the assembly and selects the target product ──
+    ' Note: SelectElement2 suspends only the VBA thread; CATIA's UI remains
+    ' interactive, so the user can switch to another open document window
+    ' before clicking on a product in the tree.
     Set sel = CATIA.ActiveDocument.Selection
     sel.Clear
 
     Dim prodFilter As Variant
     prodFilter = Array("Product")
     status = sel.SelectElement2(prodFilter, _
-        "请在产品结构树中选择紧固件要装入的产品或部件", False)
+        "紧固件几何已记录（" & fastenerPN & "）。" & _
+        "请切换到装配体文档，再在产品结构树中选择要装入的产品或部件", False)
     If status <> "Normal" Then
         MsgBox "已取消选择。", vbInformation, "快速装配紧固件"
         Exit Sub
