@@ -72,7 +72,7 @@ Sub CATMain(iParameters)
     Set cylMeas = spa.GetMeasurable(cylRef)
 
     Dim fastAxis(2)
-    cylMeas.GetDirection fastAxis
+    cylMeas.GetAxis fastAxis
 
     Dim fastAxisPt(2)
     cylMeas.GetCOG fastAxisPt
@@ -181,7 +181,7 @@ Sub CATMain(iParameters)
         Set holeMeas = spa.GetMeasurable(holeRef)
 
         Dim holeAxis(2)
-        holeMeas.GetDirection holeAxis
+        holeMeas.GetAxis holeAxis
         Dim holeCOG(2)
         holeMeas.GetCOG holeCOG
 
@@ -216,8 +216,7 @@ Sub CATMain(iParameters)
         If Abs(denom) < 0.0001 Then
             MsgBox "孔轴线与压紧平面近似平行，无法计算交点。请重新选择。", _
                    vbExclamation, "快速装配紧固件"
-            GoTo ContinueLoop
-        End If
+        Else
 
         Dim tParam
         tParam = ((planePt(0) - holeCOG(0)) * planeNorm(0) _
@@ -355,7 +354,7 @@ Sub CATMain(iParameters)
         count = count + 1
         CATIA.StatusBar = "已装配 " & count & " 个 " & fastenerPN & " -> " & targetPN
 
-ContinueLoop:
+        End If  ' Abs(denom) >= 0.0001
     Loop
 
     CATIA.StatusBar = "装配完成！共装配 " & count & " 个 " & fastenerPN
