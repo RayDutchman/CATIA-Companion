@@ -430,7 +430,7 @@ class BomEditDialog(QDialog):
         layout.addWidget(display_group)
 
         hint = QLabel(
-            "层级 / 类型 / 数量 为结构属性，不可编辑，"
+            "类型 / 数量 为结构属性，不可编辑，"
             "零件编号可编辑但不能与其他行冲突，"
             "文件名/路径可编辑。"
         )
@@ -621,12 +621,13 @@ class BomEditDialog(QDialog):
         base = list(BOM_EDIT_COLUMN_ORDER)
         if not self._show_filename_col:
             base = [c for c in base if c != "Filename"]
-        if self._summarize:
-            # In summary mode Level has no meaning; also hide Type unless assemblies shown
-            cols_to_hide = {"Level"}
-            if not self._summary_include_assemblies:
-                cols_to_hide.add("Type")
-            base = [c for c in base if c not in cols_to_hide]
+        # "Level" is always hidden: tree indentation already conveys depth, just like
+        # Windows Regedit.  In summary mode Type is also hidden unless assemblies are
+        # included in the summary.
+        cols_to_hide = {"Level"}
+        if self._summarize and not self._summary_include_assemblies:
+            cols_to_hide.add("Type")
+        base = [c for c in base if c not in cols_to_hide]
         visible_preset = [
             c for c in PRESET_USER_REF_PROPERTIES if c in self._visible_preset_cols
         ]
