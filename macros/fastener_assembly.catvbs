@@ -129,18 +129,65 @@ Sub CATMain(iParameters)
         faBody(2) = fastAxis(2)
     End If
 
-    ' ── 3. User switches to the assembly and selects the target product ──
-    ' Note: SelectElement2 suspends only the VBScript thread; CATIA's UI
-    ' remains interactive, so the user can switch to another open document
-    ' window before clicking on a product in the tree.
-    Set sel = CATIA.ActiveDocument.Selection
+    ' ── 3. Find and activate the target assembly document ────────────────
+    ' Enumerate all open ProductDocuments so the user never needs to switch
+    ' documents manually (switching during SelectElement2 cancels the prompt).
+    Dim assemblyDoc
+    Dim aIdx, aCount, aNames
+    aCount = 0: aNames = ""
+    For aIdx = 1 To CATIA.Documents.Count
+        If TypeName(CATIA.Documents.Item(aIdx)) = "ProductDocument" Then
+            aCount = aCount + 1
+            aNames = aNames & aCount & ". " & CATIA.Documents.Item(aIdx).Name & Chr(10)
+            Set assemblyDoc = CATIA.Documents.Item(aIdx)
+        End If
+    Next aIdx
+
+    If aCount = 0 Then
+        MsgBox "未找到任何已打开的 CATProduct 装配体文档。" & Chr(10) & _
+               "请先打开装配体，再运行本宏。", vbCritical, "快速装配紧固件"
+        Exit Sub
+    ElseIf aCount > 1 Then
+        Dim aChoice
+        aChoice = InputBox("检测到多个装配体文档，请输入目标装配体的编号：" & _
+                           Chr(10) & Chr(10) & aNames, "快速装配紧固件", "1")
+        If aChoice = "" Then
+            MsgBox "已取消。", vbInformation, "快速装配紧固件"
+            Exit Sub
+        End If
+        If Not IsNumeric(aChoice) Then
+            MsgBox "输入无效，请重新运行宏。", vbExclamation, "快速装配紧固件"
+            Exit Sub
+        End If
+        Dim pickN
+        pickN = CInt(aChoice)
+        If pickN < 1 Or pickN > aCount Then
+            MsgBox "编号超出范围，请重新运行宏。", vbExclamation, "快速装配紧固件"
+            Exit Sub
+        End If
+        Dim bIdx, bCnt
+        bCnt = 0
+        For bIdx = 1 To CATIA.Documents.Count
+            If TypeName(CATIA.Documents.Item(bIdx)) = "ProductDocument" Then
+                bCnt = bCnt + 1
+                If bCnt = pickN Then
+                    Set assemblyDoc = CATIA.Documents.Item(bIdx)
+                    Exit For
+                End If
+            End If
+        Next bIdx
+    End If
+
+    assemblyDoc.Activate
+
+    ' ── 4. User selects the target product in the assembly tree ──────────
+    Set sel = assemblyDoc.Selection
     sel.Clear
 
     Dim prodFilter
     prodFilter = Array("Product")
     status = sel.SelectElement2(prodFilter, _
-        "紧固件几何已记录（" & fastenerPN & "）。" & _
-        "请切换到装配体文档，再在产品结构树中选择要装入的产品或部件", False)
+        "请在产品结构树中选择紧固件要装入的产品或部件", False)
     If status <> "Normal" Then
         MsgBox "已取消选择。", vbInformation, "快速装配紧固件"
         Exit Sub
