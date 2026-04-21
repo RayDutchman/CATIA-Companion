@@ -230,11 +230,25 @@ Sub CATMain(iParameters)
         Set holeMeas = spa.GetMeasurable(holeRef)
 
         Dim holeAxis(2)
-        holeMeas.GetAxis holeAxis
         Dim holeCOG(2)
+
+        ' GetAxis is not supported on ConicalFace (error 80004005); catch it.
+        Dim bAxisOk
+        bAxisOk = False
+        On Error Resume Next
+        Err.Clear
+        holeMeas.GetAxis holeAxis
+        If Err.Number = 0 Then bAxisOk = True Else Err.Clear
+        On Error GoTo 0
         holeMeas.GetCOG holeCOG
 
         sel.Clear
+
+        If Not bAxisOk Then
+            MsgBox "所选面不支持轴向测量（圆锥面不支持 GetAxis）。" & Chr(10) & _
+                   "请改为选择孔的圆柱侧面（CylindricalFace）。", _
+                   vbExclamation, "快速装配紧固件"
+        Else
 
         ' 5b. Select pressing plane
         Dim planeFilter
@@ -410,6 +424,7 @@ Sub CATMain(iParameters)
         CATIA.StatusBar = "已装配 " & count & " 个 " & fastenerPN & " -> " & targetPN
 
         End If  ' Abs(denom) >= 0.0001
+        End If  ' bAxisOk
     Loop
 
     CATIA.StatusBar = "装配完成！共装配 " & count & " 个 " & fastenerPN
@@ -438,6 +453,12 @@ Sub BuildFrame(inZ, outX, outY)
     outX(2) = inZ(0) * refV(1) - inZ(1) * refV(0)
     Dim xLen
     xLen = Sqr(outX(0) * outX(0) + outX(1) * outX(1) + outX(2) * outX(2))
+    If xLen < 0.000000000001 Then
+        ' inZ was a zero vector; return a safe default frame to avoid crash
+        outX(0) = 1: outX(1) = 0: outX(2) = 0
+        outY(0) = 0: outY(1) = 1: outY(2) = 0
+        Exit Sub
+    End If
     outX(0) = outX(0) / xLen
     outX(1) = outX(1) / xLen
     outX(2) = outX(2) / xLen
