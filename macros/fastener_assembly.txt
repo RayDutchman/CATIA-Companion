@@ -53,8 +53,8 @@ Public Sub CATMain()
     sel.Clear
 
     ' 2a. Select cylindrical face for axis
-    Dim cylFilter(0) As String
-    cylFilter(0) = "CylindricalFace"
+    Dim cylFilter As Variant
+    cylFilter = Array("CylindricalFace")
     Dim status As String
     status = sel.SelectElement2(cylFilter, _
         "请选择紧固件的圆柱面（用于确定轴线方向）", False)
@@ -80,8 +80,8 @@ Public Sub CATMain()
     sel.Clear
 
     ' 2b. Select end face (planar face on the fastener head)
-    Dim faceFilter(0) As String
-    faceFilter(0) = "PlanarFace"
+    Dim faceFilter As Variant
+    faceFilter = Array("PlanarFace")
     status = sel.SelectElement2(faceFilter, _
         "请选择紧固件的端面（头部压紧面）", False)
     If status <> "Normal" Then
@@ -141,8 +141,8 @@ Public Sub CATMain()
     Set sel = CATIA.ActiveDocument.Selection
     sel.Clear
 
-    Dim prodFilter(0) As String
-    prodFilter(0) = "Product"
+    Dim prodFilter As Variant
+    prodFilter = Array("Product")
     status = sel.SelectElement2(prodFilter, _
         "请在产品结构树中选择紧固件要装入的产品或部件", False)
     If status <> "Normal" Then
@@ -173,10 +173,8 @@ Public Sub CATMain()
         Set sel = CATIA.ActiveDocument.Selection
         sel.Clear
 
-        Dim holeFilter(2) As String
-        holeFilter(0) = "CylindricalFace"
-        holeFilter(1) = "RectilinearTriDimFeatEdge"
-        holeFilter(2) = "ConicalFace"
+        Dim holeFilter As Variant
+        holeFilter = Array("CylindricalFace", "RectilinearTriDimFeatEdge", "ConicalFace")
         status = sel.SelectElement2(holeFilter, _
             "选择孔的圆柱面 (" & fastenerPN & " -> " & targetPN & _
             "  已装配:" & count & ")  [ESC终止]", False)
@@ -196,8 +194,8 @@ Public Sub CATMain()
         sel.Clear
 
         ' 5b. Select pressing plane
-        Dim planeFilter(0) As String
-        planeFilter(0) = "PlanarFace"
+        Dim planeFilter As Variant
+        planeFilter = Array("PlanarFace")
         status = sel.SelectElement2(planeFilter, _
             "选择被压紧平面 (" & fastenerPN & " -> " & targetPN & _
             "  已装配:" & count & ")  [ESC终止]", False)
@@ -331,8 +329,8 @@ Public Sub CATMain()
         Dim products As Object
         Set products = targetProduct.Products
 
-        Dim pathArray(0) As String
-        pathArray(0) = fastenerPath
+        Dim pathArray As Variant
+        pathArray = Array(fastenerPath)
         products.AddComponentsFromFiles pathArray, "All"
 
         ' The newly added instance is the last item
