@@ -1,0 +1,138 @@
+Option Explicit
+' fastener_assembly
+'
+' 快速装配紧固件宏
+'
+' 流程：
+'   1. 用户在当前装配体中点击紧固件的圆柱面
+'   2. 用户切换到任意装配体窗口，点击目标产品或部件
+'      （使用 SelectElement2 交互选取，替代原有的遍历文档 + InputBox 输入编号方式）
+'   3. 用户在目标产品中点击安装孔的圆柱面
+'   4. 宏在顶层装配体中自动添加同轴约束，完成紧固件定位
+'
+' 前提条件：
+'   - CATIA 已打开包含紧固件的 CATProduct，并将其设为活动文档
+'   - 紧固件及目标安装孔的圆柱面在 3D 视图或产品树中均可点选
+' ----------------------------------------------------------------------------
+
+Sub CATMain()
+
+    '--- 1. 验证当前活动文档为装配体 ---
+    If TypeName(CATIA.ActiveDocument) <> "ProductDocument" Then
+        MsgBox "请先激活包含紧固件的 CATProduct 装配体文档！", vbExclamation, "快速装配紧固件"
+        Exit Sub
+    End If
+
+    Dim oAsmDoc
+    Set oAsmDoc = CATIA.ActiveDocument
+
+    Dim oSel
+    Set oSel = oAsmDoc.Selection
+    oSel.Clear
+
+    '--- 2. 步骤 1/3：选取紧固件圆柱面 ---
+    Dim fastenerFilters(0)
+    fastenerFilters(0) = "CylindricalFace"
+
+    Dim selStatus
+    selStatus = oSel.SelectElement2(fastenerFilters, _
+        "步骤 1/3：请点击紧固件上的圆柱面", False)
+
+    If selStatus = "Cancel" Or selStatus = "Undo" Then
+        MsgBox "已取消操作。", vbInformation, "快速装配紧固件"
+        Exit Sub
+    End If
+
+    If oSel.Count = 0 Then
+        MsgBox "未选中任何圆柱面，请重新运行并选取紧固件圆柱面。", vbExclamation, "快速装配紧固件"
+        Exit Sub
+    End If
+
+    '--- 保存紧固件圆柱面的装配体上下文引用，供后续添加约束使用 ---
+    Dim oFastenerRef
+    Set oFastenerRef = oSel.Item(1).Reference
+
+    ' -------------------------------------------------------------------------
+    '--- 3. 步骤 2/3：交互式选取目标产品或部件 ---
+    '
+    '   SelectElement2 会阻塞宏并等待用户点击，期间用户可自由切换 CATIA 窗口。
+    '   宏不会中断。用户点击后方法返回，通过 oSel.Item(1).Value 取得所选产品。
+    '   此步骤替代了原有的「遍历所有打开装配体 → InputBox 输入编号」的方式。
+    ' -------------------------------------------------------------------------
+    oSel.Clear
+
+    Dim targetFilters(0)
+    targetFilters(0) = "Product"
+
+    selStatus = oSel.SelectElement2(targetFilters, _
+        "步骤 2/3：请切换到目标装配体窗口并点击目标产品或部件", False)
+
+    If selStatus = "Cancel" Or selStatus = "Undo" Then
+        MsgBox "已取消操作。", vbInformation, "快速装配紧固件"
+        Exit Sub
+    End If
+
+    If oSel.Count = 0 Then
+        MsgBox "未选中目标产品，请重新运行。", vbExclamation, "快速装配紧固件"
+        Exit Sub
+    End If
+
+    Dim oTargetProduct
+    On Error Resume Next
+    Set oTargetProduct = oSel.Item(1).Value
+    On Error GoTo 0
+
+    Dim targetName
+    targetName = "（未知）"
+    On Error Resume Next
+    targetName = oTargetProduct.Name
+    On Error GoTo 0
+
+    '--- 4. 步骤 3/3：在目标产品中选取安装孔圆柱面 ---
+    oSel.Clear
+
+    Dim holeFilters(0)
+    holeFilters(0) = "CylindricalFace"
+
+    selStatus = oSel.SelectElement2(holeFilters, _
+        "步骤 3/3：请在目标产品 [" & targetName & "] 中点击安装孔的圆柱面", False)
+
+    If selStatus = "Cancel" Or selStatus = "Undo" Then
+        MsgBox "已取消操作。", vbInformation, "快速装配紧固件"
+        Exit Sub
+    End If
+
+    If oSel.Count = 0 Then
+        MsgBox "未选中安装孔圆柱面，请重新运行。", vbExclamation, "快速装配紧固件"
+        Exit Sub
+    End If
+
+    Dim oHoleRef
+    Set oHoleRef = oSel.Item(1).Reference
+
+    '--- 5. 切换回顶层装配体，添加同轴约束并更新 ---
+    oAsmDoc.Activate
+
+    Dim oConstraints
+    Set oConstraints = oAsmDoc.Product.Constraints
+
+    On Error Resume Next
+    Err.Clear
+    oConstraints.AddBiEltCst catCstTypeCoaxiality, oFastenerRef, oHoleRef
+    If Err.Number <> 0 Then
+        MsgBox "添加同轴约束失败：" & Err.Description & Chr(10) & _
+               "（错误代码：0x" & Hex(Err.Number) & "）" & Chr(10) & Chr(10) & _
+               "请确认所选圆柱面均属于同一顶层装配体，并已激活装配约束功能。", _
+               vbExclamation, "快速装配紧固件"
+        Exit Sub
+    End If
+    On Error GoTo 0
+
+    On Error Resume Next
+    oAsmDoc.Product.Update
+    On Error GoTo 0
+
+    MsgBox "同轴约束已成功添加！" & Chr(10) & "目标产品：" & targetName, _
+           vbInformation, "快速装配紧固件"
+
+End Sub
