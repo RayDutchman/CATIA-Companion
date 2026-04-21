@@ -12,7 +12,8 @@ Option Explicit
 '   2. User selects the cylindrical face (axis) and end face on the fastener.
 '   3. Prompt user to switch to the CATProduct assembly.
 '   4. User selects the target product / sub-assembly in the tree.
-'   5. Assembly loop: select hole cylindrical face -> select pressing plane
+'   5. Assembly loop: select hole entry circular edge (RectilinearTriDimFeatEdge)
+'      -> GetCenter gives the exact axis point; GetAxis gives the direction
 '      -> add fastener instance and position it.  Repeat until ESC.
 '
 ' ----------------------------------------------------------------------------
@@ -225,14 +226,14 @@ Public Sub CATMain()
     count = 0
 
     Do
-        ' 5a. Select hole cylindrical face
+        ' 5a. Select hole entry circular edge
         Set sel = CATIA.ActiveDocument.Selection
         sel.Clear
 
         Dim holeFilter As Variant
-        holeFilter = Array("CylindricalFace", "RectilinearTriDimFeatEdge" , "Line")' , "ConicalFace"
+        holeFilter = Array("RectilinearTriDimFeatEdge")
         status = sel.SelectElement2(holeFilter, _
-            "选择孔的圆柱面 (" & fastenerPN & " -> " & targetPN & _
+            "选择孔的入口圆形边 (" & fastenerPN & " -> " & targetPN & _
             "  已装配:" & count & ")  [ESC终止]", False)
         If status <> "Normal" Then Exit Do
 
@@ -244,66 +245,29 @@ Public Sub CATMain()
 
         Dim holeAxis(2) As Double
         holeMeas.GetAxis holeAxis
-        Dim holeCOG(2) As Double
-        holeMeas.GetCOG holeCOG
+        Dim holePt(2) As Double
+        holeMeas.GetCenter holePt
 
         sel.Clear
 
         ' ── DEBUG: hole geometry (assembly coords) ───────────────────────
         MsgBox "[DEBUG] 孔的几何（装配坐标）" & Chr(10) & _
                "holeAxis = (" & Round(holeAxis(0),4) & ", " & Round(holeAxis(1),4) & ", " & Round(holeAxis(2),4) & ")" & Chr(10) & _
-               "holeCOG  = (" & Round(holeCOG(0),4) & ", " & Round(holeCOG(1),4) & ", " & Round(holeCOG(2),4) & ")", _
+               "holePt   = (" & Round(holePt(0),4) & ", " & Round(holePt(1),4) & ", " & Round(holePt(2),4) & ")", _
                vbInformation, "快速装配紧固件 [DEBUG]"
 
-        ' 5b. Select pressing plane
-        Dim planeFilter As Variant
-        planeFilter = Array("PlanarFace")
-        status = sel.SelectElement2(planeFilter, _
-            "选择被压紧平面 (" & fastenerPN & " -> " & targetPN & _
-            "  已装配:" & count & ")  [ESC终止]", False)
-        If status <> "Normal" Then Exit Do
-
-        Dim planeRef As Object
-        Set planeRef = sel.Item(1).Reference
-        Dim planeMeas As Object
-        Set planeMeas = spa.GetMeasurable(planeRef)
-
-        Dim planePt(2) As Double
-        planeMeas.GetCOG planePt
-
-        sel.Clear
-
-        ' ── DEBUG: plane COG and computed target point ───────────────────
-        ' (tParam and targetPt computed below, show after)
-
-        ' ── Compute line-plane intersection (target point) ────────────────
-        ' The pressing plane is assumed perpendicular to the hole axis.
-        ' Project the plane COG onto the hole axis line through holeCOG to get
-        ' the parameter t; denom = holeAxis·holeAxis = 1 (unit vector).
-        Dim tParam As Double
-        tParam = (planePt(0) - holeCOG(0)) * holeAxis(0) _
-               + (planePt(1) - holeCOG(1)) * holeAxis(1) _
-               + (planePt(2) - holeCOG(2)) * holeAxis(2)
-
+        ' targetPt is the circle center — always exactly on the hole axis
         Dim targetPt(2) As Double
-        targetPt(0) = holeCOG(0) + tParam * holeAxis(0)
-        targetPt(1) = holeCOG(1) + tParam * holeAxis(1)
-        targetPt(2) = holeCOG(2) + tParam * holeAxis(2)
+        targetPt(0) = holePt(0)
+        targetPt(1) = holePt(1)
+        targetPt(2) = holePt(2)
 
-        ' ── Determine target axis direction ───────────────────────────────
-        ' holeCOG - targetPt = -tParam * holeAxis, so sign(-tParam) gives
-        ' the direction from the pressing-plane toward the hole interior.
+        ' ta: hole axis direction as returned by GetAxis
         Dim ta(2) As Double
-        If tParam >= 0 Then
-            ta(0) = -holeAxis(0): ta(1) = -holeAxis(1): ta(2) = -holeAxis(2)
-        Else
-            ta(0) = holeAxis(0): ta(1) = holeAxis(1): ta(2) = holeAxis(2)
-        End If
+        ta(0) = holeAxis(0): ta(1) = holeAxis(1): ta(2) = holeAxis(2)
 
-        ' ── DEBUG: plane/target point computation ────────────────────────
-        MsgBox "[DEBUG] 目标点计算（装配坐标）" & Chr(10) & _
-               "planePt  = (" & Round(planePt(0),4) & ", " & Round(planePt(1),4) & ", " & Round(planePt(2),4) & ")" & Chr(10) & _
-               "tParam   = " & Round(tParam,4) & Chr(10) & _
+        ' ── DEBUG: target point ───────────────────────────────────────────
+        MsgBox "[DEBUG] 目标点（装配坐标）" & Chr(10) & _
                "targetPt = (" & Round(targetPt(0),4) & ", " & Round(targetPt(1),4) & ", " & Round(targetPt(2),4) & ")" & Chr(10) & _
                "ta (目标轴向) = (" & Round(ta(0),4) & ", " & Round(ta(1),4) & ", " & Round(ta(2),4) & ")", _
                vbInformation, "快速装配紧固件 [DEBUG]"
