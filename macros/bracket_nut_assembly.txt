@@ -560,7 +560,13 @@ Public Sub PlaceBracketNutAtHole()
     Dim newComp As Object
     Set newComp = products.Item(products.Count)
 
-    ' ── 通过 Move.Apply 设置位置（targetProduct 坐标系） ───────────────
+    ' ── 通过 Position.SetComponents 设置位置（targetProduct 坐标系） ─────
+    ' Position.SetComponents 以 targetProduct（nut plate 的父产品）为坐标系解释变换矩阵，
+    ' 与 SPA 在 targetProduct 为 In Work Object 时的测量坐标系一致：
+    '   0-2  = targetProduct 坐标系中局部 X 轴方向
+    '   3-5  = targetProduct 坐标系中局部 Y 轴方向
+    '   6-8  = targetProduct 坐标系中局部 Z 轴方向
+    '   9-11 = targetProduct 坐标系中原点位置
     Dim moveMatrix(11)
     moveMatrix(0) = R(0, 0)
     moveMatrix(1) = R(1, 0)
@@ -575,7 +581,7 @@ Public Sub PlaceBracketNutAtHole()
     moveMatrix(10) = translation(1)
     moveMatrix(11) = translation(2)
 
-    ' ── 调试：发送给 Move.Apply 的矩阵（targetProduct 坐标系） ─────────
+    ' ── 调试：发送给 Position.SetComponents 的矩阵（targetProduct 坐标系） ──
     If DEBUG_MODE Then
         MsgBox "[DEBUG] 最终定位矩阵（targetProduct 坐标系）" & Chr(10) & _
                "R X轴 = (" & Round(R(0, 0), 4) & ", " & Round(R(1, 0), 4) & ", " & Round(R(2, 0), 4) & ")" & Chr(10) & _
@@ -585,13 +591,16 @@ Public Sub PlaceBracketNutAtHole()
                vbInformation, "快速装配 nut plate [DEBUG]"
     End If
 
-    ' 说明：Move.Apply 是相对（增量）变换，对已有位置的组件累加变换。
-    '       若需绝对设置位置，应使用 Position.SetComponents(matrix)。
-    '       本函数对新添加的组件使用 Move.Apply，等效于绝对设置（初始位置为原点）。
-    Dim moveObj As Object
-    Set moveObj = newComp.Move
-    Set moveObj = moveObj.MovableObject
-    moveObj.Apply moveMatrix
+    ' 说明：Position.SetComponents 直接设置组件在 targetProduct 坐标系中的绝对位置。
+    '       Move.Apply 是相对（增量）变换，对已有位置的组件累加变换：
+    '         Dim moveObj As Object
+    '         Set moveObj = newComp.Move
+    '         Set moveObj = moveObj.MovableObject
+    '         moveObj.Apply moveMatrix
+    '       对于新添加的组件，Move.Apply 等效于绝对设置（初始位置为原点）。
+    '       但对已有非零位置的组件，Move.Apply 会产生叠加，因此本宏统一使用
+    '       Position.SetComponents 避免累加误差。
+    newComp.Position.SetComponents moveMatrix
 
     ' ── 记录最近装配件信息（供翻转重装使用） ─────────────────────────────
     Set g_lastProducts = products
