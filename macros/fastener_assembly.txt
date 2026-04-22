@@ -1,0 +1,736 @@
+Option Explicit
+' fastener_assembly - VBA 模块
+'
+' ── 调试开关：改为 False 关闭所有 [DEBUG] 弹窗（正式使用时设为 False）──────────
+Public Const DEBUG_MODE As Boolean = False
+'
+' 使用前准备（需要在 VBA 编辑器中完成以下步骤）：
+'   1. 将本文件的全部内容粘贴到一个 MODULE 中
+'      （Tools > Macro > Macros... > Edit，或插入新模块）。
+'   2. 插入名为 "FlipForm" 的 UserForm（翻转方向浮动面板）：
+'      - 在 VBA IDE 中，点击 Insert > UserForm。
+'      - 将窗体的 (Name) 属性设为 "FlipForm"，Caption 设为 "方向控制"。
+'      - 添加一个 CommandButton：(Name) = "btnFlip"，Caption = "翻转方向: 否"，
+'        Width ≈ 160，Height ≈ 36。
+'      - 将本文件末尾 "FlipForm UserForm 代码" 部分粘贴到窗体的代码模块中。
+'   3. 插入名为 "SwitchToPartForm" 的 UserForm（等待切换到紧固件文档面板）：
+'      - Insert > UserForm，(Name) = "SwitchToPartForm"，Caption = "选择紧固件文档"。
+'      - 添加一个 Label：(Name) = "lblMsg"，
+'        Caption = "请切换到紧固件（CATPart）文档窗口，再点击""继续""。"
+'      - 添加两个 CommandButton：
+'          btnContinue：Caption = "继续"，Width ≈ 80，Height ≈ 28
+'          btnCancel  ：Caption = "取消"，Width ≈ 80，Height ≈ 28
+'      - 将本文件末尾 "SwitchToPartForm UserForm 代码" 部分粘贴到窗体的代码模块中。
+'   4. 插入名为 "SwitchDocForm" 的 UserForm（等待切换到产品文档面板）：
+'      - Insert > UserForm，(Name) = "SwitchDocForm"，Caption = "等待切换文档"。
+'      - 添加一个 Label：(Name) = "lblMsg"，
+'        Caption = "紧固件几何已就绪。请切换到目标产品（CATProduct）文档窗口，再点击""继续""。"
+'      - 添加两个 CommandButton：
+'          btnContinue：Caption = "继续"，Width ≈ 80，Height ≈ 28
+'          btnCancel  ：Caption = "取消"，Width ≈ 80，Height ≈ 28
+'      - 将本文件末尾 "SwitchDocForm UserForm 代码" 部分粘贴到窗体的代码模块中。
+'   直接在编辑器中运行 "CATMain"。
+'
+' 操作流程：
+'   1. CATMain 显示非模态浮动面板 SwitchToPartForm，然后返回。
+'      用户可自由切换到紧固件（CATPart）文档窗口，切换完成后点击面板上的"继续"
+'      按钮，由 ContinueSelectFastener() 确认当前活动文档为 PartDocument 并继续。
+'   2. 用户选择紧固件上的一条圆形边（RectilinearTriDimFeatEdge），
+'      GetAxis 获取紧固件轴向，GetCenter 获取定位锚点（均在紧固件局部坐标系中）。
+'   3. 取得紧固件几何后，显示非模态浮动面板 SwitchDocForm，然后返回。
+'      用户可自由切换到目标产品（CATProduct）文档窗口，切换完成后点击面板上的
+'      "继续"按钮，由 ContinueSelectProduct() 在已激活的 ProductDocument 上调用
+'      SelectElement2，让用户在产品结构树中选择目标产品/部件（targetProduct）。
+'      （SelectElement2 绑定调用时活动文档；MsgBox 为模态会阻塞窗口切换；
+'      非模态 UserForm 是正确的等待方式，允许用户自由切换文档后再继续。）
+'   4. 用 SPAWorkbench.GetMeasurableInContext(holeRef, rootProduct.Product) 在根产品
+'      坐标系中获取测量值，再通过 targetProduct.Position 的逆变换转换到 targetProduct
+'      局部坐标系，与 Move.Apply 所需的坐标系一致。
+'   5. 装配循环：选择孔口圆形边 -> 添加紧固件实例并定位。
+'      装配完成后可点击浮动面板上的"翻转方向"按钮撤销并重装（方向相反）。
+'      翻转按钮在每次装配后始终有效（包括正在选下一孔时），影响最近一次装配的紧固件。
+'      按 ESC 结束循环。
+'
+' ----------------------------------------------------------------------------
+
+' 翻转方向标志；由 FlipForm 按钮切换，跨次运行保持状态：
+' 上一个紧固件的翻转状态即为下一个的默认状态。
+Public g_flipDir As Boolean
+
+' 紧固件参考几何（由 CATMain 读取一次，PlaceFastenerAtHole 使用）
+Public g_faAxis(2)          ' 不声明 As Double，避免某些 CATIA 版本 GetAxis 无法写入
+Public g_faAnchorPt(2)
+
+
+' 最近一次孔的几何（选孔后更新，供翻转重装使用）
+Public g_holeAxisX As Double, g_holeAxisY As Double, g_holeAxisZ As Double
+Public g_holePtX   As Double, g_holePtY   As Double, g_holePtZ   As Double
+
+' 最近装配件的删除信息（翻转重装时使用）
+Public g_hasLastComp  As Boolean   ' True = 当前可对最近件执行翻转重装
+Public g_lastProducts As Object    ' 最近装配件所属的 Products 集合
+Public g_lastCompIdx  As Long      ' 最近装配件在集合中的索引（1-based）
+
+' 装配循环活动标志：ContinueSelectProduct 进入 Do 循环时设为 True，ESC/循环结束时设为 False。
+' FlipForm.btnFlip_MouseUp 检查此标志，作为防御性保护（MouseUp 本身已不受 ESC 触发）。
+Public g_loopActive   As Boolean
+
+' 装配循环共享状态（供 PlaceFastenerAtHole 及状态栏更新使用）
+Public targetProduct As Object
+Public g_fastenerDoc   As Object
+Public g_fastenerPN    As String
+Public g_targetPN      As String
+Public g_count         As Long
+
+Public Sub CATMain()
+
+    ' ── 1. 提示用户切换到紧固件（CATPart）文档（非模态浮动面板）──────────
+    ' SelectElement2 绑定调用时活动文档。在 PartDocument 上调用时，若文档不是
+    ' 活动文档，CATIA 会自动取消选择（返回非 "Normal"）。
+    ' 解决方案：显示非模态 SwitchToPartForm，用户自由切换到紧固件文档后点击"继续"，
+    ' 由 ContinueSelectFastener() 在已激活的 PartDocument 上调用 SelectElement2。
+    CATIA.StatusBar = "请切换到紧固件（CATPart）文档窗口，然后点击浮动面板上的""继续""按钮。"
+    SwitchToPartForm.Show vbModeless
+
+End Sub
+
+
+' ============================================================================
+' ContinueSelectFastener - 由 SwitchToPartForm.btnContinue_Click() 调用。
+' 在用户切换到紧固件文档后：选择参考圆形边 + 读取轴向和锚点。
+' ============================================================================
+Public Sub ContinueSelectFastener()
+
+    ' 若当前文档不是 CATPart，提示后保持 SwitchToPartForm 打开，不做任何操作
+    If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then
+        MsgBox "当前活动文档不是 CATPart。" & Chr(10) & _
+               "请先切换到紧固件文档窗口，然后再点击""继续""。", _
+               vbExclamation, "快速装配紧固件"
+        Exit Sub
+    End If
+
+    Unload SwitchToPartForm
+
+    Dim fastenerDoc As Object
+    Set fastenerDoc = CATIA.ActiveDocument
+    Set g_fastenerDoc = fastenerDoc
+    g_fastenerPN   = fastenerDoc.Product.PartNumber
+
+    Dim sel As Object
+    Set sel = fastenerDoc.Selection
+    sel.Clear
+
+    ' ── 2. 在紧固件上选择参考圆形边 ──────────────────────────────────────
+    '   GetAxis   -> 紧固件轴线方向（faAxis，紧固件局部坐标系）
+    '   GetCenter -> 与孔中心重合的锚点（faAnchorPt，紧固件局部坐标系）
+    Dim fastEdgeFilter As Variant
+    fastEdgeFilter = Array("MonoDim")
+    Dim status As String
+    ' 绑定紧固件文档的 SPA 工作台，用于读取边的几何信息
+    Dim spaFastener As Object
+    Set spaFastener = fastenerDoc.GetWorkbench("SPAWorkbench")
+
+    Dim fastEdgeRef As Object
+    Dim fastEdgeMeas As Object
+    ' 不声明 As Double，避免某些 CATIA 版本中 GetAxis 无法写入数组（须为 Variant 固定大小数组）
+    ' GetAxis 不保证返回单位向量，BuildFrame 会在内部归一化。
+    Dim faAxis(2)
+    Dim faAnchorPt(2)
+    Dim bFaGeomOK As Boolean
+
+    ' 选择循环：若所选元素不是圆形边则提示重新选择；按 ESC 可退出宏
+    Do
+        status = sel.SelectElement2(fastEdgeFilter, _
+            "请选择紧固件安装面上的圆或圆弧（确定轴向和定位点）[ESC 退出]", False)
+        If status <> "Normal" Then Exit Sub
+
+        Set fastEdgeRef = sel.Item(1).Reference
+        Set fastEdgeMeas = spaFastener.GetMeasurable(fastEdgeRef)
+
+        ' 使用独立函数隔离错误域，避免某些 CATIA 版本中 On Error Resume Next 在调用层失效
+        bFaGeomOK = TryGetAxis(fastEdgeMeas, faAxis) And TryGetCenter(fastEdgeMeas, faAnchorPt)
+        If Not bFaGeomOK Then
+            MsgBox "无法从所选元素获取轴向和圆心。" & Chr(10) & _
+                   "请选择一个圆或一段圆弧（而非直线或曲线）。", _
+                   vbExclamation, "快速装配紧固件"
+            sel.Clear
+        End If
+    Loop While Not bFaGeomOK
+
+    sel.Clear
+
+    ' 写入模块级变量，供 PlaceFastenerAtHole 和翻转重装使用
+    ' 对 faAxis 归一化（GetAxis 不保证返回单位向量）
+    Dim faLen As Double
+    faLen = Sqr(faAxis(0)*faAxis(0) + faAxis(1)*faAxis(1) + faAxis(2)*faAxis(2))
+    If faLen > 0.000000000001 Then
+        g_faAxis(0) = faAxis(0)/faLen: g_faAxis(1) = faAxis(1)/faLen: g_faAxis(2) = faAxis(2)/faLen
+    Else
+        g_faAxis(0) = faAxis(0): g_faAxis(1) = faAxis(1): g_faAxis(2) = faAxis(2)
+    End If
+    g_faAnchorPt(0) = faAnchorPt(0): g_faAnchorPt(1) = faAnchorPt(1): g_faAnchorPt(2) = faAnchorPt(2)
+
+    ' ── 调试：紧固件参考几何 ──────────────────────────────────────────────
+    If DEBUG_MODE Then
+        MsgBox "[DEBUG] 紧固件参考几何" & Chr(10) & _
+               "faAxis    = (" & Round(g_faAxis(0), 4) & ", " & Round(g_faAxis(1), 4) & ", " & Round(g_faAxis(2), 4) & ")" & Chr(10) & _
+               "faAnchorPt= (" & Round(g_faAnchorPt(0), 4) & ", " & Round(g_faAnchorPt(1), 4) & ", " & Round(g_faAnchorPt(2), 4) & ")", _
+               vbInformation, "快速装配紧固件 [DEBUG]"
+    End If
+
+    ' ── 3. 等待用户切换到产品文档（非模态浮动面板）────────────────────
+    ' SelectElement2 绑定调用时活动文档：在 PartDocument 上调用、再切换到
+    ' ProductDocument 会使 CATIA 自动取消选择（返回非 "Normal"）。
+    ' MsgBox 为模态，会阻塞 CATIA 窗口切换，无法解决此问题。
+    ' 解决方案：显示非模态 SwitchDocForm，用户自由切换文档后点击"继续"，
+    ' 由 ContinueSelectProduct() 在已激活的 ProductDocument 上调用 SelectElement2。
+    CATIA.StatusBar = "请切换到目标产品（CATProduct）文档窗口，然后点击浮动面板上的""继续""按钮。"
+    SwitchDocForm.Show vbModeless
+
+End Sub
+
+' ============================================================================
+' ContinueSelectProduct - 由 SwitchDocForm.btnContinue_Click() 调用。
+' 在用户切换到产品文档后：选择目标产品 + 执行孔装配循环。
+' ============================================================================
+Public Sub ContinueSelectProduct()
+
+    ' 若当前文档不是 CATProduct，提示后保持 SwitchDocForm 打开，不做任何操作
+    If TypeName(CATIA.ActiveDocument) <> "ProductDocument" Then
+        MsgBox "当前活动文档不是 CATProduct。" & Chr(10) & _
+               "请先切换到目标产品文档窗口，然后再点击""继续""。", _
+               vbExclamation, "快速装配紧固件"
+        Exit Sub
+    End If
+
+    Unload SwitchDocForm
+
+    Dim rootProduct As Object
+    Set rootProduct = CATIA.ActiveDocument
+    Dim sel As Object
+    Set sel = rootProduct.Selection
+    sel.Clear
+
+    ' ── 4. 在产品结构树中选择目标产品 ────────────────────────────────────
+    ' 此时 ActiveDocument 已是目标 ProductDocument，
+    ' 用户无需再切换窗口，SelectElement2 不会被文档切换取消。
+    Dim prodFilter As Variant
+    prodFilter = Array("Product")
+    Dim status As String
+    status = sel.SelectElement2(prodFilter, _
+        "在产品结构树中选择紧固件要装入的产品/部件", False)
+    If status <> "Normal" Then
+        MsgBox "已取消选择。", vbInformation, "快速装配紧固件"
+        Exit Sub
+    End If
+
+    Set targetProduct = sel.Item(1).Value
+    g_targetPN = targetProduct.PartNumber
+    sel.Clear
+
+    ' ── 5. 装配循环 ───────────────────────────────────────────────────────
+    ' g_flipDir 不重置：上次装配的翻转状态即为本次默认值（跨次保留）。
+    ' 更新 FlipForm 按钮 caption 以反映当前 g_flipDir 状态。
+    g_count = 0
+    g_hasLastComp = False
+    g_loopActive = True
+    FlipForm.Show vbModeless
+    FlipForm.btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
+
+    Dim holeFilter As Variant
+    holeFilter = Array("MonoDim")
+
+    Do
+        ' 5a. 选择孔口入口圆形边
+        '     注意：不在此处重置 g_hasLastComp，保留上一个紧固件的翻转重装能力。
+        Set sel = CATIA.ActiveDocument.Selection
+        sel.Clear
+
+        status = sel.SelectElement2(holeFilter, _
+            "选择孔的入口圆形边 (" & g_fastenerPN & " -> " & g_targetPN & _
+            "  已装配:" & g_count & ")  [ESC终止]", False)
+        If status <> "Normal" Then
+            g_loopActive = False
+            g_hasLastComp = False
+            Exit Do
+        End If
+
+        ' 绑定产品文档的 SPA 工作台，用于在根产品坐标系中测量孔的几何
+        Dim spaAssembly As Object
+        Set spaAssembly = CATIA.ActiveDocument.GetWorkbench("SPAWorkbench")
+        Dim holeRef As Object
+        Set holeRef = sel.Item(1).Reference
+        ' GetMeasurableInContext(reference, contextProduct)：
+        ' 使用根产品（rootProduct.Product）作为上下文，SPA 始终在根产品坐标系中返回测量值。
+        ' 随后通过 targetProduct.Position 的逆变换将结果转到 targetProduct 局部坐标系，
+        ' 与 Move.Apply 所需坐标系一致。
+        Dim holeMeas As Object
+        Dim holeAxis(2)
+        Dim holePt(2)
+
+        ' 错误处理：若所选几何体不是圆形边（如直线边），GetMeasurableInContext/GetAxis 会报错
+        ' 使用独立函数隔离错误域，避免某些 CATIA 版本中 On Error Resume Next 在调用层失效。
+        Dim bHoleGeomOK As Boolean
+        bHoleGeomOK = False
+        If TryGetMeasurableInContext(spaAssembly, holeRef, rootProduct.Product, holeMeas) Then
+            bHoleGeomOK = TryGetAxis(holeMeas, holeAxis) And TryGetCenter(holeMeas, holePt)
+        End If
+
+        If Not bHoleGeomOK Then
+            MsgBox "无法获取孔的轴向和圆心。" & Chr(10) & _
+                   "请选择孔入口处的圆或圆弧（而非直线或曲线）。", _
+                   vbExclamation, "快速装配紧固件"
+            sel.Clear
+        Else
+
+        ' 归一化轴向（GetAxis 不保证返回单位向量）
+        Dim holeAxisLen As Double
+        holeAxisLen = Sqr(holeAxis(0)*holeAxis(0) + holeAxis(1)*holeAxis(1) + holeAxis(2)*holeAxis(2))
+        If holeAxisLen > 0.000000000001 Then
+            holeAxis(0) = holeAxis(0)/holeAxisLen
+            holeAxis(1) = holeAxis(1)/holeAxisLen
+            holeAxis(2) = holeAxis(2)/holeAxisLen
+        End If
+
+        ' ── 将孔几何从根产品坐标系变换到 targetProduct 局部坐标系 ────────
+        ' SPA GetMeasurableInContext(ref, rootProduct.Product) 始终返回根产品坐标系中的值。
+        ' Move.Apply 在 targetProduct 局部坐标系中解释变换矩阵，因此需做逆变换：
+        '   local = R^T * (world - T)
+        ' 其中 R 的列向量 = targetProduct.Position.GetComponents 返回的 tpMatrix(0..8)（X/Y/Z 轴），
+        ' T = tpMatrix(9..11)（原点偏移）。
+        ' 若 targetProduct 与根坐标系重合（Position 为单位矩阵），则变换为恒等变换，结果不变。
+        Dim tpMatrix(11)   ' 不能加 As Double
+        targetProduct.Position.GetComponents tpMatrix
+        Dim holePtOffset(2) As Double
+        holePtOffset(0) = holePt(0) - tpMatrix(9)
+        holePtOffset(1) = holePt(1) - tpMatrix(10)
+        holePtOffset(2) = holePt(2) - tpMatrix(11)
+        holePt(0) = tpMatrix(0)*holePtOffset(0) + tpMatrix(1)*holePtOffset(1) + tpMatrix(2)*holePtOffset(2)
+        holePt(1) = tpMatrix(3)*holePtOffset(0) + tpMatrix(4)*holePtOffset(1) + tpMatrix(5)*holePtOffset(2)
+        holePt(2) = tpMatrix(6)*holePtOffset(0) + tpMatrix(7)*holePtOffset(1) + tpMatrix(8)*holePtOffset(2)
+        Dim holeAxisWorld(2) As Double
+        holeAxisWorld(0) = holeAxis(0): holeAxisWorld(1) = holeAxis(1): holeAxisWorld(2) = holeAxis(2)
+        holeAxis(0) = tpMatrix(0)*holeAxisWorld(0) + tpMatrix(1)*holeAxisWorld(1) + tpMatrix(2)*holeAxisWorld(2)
+        holeAxis(1) = tpMatrix(3)*holeAxisWorld(0) + tpMatrix(4)*holeAxisWorld(1) + tpMatrix(5)*holeAxisWorld(2)
+        holeAxis(2) = tpMatrix(6)*holeAxisWorld(0) + tpMatrix(7)*holeAxisWorld(1) + tpMatrix(8)*holeAxisWorld(2)
+
+        sel.Clear
+
+        ' 写入模块级变量供 PlaceFastenerAtHole（含翻转重装路径）使用
+        g_holeAxisX = holeAxis(0): g_holeAxisY = holeAxis(1): g_holeAxisZ = holeAxis(2)
+        g_holePtX   = holePt(0):   g_holePtY   = holePt(1):   g_holePtZ   = holePt(2)
+
+        ' ── 调试：孔的几何（根产品坐标系 -> targetProduct 局部坐标系） ──
+        If DEBUG_MODE Then
+            MsgBox "[DEBUG] 孔的几何（已变换到 targetProduct 局部坐标系）" & Chr(10) & _
+                   "holeAxis = (" & Round(holeAxis(0), 4) & ", " & Round(holeAxis(1), 4) & ", " & Round(holeAxis(2), 4) & ")" & Chr(10) & _
+                   "holePt   = (" & Round(holePt(0), 4) & ", " & Round(holePt(1), 4) & ", " & Round(holePt(2), 4) & ")", _
+                   vbInformation, "快速装配紧固件 [DEBUG]"
+        End If
+
+        ' 5b. 装配并定位紧固件
+        Call PlaceFastenerAtHole()
+
+        ' 装配完成后允许翻转重装
+        g_hasLastComp = True
+        CATIA.StatusBar = "已装配 " & g_count & " 个 " & g_fastenerPN & " -> " & g_targetPN & _
+                          "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
+                          "  可点击翻转按钮修改方向，选下一孔继续，ESC结束"
+
+        End If  ' bHoleGeomOK
+
+    Loop
+
+    g_loopActive = False
+    g_hasLastComp = False
+    Unload FlipForm
+
+    CATIA.StatusBar = "装配完成！共装配 " & g_count & " 个 " & g_fastenerPN
+    MsgBox "装配完成！" & Chr(10) & _
+           "共装配 " & g_count & " 个 " & g_fastenerPN & " 到 " & g_targetPN & "。", _
+           vbInformation, "快速装配紧固件"
+
+End Sub
+
+
+' ============================================================================
+' PlaceFastenerAtHole：根据模块级变量中存储的孔几何和紧固件参数，
+' 计算变换矩阵并添加一个紧固件实例。
+'
+' 读取：g_flipDir, g_faAxis, g_faAnchorPt（紧固件局部坐标系），
+'        g_holeAxisX/Y/Z, g_holePtX/Y/Z（均为 targetProduct 坐标系），
+'        targetProduct
+' 写入：g_count（+1），g_lastProducts，g_lastCompIdx
+' ============================================================================
+Public Sub PlaceFastenerAtHole()
+
+    ' insertionDir：紧固件插入方向，根据 g_flipDir 决定正向或反向
+    Dim insertionDir(2) As Double
+    If g_flipDir Then
+        insertionDir(0) = -g_holeAxisX: insertionDir(1) = -g_holeAxisY: insertionDir(2) = -g_holeAxisZ
+    Else
+        insertionDir(0) = g_holeAxisX: insertionDir(1) = g_holeAxisY: insertionDir(2) = g_holeAxisZ
+    End If
+
+    ' holeCenterLocal：孔圆心（targetProduct 局部坐标系）
+    Dim holeCenterLocal(2) As Double
+    holeCenterLocal(0) = g_holePtX: holeCenterLocal(1) = g_holePtY: holeCenterLocal(2) = g_holePtZ
+
+    ' ── 计算旋转矩阵 R：使 g_faAxis 旋转到 insertionDir ──────────────────
+    ' 以 g_faAxis 为 Z 轴构建正交坐标系 F1
+    Dim f1x(2) As Double, f1y(2) As Double, f1z(2) As Double
+    f1z(0) = g_faAxis(0): f1z(1) = g_faAxis(1): f1z(2) = g_faAxis(2)
+    Call BuildFrame(f1z, f1x, f1y)
+
+    ' 以 insertionDir 为 Z 轴构建正交坐标系 F2
+    Dim f2x(2) As Double, f2y(2) As Double, f2z(2) As Double
+    f2z(0) = insertionDir(0): f2z(1) = insertionDir(1): f2z(2) = insertionDir(2)
+    Call BuildFrame(f2z, f2x, f2y)
+
+    ' R = F2 * F1^T（将 g_faAxis 映射到 insertionDir，保持正交归一性）
+    Dim R(2, 2) As Double
+    Dim ri As Integer, rj As Integer
+    For ri = 0 To 2
+        For rj = 0 To 2
+            R(ri, rj) = FrameCol(ri, 0, f2x, f2y, f2z) * FrameCol(rj, 0, f1x, f1y, f1z) _
+                      + FrameCol(ri, 1, f2x, f2y, f2z) * FrameCol(rj, 1, f1x, f1y, f1z) _
+                      + FrameCol(ri, 2, f2x, f2y, f2z) * FrameCol(rj, 2, f1x, f1y, f1z)
+        Next rj
+    Next ri
+
+    ' ── 计算平移向量 ──────────────────────────────────────────────────────
+    ' R * g_faAnchorPt + translation = holeCenterLocal   =>  translation = holeCenterLocal - R * g_faAnchorPt
+    Dim rotatedAnchor(2) As Double
+    rotatedAnchor(0) = R(0, 0) * g_faAnchorPt(0) + R(0, 1) * g_faAnchorPt(1) + R(0, 2) * g_faAnchorPt(2)
+    rotatedAnchor(1) = R(1, 0) * g_faAnchorPt(0) + R(1, 1) * g_faAnchorPt(1) + R(1, 2) * g_faAnchorPt(2)
+    rotatedAnchor(2) = R(2, 0) * g_faAnchorPt(0) + R(2, 1) * g_faAnchorPt(1) + R(2, 2) * g_faAnchorPt(2)
+
+    Dim translation(2) As Double
+    translation(0) = holeCenterLocal(0) - rotatedAnchor(0)
+    translation(1) = holeCenterLocal(1) - rotatedAnchor(1)
+    translation(2) = holeCenterLocal(2) - rotatedAnchor(2)
+
+    ' ── 添加紧固件实例 ────────────────────────────────────────────────────
+    Dim products As Object
+    Set products = targetProduct.products
+
+    products.AddComponent g_fastenerDoc.Product
+
+    ' 最后添加的实例即为新组件
+    Dim newComp As Object
+    Set newComp = products.Item(products.Count)
+
+    ' ── 通过 Move.Apply 设置位置（targetProduct 坐标系） ───────────────
+    ' Move.Apply 以 targetProduct（紧固件的父产品）为坐标系解释变换矩阵，
+    ' 与 SPA 在 targetProduct 为 In Work Object 时的测量坐标系一致：
+    '   0-2  = targetProduct 坐标系中局部 X 轴方向
+    '   3-5  = targetProduct 坐标系中局部 Y 轴方向
+    '   6-8  = targetProduct 坐标系中局部 Z 轴方向
+    '   9-11 = targetProduct 坐标系中原点位置
+    Dim moveMatrix(11)
+    moveMatrix(0) = R(0, 0)
+    moveMatrix(1) = R(1, 0)
+    moveMatrix(2) = R(2, 0)
+    moveMatrix(3) = R(0, 1)
+    moveMatrix(4) = R(1, 1)
+    moveMatrix(5) = R(2, 1)
+    moveMatrix(6) = R(0, 2)
+    moveMatrix(7) = R(1, 2)
+    moveMatrix(8) = R(2, 2)
+    moveMatrix(9) = translation(0)
+    moveMatrix(10) = translation(1)
+    moveMatrix(11) = translation(2)
+
+    ' ── 调试：发送给 Move.Apply 的矩阵（targetProduct 坐标系） ─────────
+    If DEBUG_MODE Then
+        MsgBox "[DEBUG] 最终定位矩阵（targetProduct 坐标系）" & Chr(10) & _
+               "R X轴 = (" & Round(R(0, 0), 4) & ", " & Round(R(1, 0), 4) & ", " & Round(R(2, 0), 4) & ")" & Chr(10) & _
+               "R Y轴 = (" & Round(R(0, 1), 4) & ", " & Round(R(1, 1), 4) & ", " & Round(R(2, 1), 4) & ")" & Chr(10) & _
+               "R Z轴 = (" & Round(R(0, 2), 4) & ", " & Round(R(1, 2), 4) & ", " & Round(R(2, 2), 4) & ")" & Chr(10) & _
+               "平移  = (" & Round(translation(0), 4) & ", " & Round(translation(1), 4) & ", " & Round(translation(2), 4) & ")", _
+               vbInformation, "快速装配紧固件 [DEBUG]"
+    End If
+
+    Dim moveObj As Object
+    Set moveObj = newComp.Move
+    Set moveObj = moveObj.MovableObject
+    moveObj.Apply moveMatrix
+
+    ' ── 记录最近装配件信息（供翻转重装使用） ─────────────────────────────
+    Set g_lastProducts = products
+    g_lastCompIdx = products.Count   ' 刚添加的件始终在末尾
+    g_count = g_count + 1
+
+End Sub
+
+
+' ============================================================================
+' MoveLastFastener：在不删除/重建的情况下，将最近装配的紧固件移动到
+'   当前 g_flipDir 对应的翻转位置。
+'
+' 读取：g_flipDir, g_faAxis, g_faAnchorPt, g_holeAxisX/Y/Z, g_holePtX/Y/Z,
+'       g_lastProducts, g_lastCompIdx
+' ============================================================================
+Public Sub MoveLastFastener()
+
+    ' Move.Apply 是相对（增量）变换，无法通过 Apply(identity) 重置到原点。
+    ' 正确做法：用 Position.SetComponents 直接以绝对方式设置组件在
+    ' targetProduct 坐标系中的位置，与 PlaceFastenerAtHole 的坐标系一致。
+    Dim lastComp As Object
+    Set lastComp = g_lastProducts.Item(g_lastCompIdx)
+
+    ' ── 使用与 PlaceFastenerAtHole 相同的逻辑重新定位 ──────────────────
+    ' insertionDir：根据当前 g_flipDir 决定方向
+    Dim insertionDir(2) As Double
+    If g_flipDir Then
+        insertionDir(0) = -g_holeAxisX: insertionDir(1) = -g_holeAxisY: insertionDir(2) = -g_holeAxisZ
+    Else
+        insertionDir(0) = g_holeAxisX: insertionDir(1) = g_holeAxisY: insertionDir(2) = g_holeAxisZ
+    End If
+
+    Dim holeCenterLocal(2) As Double
+    holeCenterLocal(0) = g_holePtX: holeCenterLocal(1) = g_holePtY: holeCenterLocal(2) = g_holePtZ
+
+    ' 构建 F1（以 g_faAxis 为 Z 轴）和 F2（以 insertionDir 为 Z 轴）
+    Dim f1x(2) As Double, f1y(2) As Double, f1z(2) As Double
+    f1z(0) = g_faAxis(0): f1z(1) = g_faAxis(1): f1z(2) = g_faAxis(2)
+    Call BuildFrame(f1z, f1x, f1y)
+
+    Dim f2x(2) As Double, f2y(2) As Double, f2z(2) As Double
+    f2z(0) = insertionDir(0): f2z(1) = insertionDir(1): f2z(2) = insertionDir(2)
+    Call BuildFrame(f2z, f2x, f2y)
+
+    ' R = F2 * F1^T
+    Dim R(2, 2) As Double
+    Dim ri As Integer, rj As Integer
+    For ri = 0 To 2
+        For rj = 0 To 2
+            R(ri, rj) = FrameCol(ri, 0, f2x, f2y, f2z) * FrameCol(rj, 0, f1x, f1y, f1z) _
+                      + FrameCol(ri, 1, f2x, f2y, f2z) * FrameCol(rj, 1, f1x, f1y, f1z) _
+                      + FrameCol(ri, 2, f2x, f2y, f2z) * FrameCol(rj, 2, f1x, f1y, f1z)
+        Next rj
+    Next ri
+
+    Dim rotatedAnchor(2) As Double
+    rotatedAnchor(0) = R(0, 0) * g_faAnchorPt(0) + R(0, 1) * g_faAnchorPt(1) + R(0, 2) * g_faAnchorPt(2)
+    rotatedAnchor(1) = R(1, 0) * g_faAnchorPt(0) + R(1, 1) * g_faAnchorPt(1) + R(1, 2) * g_faAnchorPt(2)
+    rotatedAnchor(2) = R(2, 0) * g_faAnchorPt(0) + R(2, 1) * g_faAnchorPt(1) + R(2, 2) * g_faAnchorPt(2)
+
+    Dim translation(2) As Double
+    translation(0) = holeCenterLocal(0) - rotatedAnchor(0)
+    translation(1) = holeCenterLocal(1) - rotatedAnchor(1)
+    translation(2) = holeCenterLocal(2) - rotatedAnchor(2)
+
+    ' Position.SetComponents 需要类型化的 Double 数组（Variant 数组会被静默忽略）。
+    ' 矩阵含义与 Move.Apply 相同：0-2 X轴，3-5 Y轴，6-8 Z轴，9-11 平移。
+    Dim moveMatrix(11)
+    moveMatrix(0) = R(0, 0): moveMatrix(1) = R(1, 0): moveMatrix(2) = R(2, 0)
+    moveMatrix(3) = R(0, 1): moveMatrix(4) = R(1, 1): moveMatrix(5) = R(2, 1)
+    moveMatrix(6) = R(0, 2): moveMatrix(7) = R(1, 2): moveMatrix(8) = R(2, 2)
+    moveMatrix(9) = translation(0)
+    moveMatrix(10) = translation(1)
+    moveMatrix(11) = translation(2)
+
+    ' 使用 Position.SetComponents 直接设置绝对位置（targetProduct 坐标系），
+    ' 避免 Move.Apply（相对变换）在组件已有非零位置时产生叠加误差。
+    lastComp.Position.SetComponents moveMatrix
+
+End Sub
+
+
+' ============================================================================
+' 辅助函数：根据给定的 Z 轴构建正交坐标系 {outX, outY, inZ}。
+' ============================================================================
+Private Sub BuildFrame(ByRef inZ() As Double, ByRef outX() As Double, ByRef outY() As Double)
+    ' GetAxis 返回的向量不保证是单位向量，必须先对 inZ 归一化。
+    ' 否则 outY = cross(nz, outX) 的长度会等于 |inZ|，
+    ' 导致旋转矩阵列向量非单位，Move.Apply 报 type mismatch。
+    Dim zLen As Double
+    zLen = Sqr(inZ(0) * inZ(0) + inZ(1) * inZ(1) + inZ(2) * inZ(2))
+    If zLen < 0.000000000001 Then
+        ' inZ 为零向量；返回安全默认坐标系以防止崩溃
+        outX(0) = 1: outX(1) = 0: outX(2) = 0
+        outY(0) = 0: outY(1) = 1: outY(2) = 0
+        Exit Sub
+    End If
+    Dim nz(2) As Double
+    nz(0) = inZ(0) / zLen: nz(1) = inZ(1) / zLen: nz(2) = inZ(2) / zLen
+
+    ' 选取一个与 nz 不（反）平行的参考向量
+    Dim refV(2) As Double
+    If Abs(nz(0)) < 0.9 Then
+        refV(0) = 1: refV(1) = 0: refV(2) = 0
+    Else
+        refV(0) = 0: refV(1) = 1: refV(2) = 0
+    End If
+
+    ' outX = cross(nz, refV)，归一化
+    outX(0) = nz(1) * refV(2) - nz(2) * refV(1)
+    outX(1) = nz(2) * refV(0) - nz(0) * refV(2)
+    outX(2) = nz(0) * refV(1) - nz(1) * refV(0)
+    Dim xLen As Double
+    xLen = Sqr(outX(0) * outX(0) + outX(1) * outX(1) + outX(2) * outX(2))
+    If xLen < 0.000000000001 Then
+        outX(0) = 1: outX(1) = 0: outX(2) = 0
+        outY(0) = 0: outY(1) = 1: outY(2) = 0
+        Exit Sub
+    End If
+    outX(0) = outX(0) / xLen
+    outX(1) = outX(1) / xLen
+    outX(2) = outX(2) / xLen
+
+    ' outY = cross(nz, outX)，由于 nz 和 outX 均为单位向量且互相垂直，结果必为单位向量
+    outY(0) = nz(1) * outX(2) - nz(2) * outX(1)
+    outY(1) = nz(2) * outX(0) - nz(0) * outX(2)
+    outY(2) = nz(0) * outX(1) - nz(1) * outX(0)
+End Sub
+
+
+' ============================================================================
+' 辅助函数：返回坐标系 {vx, vy, vz} 第 [col] 列的第 [row] 行分量。
+' col 0 = vx，col 1 = vy，col 2 = vz
+' ============================================================================
+Private Function FrameCol(ByVal row As Integer, ByVal col As Integer, _
+                          ByRef vx() As Double, ByRef vy() As Double, _
+                          ByRef vz() As Double) As Double
+    Select Case col
+        Case 0: FrameCol = vx(row)
+        Case 1: FrameCol = vy(row)
+        Case 2: FrameCol = vz(row)
+    End Select
+End Function
+
+
+' ============================================================================
+' TryGetAxis / TryGetCenter / TryGetMeasurableInContext
+' 在独立错误处理域中调用 COM 方法，使 On Error Resume Next 在函数边界生效，
+' 彻底避免某些 CATIA 版本中调用层错误处理失效时弹出 VB 运行时错误对话框。
+' ============================================================================
+
+Private Function TryGetAxis(meas As Object, axArr) As Boolean
+    On Error Resume Next
+    Err.Clear
+    meas.GetAxis axArr
+    TryGetAxis = (Err.Number = 0)
+End Function
+
+Private Function TryGetCenter(meas As Object, ptArr) As Boolean
+    On Error Resume Next
+    Err.Clear
+    meas.GetCenter ptArr
+    TryGetCenter = (Err.Number = 0)
+End Function
+
+' spa   : SPAWorkbench 对象
+' ref   : 待测量的 Reference 对象
+' ctx   : 上下文 Product（传入 rootProduct.Product 以获取根产品坐标系中的测量值）
+' measOut : 输出的 Measurable 对象（通过 ByRef 返回）
+Private Function TryGetMeasurableInContext(spa As Object, ref As Object, _
+                                           ctx As Object, ByRef measOut As Object) As Boolean
+    On Error Resume Next
+    Err.Clear
+    Set measOut = spa.GetMeasurableInContext(ref, ctx)
+    TryGetMeasurableInContext = (Err.Number = 0 And Not measOut Is Nothing)
+End Function
+
+
+' ============================================================================
+' ── FlipForm UserForm 代码 ──────────────────────────────────────────────────
+'
+' 创建步骤：在 VBA IDE 中，Insert > UserForm。
+'   - 将窗体 (Name) 设为 "FlipForm"，Caption 设为 "方向控制"。
+'   - 添加一个 CommandButton：
+'       (Name)   = "btnFlip"
+'       Caption  = "翻转方向: 否"
+'       Width    = 160  Height = 36（可按需调整）
+'   - 打开窗体的代码模块，将下方代码粘贴进去。
+' ============================================================================
+'
+' ---- 将以下代码粘贴到 FlipForm 的代码模块中（不是本模块）----
+'
+'  ' 使用 MouseUp 而非 Click：
+'  ' VBA UserForm 中若按钮被设为 Cancel 按钮（Cancel=True），或 ESC 键被 VBA
+'  ' 消息泵截获并分发为点击事件，Click 会在 ESC 退出 SelectElement2 期间意外触发。
+'  ' MouseUp 仅在鼠标按键实际松开时触发，键盘 ESC 不会产生 MouseUp，从根本上
+'  ' 避免 ESC 退出循环后误翻转上一个紧固件的问题。
+'  Private Sub btnFlip_MouseUp(ByVal Button As Integer, ByVal Shift As Integer, _
+'                              ByVal X As Single, ByVal Y As Single)
+'      If Not g_loopActive Then Exit Sub
+'      g_flipDir = Not g_flipDir
+'      btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
+'      ' 如果当前可翻转重装（装配后尚未选下一孔），
+'      ' 则直接将已有紧固件移动到翻转后的位置（不删除重建）。
+'      If g_hasLastComp Then
+'          Call MoveLastFastener()
+'          CATIA.StatusBar = "已重新定向（方向翻转）" & g_count & " 个 " & g_fastenerPN & _
+'                            "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
+'                            "  选下一孔继续，ESC结束"
+'      End If
+'  End Sub
+'
+' ---------------------------------------------------------------------------
+
+
+' ============================================================================
+' ── SwitchToPartForm UserForm 代码 ──────────────────────────────────────────
+'
+' 创建步骤：在 VBA IDE 中，Insert > UserForm。
+'   - 将窗体 (Name) 设为 "SwitchToPartForm"，Caption 设为 "选择紧固件文档"。
+'   - 添加一个 Label：
+'       (Name)    = "lblMsg"
+'       Caption   = "请切换到紧固件（CATPart）文档窗口，" & Chr(10) &
+'                   "切换完成后点击""继续""按钮。"
+'       WordWrap  = True，AutoSize = True
+'   - 添加两个 CommandButton（横向排列）：
+'       btnContinue：Caption = "继续"，Width ≈ 80，Height ≈ 28
+'       btnCancel  ：Caption = "取消"，Width ≈ 80，Height ≈ 28
+'   - 打开窗体的代码模块，将下方代码粘贴进去。
+' ============================================================================
+'
+' ---- 将以下代码粘贴到 SwitchToPartForm 的代码模块中（不是本模块）----
+'
+'  Private Sub btnContinue_Click()
+'      ' 调用主模块中的 ContinueSelectFastener。
+'      ' 若 ActiveDocument 不是 PartDocument，该 Sub 会提示用户并直接返回，
+'      ' SwitchToPartForm 保持打开，用户可再次切换后重试。
+'      Call ContinueSelectFastener
+'  End Sub
+'
+'  Private Sub btnCancel_Click()
+'      Unload SwitchToPartForm
+'  End Sub
+'
+' ---------------------------------------------------------------------------
+
+
+' ============================================================================
+' ── SwitchDocForm UserForm 代码 ─────────────────────────────────────────────
+'
+' 创建步骤：在 VBA IDE 中，Insert > UserForm。
+'   - 将窗体 (Name) 设为 "SwitchDocForm"，Caption 设为 "等待切换文档"。
+'   - 添加一个 Label：
+'       (Name)    = "lblMsg"
+'       Caption   = "紧固件几何已就绪。" & Chr(10) &
+'                   "请切换到目标产品（CATProduct）文档窗口，" & Chr(10) &
+'                   "切换完成后点击""继续""按钮。"
+'       WordWrap  = True，AutoSize = True
+'   - 添加两个 CommandButton（横向排列）：
+'       btnContinue：Caption = "继续"，Width ≈ 80，Height ≈ 28
+'       btnCancel  ：Caption = "取消"，Width ≈ 80，Height ≈ 28
+'   - 打开窗体的代码模块，将下方代码粘贴进去。
+' ============================================================================
+'
+' ---- 将以下代码粘贴到 SwitchDocForm 的代码模块中（不是本模块）----
+'
+'  Private Sub btnContinue_Click()
+'      ' 调用主模块中的 ContinueSelectProduct。
+'      ' 若 ActiveDocument 不是 ProductDocument，该 Sub 会提示用户并直接返回，
+'      ' SwitchDocForm 保持打开，用户可再次切换后重试。
+'      Call ContinueSelectProduct
+'  End Sub
+'
+'  Private Sub btnCancel_Click()
+'      Unload SwitchDocForm
+'  End Sub
+'
+' ---------------------------------------------------------------------------
