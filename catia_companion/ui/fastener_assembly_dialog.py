@@ -2,9 +2,8 @@
 Fastener quick-assembly dialog.
 
 Provides:
-- FastenerAssemblyDialog – dialog for specifying a fastener CATPart and
-  launching the ``fastener_assembly.catvbs`` macro to interactively place
-  fastener instances in an assembly.
+- FastenerAssemblyDialog – dialog for locating the ``fastener_assembly.catvba``
+  VBA macro file and launching it inside the running CATIA instance.
 """
 
 import logging
@@ -12,8 +11,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QFileDialog, QMessageBox, QRadioButton, QButtonGroup, QGroupBox,
-    QApplication,
+    QFileDialog, QMessageBox, QApplication,
 )
 from PySide6.QtCore import QSettings
 
@@ -21,179 +19,123 @@ logger = logging.getLogger(__name__)
 
 
 class FastenerAssemblyDialog(QDialog):
-    """Dialog for the quick fastener-assembly workflow.
+    """Launcher dialog for the fastener-assembly VBA macro.
 
-    The dialog lets the user pick a fastener CATPart (either the current
-    active CATIA document or a file on disk), displays its Part Number,
-    and launches the ``fastener_assembly.catvbs`` macro that drives the
-    interactive CATIA assembly loop.
+    The dialog lets the user locate the ``fastener_assembly.catvba`` VBA macro
+    file and launch it inside the running CATIA instance via
+    ``SystemService.ExecuteScript``.  The macro itself handles all interactive
+    steps (selecting edges, switching documents, placing fasteners).
     """
 
-    def __init__(self, parent=None, *, execute_fn=None) -> None:
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("快速装配紧固件")
-        self.setMinimumSize(480, 300)
+        self.setMinimumWidth(480)
 
         self._settings = QSettings("CATIACompanion", "FastenerAssemblyDialog")
-        self._execute_fn = execute_fn
-        self._fastener_path: str = ""
-        self._fastener_pn: str = ""
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        # ── Fastener source ─────────────────────────────────────────────
-        src_group = QGroupBox("紧固件来源")
-        src_layout = QVBoxLayout(src_group)
-
-        self._btn_group = QButtonGroup(self)
-        self._radio_active = QRadioButton("使用当前CATIA活动文档")
-        self._radio_file = QRadioButton("选择文件:")
-        self._btn_group.addButton(self._radio_active)
-        self._btn_group.addButton(self._radio_file)
-        self._radio_active.setChecked(True)
-
-        src_layout.addWidget(self._radio_active)
+        # ── Macro file selector ──────────────────────────────────────────
+        layout.addWidget(QLabel("VBA 宏文件（.catvba）："))
 
         file_row = QHBoxLayout()
-        file_row.addWidget(self._radio_file)
         self._file_edit = QLineEdit()
-        self._file_edit.setReadOnly(True)
-        self._file_edit.setPlaceholderText("选择一个CATPart文件...")
-        saved_path = self._settings.value("last_file", "")
-        if saved_path:
-            self._file_edit.setText(saved_path)
-        self._file_browse_btn = QPushButton("浏览...")
-        self._file_browse_btn.clicked.connect(self._browse_file)
+        self._file_edit.setPlaceholderText("选择 fastener_assembly.catvba 文件…")
+        saved = self._settings.value("last_catvba", "")
+        if saved:
+            self._file_edit.setText(saved)
+        browse_btn = QPushButton("浏览…")
+        browse_btn.clicked.connect(self._browse_file)
         file_row.addWidget(self._file_edit)
-        file_row.addWidget(self._file_browse_btn)
-        src_layout.addLayout(file_row)
+        file_row.addWidget(browse_btn)
+        layout.addLayout(file_row)
 
-        layout.addWidget(src_group)
-
-        # ── Info display ────────────────────────────────────────────────
-        info_group = QGroupBox("信息")
-        info_layout = QVBoxLayout(info_group)
-
-        pn_row = QHBoxLayout()
-        pn_row.addWidget(QLabel("紧固件零件编号："))
-        self._pn_label = QLabel("（未读取）")
-        self._pn_label.setStyleSheet("font-weight: bold;")
-        pn_row.addWidget(self._pn_label)
-        pn_row.addStretch()
-        info_layout.addLayout(pn_row)
-
-        layout.addWidget(info_group)
-
-        # ── Hint ────────────────────────────────────────────────────────
+        # ── Instructions ─────────────────────────────────────────────────
         hint = QLabel(
-            "点击开始装配后，请按照 CATIA 弹窗提示依次选取紧固件的圆柱面"
-            "和端面，再切换到装配体并选择目标产品节点，之后即可连续装配紧固件。\n"
-            "在选取过程中按 ESC 可随时终止。"
+            "使用说明：\n"
+            "1. 确保 CATIA 已启动，并已打开紧固件（CATPart）和目标装配体（CATProduct）文档。\n"
+            '2. 选择宏文件后，点击\u201c开始装配\u201d，CATIA 宏将自动引导后续操作。\n'
+            "3. 按照 CATIA 浮动面板的提示，依次选择紧固件圆形边和目标产品，"
+            "即可连续放置紧固件实例。"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(hint)
 
-        # ── Status ──────────────────────────────────────────────────────
+        # ── Status ───────────────────────────────────────────────────────
         self._status_label = QLabel("状态：就绪")
         self._status_label.setStyleSheet("color: #555;")
         layout.addWidget(self._status_label)
 
-        # ── Action buttons ──────────────────────────────────────────────
+        # ── Action buttons ────────────────────────────────────────────────
         action_row = QHBoxLayout()
         self._start_btn = QPushButton("开始装配")
         self._start_btn.setDefault(True)
         self._start_btn.clicked.connect(self._start_assembly)
-        cancel_btn = QPushButton("取消")
-        cancel_btn.clicked.connect(self.reject)
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(self.reject)
         action_row.addStretch()
         action_row.addWidget(self._start_btn)
-        action_row.addWidget(cancel_btn)
+        action_row.addWidget(close_btn)
         layout.addLayout(action_row)
 
-    # ── File browsing ───────────────────────────────────────────────────
+    # ── File browsing ────────────────────────────────────────────────────
 
     def _browse_file(self) -> None:
-        last = self._settings.value("last_file", "")
+        last = self._settings.value("last_catvba", "")
         start_dir = str(Path(last).parent) if last else ""
         file, _ = QFileDialog.getOpenFileName(
-            self, "选择紧固件CATPart文件", start_dir,
-            "CATPart (*.CATPart);;All Files (*)",
+            self, "选择 VBA 宏文件", start_dir,
+            "CATIA VBA 宏 (*.catvba);;All Files (*)",
         )
         if file:
             self._file_edit.setText(file)
-            self._settings.setValue("last_file", file)
-            self._radio_file.setChecked(True)
+            self._settings.setValue("last_catvba", file)
 
-    # ── Start assembly ──────────────────────────────────────────────────
+    # ── Launch macro ──────────────────────────────────────────────────────
 
     def _start_assembly(self) -> None:
-        """Read fastener info, then launch the VBScript macro."""
+        """Validate the macro path and launch it via CATIA COM."""
+        catvba_str = self._file_edit.text().strip()
+        if not catvba_str:
+            QMessageBox.warning(self, "未选择文件", "请先选择 .catvba 宏文件。")
+            return
+        catvba_path = Path(catvba_str)
+        if not catvba_path.exists():
+            QMessageBox.warning(
+                self, "文件不存在",
+                f"找不到宏文件：\n{catvba_path}\n\n请确认文件路径是否正确。",
+            )
+            return
 
-        use_active = self._radio_active.isChecked()
-
-        # Resolve fastener path
-        if use_active:
-            fastener_path = ""  # macro will use CATIA.ActiveDocument
-        else:
-            fastener_path = self._file_edit.text().strip()
-            if not fastener_path:
-                QMessageBox.warning(
-                    self, "未选择文件", "请选择一个紧固件CATPart文件。"
-                )
-                return
-            if not Path(fastener_path).exists():
-                QMessageBox.warning(
-                    self, "文件不存在",
-                    f"文件不存在：\n{fastener_path}",
-                )
-                return
-
-        # Read fastener part number via COM
-        self._status_label.setText("状态：正在读取紧固件信息…")
+        self._status_label.setText("状态：正在启动宏…")
         QApplication.processEvents()
 
         try:
             from pycatia import catia as _catia
             caa = _catia()
             app = caa.application
-
-            if use_active:
-                pn = app.active_document.product.part_number
-                fastener_path = app.active_document.full_name
-            else:
-                # Leave the document open – the VBScript macro needs it.
-                doc = app.documents.open(fastener_path)
-                pn = doc.product.part_number
-        except Exception as e:
-            self._status_label.setText("状态：读取失败")
-            QMessageBox.critical(
-                self, "读取失败",
-                f"无法读取紧固件信息：\n{e}\n\n请确保CATIA已启动。",
+            # ExecuteScript signature:
+            #   (LibraryName, LibraryType, ProgramName, FunctionName, Parameters)
+            # LibraryType = 2 for a .catvba VBA project file.
+            # LibraryName = full path to the .catvba file.
+            # ProgramName = VBA module name (conventionally the file stem).
+            module_name = catvba_path.stem
+            app.com_object.SystemService.ExecuteScript(
+                str(catvba_path), 2, module_name, "CATMain", [],
             )
-            return
-
-        self._fastener_path = fastener_path
-        self._fastener_pn = pn
-        self._pn_label.setText(pn)
-
-        # Launch the VBScript macro
-        self._status_label.setText("状态：正在装配（按ESC终止）…")
-        QApplication.processEvents()
-
-        if self._execute_fn is None:
-            QMessageBox.warning(self, "内部错误", "未指定宏执行函数。")
-            return
-
-        try:
-            self._execute_fn(fastener_path)
-            self._status_label.setText("状态：装配完成")
+            self._status_label.setText("状态：宏已完成")
         except Exception as e:
             logger.error("Fastener assembly macro failed: %s", e)
-            self._status_label.setText("状态：装配中断")
+            self._status_label.setText("状态：运行失败")
             QMessageBox.critical(
                 self, "宏执行失败",
-                f"运行宏时出错：\n{e}\n\n请确保CATIA已启动。",
+                f"无法运行宏：\n{e}\n\n"
+                "请确保：\n"
+                "  1. CATIA 已启动\n"
+                "  2. 所选文件为有效的 .catvba 宏文件\n"
+                "  3. 宏模块名与文件名一致，且包含 CATMain 子程序",
             )

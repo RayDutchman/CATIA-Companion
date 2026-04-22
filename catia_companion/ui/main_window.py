@@ -401,21 +401,7 @@ class MainWindow(QMainWindow):
         FindDependenciesDialog(self).exec()
 
     def _open_fastener_assembly_dialog(self) -> None:
-        def _execute(fastener_path: str) -> None:
-            from pycatia import catia as _catia
-            caa = _catia()
-            app = caa.application
-            macro_path = self._macros_dir() / "fastener_assembly.catvbs"
-            if not macro_path.exists():
-                raise FileNotFoundError(
-                    f"未找到宏文件：{macro_path}\n"
-                    "请将 fastener_assembly.catvbs 放入 macros 文件夹后重试。"
-                )
-            self._execute_catscript(
-                app, macro_path, "CATMain", [fastener_path],
-            )
-
-        FastenerAssemblyDialog(self, execute_fn=_execute).exec()
+        FastenerAssemblyDialog(self).exec()
 
     # ── Drawing generation ─────────────────────────────────────────────────
 
