@@ -40,11 +40,11 @@ Public Const DEBUG_MODE As Boolean = False
 '   3. 取得紧固件几何后，显示非模态浮动面板 SwitchDocForm，然后返回。
 '      用户可自由切换到目标产品（CATProduct）文档窗口，切换完成后点击面板上的
 '      "继续"按钮，由 ContinueSelectProduct() 在已激活的 ProductDocument 上调用
-'      SelectElement2，让用户在产品结构树中选择目标产品/部件（g_targetProduct）。
+'      SelectElement2，让用户在产品结构树中选择目标产品/部件（targetProduct）。
 '      （SelectElement2 绑定调用时活动文档；MsgBox 为模态会阻塞窗口切换；
 '      非模态 UserForm 是正确的等待方式，允许用户自由切换文档后再继续。）
-'   4. 用 SPAWorkbench.GetMeasurableInContext(holeRef, assemblyDoc.Product) 在根产品
-'      坐标系中获取测量值，再通过 g_targetProduct.Position 的逆变换转换到 g_targetProduct
+'   4. 用 SPAWorkbench.GetMeasurableInContext(holeRef, rootProduct.Product) 在根产品
+'      坐标系中获取测量值，再通过 targetProduct.Position 的逆变换转换到 targetProduct
 '      局部坐标系，与 Move.Apply 所需的坐标系一致。
 '   5. 装配循环：选择孔口圆形边 -> 添加紧固件实例并定位。
 '      装配完成后可点击浮动面板上的"翻转方向"按钮撤销并重装（方向相反）。
@@ -72,7 +72,8 @@ Public g_lastProducts As Object    ' 最近装配件所属的 Products 集合
 Public g_lastCompIdx  As Long      ' 最近装配件在集合中的索引（1-based）
 
 ' 装配循环共享状态（供 PlaceFastenerAtHole 及状态栏更新使用）
-Public g_targetProduct As Object
+Public targetProduct As Object
+Public g_fastenerDoc   As Object
 Public g_fastenerPath  As String
 Public g_fastenerPN    As String
 Public g_targetPN      As String
@@ -109,6 +110,7 @@ Public Sub ContinueSelectFastener()
 
     Dim fastenerDoc As Object
     Set fastenerDoc = CATIA.ActiveDocument
+    Set g_fastenerDoc = fastenerDoc
     g_fastenerPath = fastenerDoc.FullName
     g_fastenerPN   = fastenerDoc.Product.PartNumber
 
@@ -201,10 +203,10 @@ Public Sub ContinueSelectProduct()
 
     Unload SwitchDocForm
 
-    Dim assemblyDoc As Object
-    Set assemblyDoc = CATIA.ActiveDocument
+    Dim rootProduct As Object
+    Set rootProduct = CATIA.ActiveDocument
     Dim sel As Object
-    Set sel = assemblyDoc.Selection
+    Set sel = rootProduct.Selection
     sel.Clear
 
     ' ── 4. 在产品结构树中选择目标产品 ────────────────────────────────────
@@ -220,8 +222,8 @@ Public Sub ContinueSelectProduct()
         Exit Sub
     End If
 
-    Set g_targetProduct = sel.Item(1).Value
-    g_targetPN = g_targetProduct.PartNumber
+    Set targetProduct = sel.Item(1).Value
+    g_targetPN = targetProduct.PartNumber
     sel.Clear
 
     ' ── 5. 装配循环 ───────────────────────────────────────────────────────
@@ -244,7 +246,10 @@ Public Sub ContinueSelectProduct()
         status = sel.SelectElement2(holeFilter, _
             "选择孔的入口圆形边 (" & g_fastenerPN & " -> " & g_targetPN & _
             "  已装配:" & g_count & ")  [ESC终止]", False)
-        If status <> "Normal" Then Exit Do
+        If status <> "Normal" Then
+            g_hasLastComp = False
+            Exit Do
+        End If
 
         ' 绑定产品文档的 SPA 工作台，用于在根产品坐标系中测量孔的几何
         Dim spaAssembly As Object
@@ -252,8 +257,8 @@ Public Sub ContinueSelectProduct()
         Dim holeRef As Object
         Set holeRef = sel.Item(1).Reference
         ' GetMeasurableInContext(reference, contextProduct)：
-        ' 使用根产品（assemblyDoc.Product）作为上下文，SPA 始终在根产品坐标系中返回测量值。
-        ' 随后通过 g_targetProduct.Position 的逆变换将结果转到 g_targetProduct 局部坐标系，
+        ' 使用根产品（rootProduct.Product）作为上下文，SPA 始终在根产品坐标系中返回测量值。
+        ' 随后通过 targetProduct.Position 的逆变换将结果转到 targetProduct 局部坐标系，
         ' 与 Move.Apply 所需坐标系一致。
         Dim holeMeas As Object
         Dim holeAxis(2)
@@ -263,7 +268,7 @@ Public Sub ContinueSelectProduct()
         ' 使用独立函数隔离错误域，避免某些 CATIA 版本中 On Error Resume Next 在调用层失效。
         Dim bHoleGeomOK As Boolean
         bHoleGeomOK = False
-        If TryGetMeasurableInContext(spaAssembly, holeRef, assemblyDoc.Product, holeMeas) Then
+        If TryGetMeasurableInContext(spaAssembly, holeRef, rootProduct.Product, holeMeas) Then
             bHoleGeomOK = TryGetAxis(holeMeas, holeAxis) And TryGetCenter(holeMeas, holePt)
         End If
 
@@ -283,15 +288,15 @@ Public Sub ContinueSelectProduct()
             holeAxis(2) = holeAxis(2)/holeAxisLen
         End If
 
-        ' ── 将孔几何从根产品坐标系变换到 g_targetProduct 局部坐标系 ────────
-        ' SPA GetMeasurableInContext(ref, assemblyDoc.Product) 始终返回根产品坐标系中的值。
-        ' Move.Apply 在 g_targetProduct 局部坐标系中解释变换矩阵，因此需做逆变换：
+        ' ── 将孔几何从根产品坐标系变换到 targetProduct 局部坐标系 ────────
+        ' SPA GetMeasurableInContext(ref, rootProduct.Product) 始终返回根产品坐标系中的值。
+        ' Move.Apply 在 targetProduct 局部坐标系中解释变换矩阵，因此需做逆变换：
         '   local = R^T * (world - T)
-        ' 其中 R 的列向量 = g_targetProduct.Position.GetComponents 返回的 tpMatrix(0..8)（X/Y/Z 轴），
+        ' 其中 R 的列向量 = targetProduct.Position.GetComponents 返回的 tpMatrix(0..8)（X/Y/Z 轴），
         ' T = tpMatrix(9..11)（原点偏移）。
-        ' 若 g_targetProduct 与根坐标系重合（Position 为单位矩阵），则变换为恒等变换，结果不变。
+        ' 若 targetProduct 与根坐标系重合（Position 为单位矩阵），则变换为恒等变换，结果不变。
         Dim tpMatrix(11)   ' 不能加 As Double
-        g_targetProduct.Position.GetComponents tpMatrix
+        targetProduct.Position.GetComponents tpMatrix
         Dim holePtOffset(2) As Double
         holePtOffset(0) = holePt(0) - tpMatrix(9)
         holePtOffset(1) = holePt(1) - tpMatrix(10)
@@ -311,9 +316,9 @@ Public Sub ContinueSelectProduct()
         g_holeAxisX = holeAxis(0): g_holeAxisY = holeAxis(1): g_holeAxisZ = holeAxis(2)
         g_holePtX   = holePt(0):   g_holePtY   = holePt(1):   g_holePtZ   = holePt(2)
 
-        ' ── 调试：孔的几何（根产品坐标系 -> g_targetProduct 局部坐标系） ──
+        ' ── 调试：孔的几何（根产品坐标系 -> targetProduct 局部坐标系） ──
         If DEBUG_MODE Then
-            MsgBox "[DEBUG] 孔的几何（已变换到 g_targetProduct 局部坐标系）" & Chr(10) & _
+            MsgBox "[DEBUG] 孔的几何（已变换到 targetProduct 局部坐标系）" & Chr(10) & _
                    "holeAxis = (" & Round(holeAxis(0), 4) & ", " & Round(holeAxis(1), 4) & ", " & Round(holeAxis(2), 4) & ")" & Chr(10) & _
                    "holePt   = (" & Round(holePt(0), 4) & ", " & Round(holePt(1), 4) & ", " & Round(holePt(2), 4) & ")", _
                    vbInformation, "快速装配紧固件 [DEBUG]"
@@ -348,8 +353,8 @@ End Sub
 ' 计算变换矩阵并添加一个紧固件实例。
 '
 ' 读取：g_flipDir, g_faAxis, g_faAnchorPt（紧固件局部坐标系），
-'        g_holeAxisX/Y/Z, g_holePtX/Y/Z（均为 g_targetProduct 坐标系），
-'        g_targetProduct, g_fastenerPath
+'        g_holeAxisX/Y/Z, g_holePtX/Y/Z（均为 targetProduct 坐标系），
+'        targetProduct, g_fastenerPath
 ' 写入：g_count（+1），g_lastProducts，g_lastCompIdx
 ' ============================================================================
 Public Sub PlaceFastenerAtHole()
@@ -362,7 +367,7 @@ Public Sub PlaceFastenerAtHole()
         insertionDir(0) = g_holeAxisX: insertionDir(1) = g_holeAxisY: insertionDir(2) = g_holeAxisZ
     End If
 
-    ' holeCenterLocal：孔圆心（g_targetProduct 局部坐标系）
+    ' holeCenterLocal：孔圆心（targetProduct 局部坐标系）
     Dim holeCenterLocal(2) As Double
     holeCenterLocal(0) = g_holePtX: holeCenterLocal(1) = g_holePtY: holeCenterLocal(2) = g_holePtZ
 
@@ -402,23 +407,21 @@ Public Sub PlaceFastenerAtHole()
 
     ' ── 添加紧固件实例 ────────────────────────────────────────────────────
     Dim products As Object
-    Set products = g_targetProduct.products
+    Set products = targetProduct.products
 
-    Dim pathArray As Variant
-    pathArray = Array(g_fastenerPath)
-    products.AddComponentsFromFiles pathArray, "All"
+    products.AddComponent g_fastenerDoc.Product
 
     ' 最后添加的实例即为新组件
     Dim newComp As Object
     Set newComp = products.Item(products.Count)
 
-    ' ── 通过 Move.Apply 设置位置（g_targetProduct 坐标系） ───────────────
-    ' Move.Apply 以 g_targetProduct（紧固件的父产品）为坐标系解释变换矩阵，
-    ' 与 SPA 在 g_targetProduct 为 In Work Object 时的测量坐标系一致：
-    '   0-2  = g_targetProduct 坐标系中局部 X 轴方向
-    '   3-5  = g_targetProduct 坐标系中局部 Y 轴方向
-    '   6-8  = g_targetProduct 坐标系中局部 Z 轴方向
-    '   9-11 = g_targetProduct 坐标系中原点位置
+    ' ── 通过 Move.Apply 设置位置（targetProduct 坐标系） ───────────────
+    ' Move.Apply 以 targetProduct（紧固件的父产品）为坐标系解释变换矩阵，
+    ' 与 SPA 在 targetProduct 为 In Work Object 时的测量坐标系一致：
+    '   0-2  = targetProduct 坐标系中局部 X 轴方向
+    '   3-5  = targetProduct 坐标系中局部 Y 轴方向
+    '   6-8  = targetProduct 坐标系中局部 Z 轴方向
+    '   9-11 = targetProduct 坐标系中原点位置
     Dim moveMatrix(11)
     moveMatrix(0) = R(0, 0)
     moveMatrix(1) = R(1, 0)
@@ -433,9 +436,9 @@ Public Sub PlaceFastenerAtHole()
     moveMatrix(10) = translation(1)
     moveMatrix(11) = translation(2)
 
-    ' ── 调试：发送给 Move.Apply 的矩阵（g_targetProduct 坐标系） ─────────
+    ' ── 调试：发送给 Move.Apply 的矩阵（targetProduct 坐标系） ─────────
     If DEBUG_MODE Then
-        MsgBox "[DEBUG] 最终定位矩阵（g_targetProduct 坐标系）" & Chr(10) & _
+        MsgBox "[DEBUG] 最终定位矩阵（targetProduct 坐标系）" & Chr(10) & _
                "R X轴 = (" & Round(R(0, 0), 4) & ", " & Round(R(1, 0), 4) & ", " & Round(R(2, 0), 4) & ")" & Chr(10) & _
                "R Y轴 = (" & Round(R(0, 1), 4) & ", " & Round(R(1, 1), 4) & ", " & Round(R(2, 1), 4) & ")" & Chr(10) & _
                "R Z轴 = (" & Round(R(0, 2), 4) & ", " & Round(R(1, 2), 4) & ", " & Round(R(2, 2), 4) & ")" & Chr(10) & _
@@ -541,7 +544,7 @@ End Function
 
 ' spa   : SPAWorkbench 对象
 ' ref   : 待测量的 Reference 对象
-' ctx   : 上下文 Product（传入 assemblyDoc.Product 以获取根产品坐标系中的测量值）
+' ctx   : 上下文 Product（传入 rootProduct.Product 以获取根产品坐标系中的测量值）
 ' measOut : 输出的 Measurable 对象（通过 ByRef 返回）
 Private Function TryGetMeasurableInContext(spa As Object, ref As Object, _
                                            ctx As Object, ByRef measOut As Object) As Boolean
