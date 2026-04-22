@@ -1,39 +1,39 @@
 Option Explicit
-' fastener_assembly - VBA Module
+' fastener_assembly - VBA 模块
 '
-' SETUP (two steps required in the VBA editor):
-'   1. Paste the entire content of this file into a MODULE
-'      (Tools > Macro > Macros... > Edit, or insert a new module).
-'   2. Insert a UserForm named "FlipForm":
-'      - In the VBA IDE, click Insert > UserForm.
-'      - Set the form's (Name) property to "FlipForm" and Caption to "方向控制".
-'      - Add a CommandButton: (Name) = "btnFlip", Caption = "翻转方向: 否",
-'        Width ~160, Height ~36.  Position it near the top of the form.
-'      - Paste the UserForm code from the bottom of this file into the form's
-'        code module (double-click the button or use View > Code).
-'   Run "CATMain" directly from the editor.
+' 使用前准备（需要在 VBA 编辑器中完成两步）：
+'   1. 将本文件的全部内容粘贴到一个 MODULE 中
+'      （Tools > Macro > Macros... > Edit，或插入新模块）。
+'   2. 插入名为 "FlipForm" 的 UserForm：
+'      - 在 VBA IDE 中，点击 Insert > UserForm。
+'      - 将窗体的 (Name) 属性设为 "FlipForm"，Caption 设为 "方向控制"。
+'      - 添加一个 CommandButton：(Name) = "btnFlip"，Caption = "翻转方向: 否"，
+'        Width ≈ 160，Height ≈ 36。
+'      - 将本文件末尾的 UserForm 代码粘贴到窗体的代码模块中
+'        （双击按钮或使用 View > Code）。
+'   直接在编辑器中运行 "CATMain"。
 '
-' The fastener CATPart file path is entered via InputBox at runtime.
-' Leave the InputBox blank to use the currently active document.
+' 紧固件 CATPart 文件路径通过运行时的 InputBox 输入。
+' 留空则使用当前活动文档。
 '
-' Workflow:
-'   1. Open / reference the fastener CATPart, read its Part Number.
-'   2. User selects ONE circular edge on the fastener (RectilinearTriDimFeatEdge).
-'      GetAxis gives the fastener axis; GetCenter gives the anchor point.
-'   3. Prompt user to switch to the CATProduct assembly.
-'   4. User selects the target product / sub-assembly in the tree.
-'   5. Assembly loop: select hole entry circular edge -> add fastener instance
-'      and position it.  Click "翻转方向" on the floating FlipForm at any time
-'      to toggle the insertion direction.  Repeat until ESC.
+' 操作流程：
+'   1. 打开或引用紧固件 CATPart，读取零件号。
+'   2. 用户选择紧固件上的一条圆形边（RectilinearTriDimFeatEdge），
+'      GetAxis 获取紧固件轴向，GetCenter 获取定位锚点。
+'   3. 提示用户切换到目标装配体文档窗口后点击确定；
+'      宏随即在当前活动文档（CATProduct）中等待选择目标产品/部件。
+'   4. 装配循环：选择孔口圆形边 -> 添加紧固件实例并定位。
+'      随时点击浮动面板上的"翻转方向"按钮切换插入方向，
+'      按 ESC 结束循环。
 '
 ' ----------------------------------------------------------------------------
 
-' Module-level flip flag; toggled by the FlipForm button without blocking.
+' 模块级翻转方向标志；由 FlipForm 按钮切换，不阻塞选择操作。
 Public g_flipDir As Boolean
 
 Public Sub CATMain()
 
-    ' ── 1. Resolve fastener path ──────────────────────────────────────────
+    ' ── 1. 解析紧固件路径 ─────────────────────────────────────────────────
     Dim fastenerPath As String
     fastenerPath = InputBox("输入紧固件 CATPart 文件完整路径" & Chr(10) & _
                             "（留空则使用当前活动文档）", "快速装配紧固件", "")
@@ -61,14 +61,14 @@ Public Sub CATMain()
     Dim fastenerPN As String
     fastenerPN = fastenerDoc.Product.PartNumber
 
-    ' ── 2. Select reference geometry on the fastener ──────────────────────
+    ' ── 2. 在紧固件上选择参考几何 ────────────────────────────────────────
     Dim sel As Object
     Set sel = CATIA.ActiveDocument.Selection
     sel.Clear
 
-    ' 2a. Select one circular edge on the fastener.
-    '     GetAxis  -> fastener axis direction (faAxis)
-    '     GetCenter -> anchor point that will coincide with the hole centre
+    ' 2a. 选择紧固件上的一条圆形边。
+    '     GetAxis   -> 紧固件轴线方向（faAxis）
+    '     GetCenter -> 与孔中心重合的锚点（faAnchorPt）
     Dim fastEdgeFilter As Variant
     fastEdgeFilter = Array("MonoDim")
     Dim status As String
@@ -86,76 +86,42 @@ Public Sub CATMain()
     Set fastEdgeRef = sel.Item(1).Reference
     Dim fastEdgeMeas As Object
     Set fastEdgeMeas = spa.GetMeasurable(fastEdgeRef)
-    
-    ' faAxis: axis direction as returned by GetAxis on the circular edge.
-    ' Use the FlipForm button at runtime to reverse if needed.
-    Dim faAxis(2) ' 实测为Double类型但是不能写为Double，否则GetAxis会失败，无法获取值。
+
+    ' faAxis：圆形边轴线方向（GetAxis 返回值）。
+    ' 运行时可通过 FlipForm 按钮翻转方向。
+    ' 注意：必须声明为 As Double 类型数组，Variant 类型会导致 GetAxis 写入失败（全为零）。
+    Dim faAxis(2) As Double
     fastEdgeMeas.GetAxis faAxis
-    
-    ' faAnchorPt: anchor point on the fastener (circle centre).
-    Dim faAnchorPt(2)
+
+    ' faAnchorPt：紧固件上的锚点（圆形边圆心）。
+    Dim faAnchorPt(2) As Double
     fastEdgeMeas.GetCenter faAnchorPt
 
     sel.Clear
 
-    ' ── DEBUG: fastener reference geometry ───────────────────────────────
+    ' ── 调试：紧固件参考几何 ──────────────────────────────────────────────
     MsgBox "[DEBUG] 紧固件参考几何" & Chr(10) & _
            "faAxis    = (" & Round(faAxis(0), 4) & ", " & Round(faAxis(1), 4) & ", " & Round(faAxis(2), 4) & ")" & Chr(10) & _
            "faAnchorPt= (" & Round(faAnchorPt(0), 4) & ", " & Round(faAnchorPt(1), 4) & ", " & Round(faAnchorPt(2), 4) & ")", _
            vbInformation, "快速装配紧固件 [DEBUG]"
 
-    ' ── 3. Find and activate the target assembly document ────────────────
-    ' Enumerate all open ProductDocuments so the user never needs to switch
-    ' documents manually (switching during SelectElement2 cancels the prompt).
-    Dim assemblyDoc As Object
-    Dim aIdx As Integer, aCount As Integer, aNames As String
-    aCount = 0: aNames = ""
-    For aIdx = 1 To CATIA.Documents.count
-        If TypeName(CATIA.Documents.Item(aIdx)) = "ProductDocument" Then
-            aCount = aCount + 1
-            aNames = aNames & aCount & ". " & CATIA.Documents.Item(aIdx).Name & Chr(10)
-            Set assemblyDoc = CATIA.Documents.Item(aIdx)
-        End If
-    Next aIdx
+    ' ── 3. 用户切换到装配体文档后直接选择目标产品 ────────────────────────
+    ' 不再枚举所有已打开的 ProductDocument，而是提示用户切换到目标装配体
+    ' 窗口后点击确定，宏在新的活动文档中继续运行，全程不中断。
+    MsgBox "请切换到目标装配体（CATProduct）文档窗口，然后点击【确定】继续。", _
+           vbInformation, "快速装配紧固件"
 
-    If aCount = 0 Then
-        MsgBox "未找到任何已打开的 CATProduct 装配体文档。" & Chr(10) & _
-               "请先打开装配体，再运行本宏。", vbCritical, "快速装配紧固件"
+    If TypeName(CATIA.ActiveDocument) <> "ProductDocument" Then
+        MsgBox "当前活动文档不是 CATProduct。" & Chr(10) & _
+               "请重新运行宏，在提示时切换到正确的装配体文档后再点击确定。", _
+               vbExclamation, "快速装配紧固件"
         Exit Sub
-    ElseIf aCount > 1 Then
-        Dim aChoice As String
-        aChoice = InputBox("检测到多个装配体文档，请输入目标装配体的编号：" & _
-                           Chr(10) & Chr(10) & aNames, "快速装配紧固件", "1")
-        If aChoice = "" Then
-            MsgBox "已取消。", vbInformation, "快速装配紧固件"
-            Exit Sub
-        End If
-        If Not IsNumeric(aChoice) Then
-            MsgBox "输入无效，请重新运行宏。", vbExclamation, "快速装配紧固件"
-            Exit Sub
-        End If
-        Dim pickN As Integer
-        pickN = CInt(aChoice)
-        If pickN < 1 Or pickN > aCount Then
-            MsgBox "编号超出范围，请重新运行宏。", vbExclamation, "快速装配紧固件"
-            Exit Sub
-        End If
-        Dim bIdx As Integer, bCnt As Integer
-        bCnt = 0
-        For bIdx = 1 To CATIA.Documents.count
-            If TypeName(CATIA.Documents.Item(bIdx)) = "ProductDocument" Then
-                bCnt = bCnt + 1
-                If bCnt = pickN Then
-                    Set assemblyDoc = CATIA.Documents.Item(bIdx)
-                    Exit For
-                End If
-            End If
-        Next bIdx
     End If
 
-    assemblyDoc.Activate
+    Dim assemblyDoc As Object
+    Set assemblyDoc = CATIA.ActiveDocument
 
-    ' ── 4. User selects the target product in the assembly tree ──────────
+    ' ── 4. 在装配体结构树中选择目标产品 ──────────────────────────────────
     Set sel = assemblyDoc.Selection
     sel.Clear
 
@@ -174,25 +140,25 @@ Public Sub CATMain()
     targetPN = targetProduct.PartNumber
     sel.Clear
 
-    ' ── Compute absolute transform of the target product ─────────────────
-    ' Measurements from SPAWorkbench are in root-assembly coordinates.
-    ' Position.SetComponents is relative to the parent product.
-    ' We need the inverse of the target's absolute transform to convert.
+    ' ── 计算目标产品的绝对变换矩阵 ───────────────────────────────────────
+    ' SPAWorkbench 的测量结果以根装配坐标系为基准。
+    ' Position.SetComponents 使用父产品局部坐标系。
+    ' 需要目标产品绝对变换的逆矩阵进行坐标转换。
     Dim absR(2, 2) As Double
     Dim absT(2) As Double
     Call ComputeAbsoluteTransform(targetProduct, absR, absT)
 
-    ' ── DEBUG: absolute transform of target product ───────────────────────
+    ' ── 调试：目标产品绝对变换（absR / absT） ────────────────────────────
     MsgBox "[DEBUG] 目标产品绝对变换 (absR / absT)" & Chr(10) & _
-           "absR row0 = (" & Round(absR(0, 0), 4) & ", " & Round(absR(0, 1), 4) & ", " & Round(absR(0, 2), 4) & ")" & Chr(10) & _
-           "absR row1 = (" & Round(absR(1, 0), 4) & ", " & Round(absR(1, 1), 4) & ", " & Round(absR(1, 2), 4) & ")" & Chr(10) & _
-           "absR row2 = (" & Round(absR(2, 0), 4) & ", " & Round(absR(2, 1), 4) & ", " & Round(absR(2, 2), 4) & ")" & Chr(10) & _
+           "absR 第0行 = (" & Round(absR(0, 0), 4) & ", " & Round(absR(0, 1), 4) & ", " & Round(absR(0, 2), 4) & ")" & Chr(10) & _
+           "absR 第1行 = (" & Round(absR(1, 0), 4) & ", " & Round(absR(1, 1), 4) & ", " & Round(absR(1, 2), 4) & ")" & Chr(10) & _
+           "absR 第2行 = (" & Round(absR(2, 0), 4) & ", " & Round(absR(2, 1), 4) & ", " & Round(absR(2, 2), 4) & ")" & Chr(10) & _
            "absT      = (" & Round(absT(0), 4) & ", " & Round(absT(1), 4) & ", " & Round(absT(2), 4) & ")", _
            vbInformation, "快速装配紧固件 [DEBUG]"
 
-    ' ── 5. Assembly loop ─────────────────────────────────────────────────
-    ' Show the non-blocking flip-direction panel.  The user can click
-    ' "翻转方向" at any time; it sets g_flipDir without interrupting selection.
+    ' ── 5. 装配循环 ───────────────────────────────────────────────────────
+    ' 显示非阻塞翻转方向浮动面板。
+    ' 用户随时点击按钮即可切换 g_flipDir，不会中断孔边选择。
     g_flipDir = False
     FlipForm.Show vbModeless
 
@@ -200,7 +166,7 @@ Public Sub CATMain()
     count = 0
 
     Do
-        ' 5a. Select hole entry circular edge
+        ' 5a. 选择孔口入口圆形边
         Set sel = CATIA.ActiveDocument.Selection
         sel.Clear
 
@@ -217,26 +183,28 @@ Public Sub CATMain()
         Dim holeMeas As Object
         Set holeMeas = spa.GetMeasurable(holeRef)
 
-        Dim holeAxis(2)
+        ' 注意：必须声明为 As Double 类型，Variant 类型会导致 GetAxis 写入失败（全为零），
+        ' 进而使旋转矩阵退化，SetComponents 报 type mismatch。
+        Dim holeAxis(2) As Double
         holeMeas.GetAxis holeAxis
-        Dim holePt(2)
+        Dim holePt(2) As Double
         holeMeas.GetCenter holePt
 
         sel.Clear
 
-        ' ── DEBUG: hole geometry (assembly coords) ───────────────────────
+        ' ── 调试：孔的几何（装配坐标系） ─────────────────────────────────
         MsgBox "[DEBUG] 孔的几何（装配坐标）" & Chr(10) & _
                "holeAxis = (" & Round(holeAxis(0), 4) & ", " & Round(holeAxis(1), 4) & ", " & Round(holeAxis(2), 4) & ")" & Chr(10) & _
                "holePt   = (" & Round(holePt(0), 4) & ", " & Round(holePt(1), 4) & ", " & Round(holePt(2), 4) & ")", _
                vbInformation, "快速装配紧固件 [DEBUG]"
 
-        ' targetPt is the circle center — always exactly on the hole axis
+        ' targetPt：圆心即孔轴线上的精确点
         Dim targetPt(2) As Double
         targetPt(0) = holePt(0)
         targetPt(1) = holePt(1)
         targetPt(2) = holePt(2)
 
-        ' ta: insertion direction, optionally flipped by FlipForm button
+        ' ta：插入方向，可由 FlipForm 按钮翻转
         Dim ta(2) As Double
         If g_flipDir Then
             ta(0) = -holeAxis(0): ta(1) = -holeAxis(1): ta(2) = -holeAxis(2)
@@ -244,24 +212,24 @@ Public Sub CATMain()
             ta(0) = holeAxis(0): ta(1) = holeAxis(1): ta(2) = holeAxis(2)
         End If
 
-        ' ── DEBUG: target point ───────────────────────────────────────────
+        ' ── 调试：目标点 ──────────────────────────────────────────────────
         MsgBox "[DEBUG] 目标点（装配坐标）" & Chr(10) & _
                "targetPt = (" & Round(targetPt(0), 4) & ", " & Round(targetPt(1), 4) & ", " & Round(targetPt(2), 4) & ")" & Chr(10) & _
                "ta (目标轴向) = (" & Round(ta(0), 4) & ", " & Round(ta(1), 4) & ", " & Round(ta(2), 4) & ")", _
                vbInformation, "快速装配紧固件 [DEBUG]"
 
-        ' ── Compute rotation matrix  R : faAxis -> ta ─────────────────────
-        ' Build orthonormal frame F1 from faAxis
+        ' ── 计算旋转矩阵 R：使 faAxis 旋转到 ta ──────────────────────────
+        ' 以 faAxis 为 Z 轴构建正交坐标系 F1
         Dim f1x(2) As Double, f1y(2) As Double, f1z(2) As Double
         f1z(0) = faAxis(0): f1z(1) = faAxis(1): f1z(2) = faAxis(2)
         Call BuildFrame(f1z, f1x, f1y)
 
-        ' Build orthonormal frame F2 from ta
+        ' 以 ta 为 Z 轴构建正交坐标系 F2
         Dim f2x(2) As Double, f2y(2) As Double, f2z(2) As Double
         f2z(0) = ta(0): f2z(1) = ta(1): f2z(2) = ta(2)
         Call BuildFrame(f2z, f2x, f2y)
 
-        ' R = F2 * F1^T   (maps faAxis -> ta and preserves orthonormality)
+        ' R = F2 * F1^T（将 faAxis 映射到 ta，保持正交归一性）
         Dim R(2, 2) As Double
         Dim ri As Integer, rj As Integer
         For ri = 0 To 2
@@ -272,7 +240,7 @@ Public Sub CATMain()
             Next rj
         Next ri
 
-        ' ── Compute translation ───────────────────────────────────────────
+        ' ── 计算平移向量 ──────────────────────────────────────────────────
         ' R * faAnchorPt + T = targetPt   =>  T = targetPt - R * faAnchorPt
         Dim rfp(2) As Double
         rfp(0) = R(0, 0) * faAnchorPt(0) + R(0, 1) * faAnchorPt(1) + R(0, 2) * faAnchorPt(2)
@@ -284,7 +252,7 @@ Public Sub CATMain()
         Tvec(1) = targetPt(1) - rfp(1)
         Tvec(2) = targetPt(2) - rfp(2)
 
-        ' ── Convert from root-assembly coords to target-product-local ─────
+        ' ── 将根装配坐标转换为目标产品局部坐标 ───────────────────────────
         ' localR = absR^T * R ;  localT = absR^T * (Tvec - absT)
         Dim localR(2, 2) As Double
         Dim localT(2) As Double
@@ -308,7 +276,7 @@ Public Sub CATMain()
             Next lk
         Next li
 
-        ' ── Add fastener component ────────────────────────────────────────
+        ' ── 添加紧固件实例 ────────────────────────────────────────────────
         Dim products As Object
         Set products = targetProduct.products
 
@@ -316,16 +284,16 @@ Public Sub CATMain()
         pathArray = Array(fastenerPath)
         products.AddComponentsFromFiles pathArray, "All"
 
-        ' The newly added instance is the last item
+        ' 最后添加的实例即为新组件
         Dim newComp As Object
         Set newComp = products.Item(products.count)
 
-        ' ── Set position (relative to parent) ────────────────────────────
-        ' CATIA Position array layout:
-        '   0-2  = local X axis in parent coords
-        '   3-5  = local Y axis in parent coords
-        '   6-8  = local Z axis in parent coords
-        '   9-11 = origin in parent coords
+        ' ── 设置位置（相对父产品坐标系） ─────────────────────────────────
+        ' CATIA Position 数组布局：
+        '   0-2  = 局部 X 轴在父坐标系中的方向
+        '   3-5  = 局部 Y 轴在父坐标系中的方向
+        '   6-8  = 局部 Z 轴在父坐标系中的方向
+        '   9-11 = 原点在父坐标系中的位置
         Dim posMatrix(11) As Double
         posMatrix(0) = localR(0, 0)
         posMatrix(1) = localR(1, 0)
@@ -340,7 +308,7 @@ Public Sub CATMain()
         posMatrix(10) = localT(1)
         posMatrix(11) = localT(2)
 
-        ' ── DEBUG: final local matrix sent to SetComponents ──────────────
+        ' ── 调试：发送给 SetComponents 的最终局部矩阵 ────────────────────
         MsgBox "[DEBUG] 最终定位矩阵（相对父产品坐标）" & Chr(10) & _
                "localR X轴 = (" & Round(localR(0, 0), 4) & ", " & Round(localR(1, 0), 4) & ", " & Round(localR(2, 0), 4) & ")" & Chr(10) & _
                "localR Y轴 = (" & Round(localR(0, 1), 4) & ", " & Round(localR(1, 1), 4) & ", " & Round(localR(2, 1), 4) & ")" & Chr(10) & _
@@ -353,7 +321,7 @@ Public Sub CATMain()
         count = count + 1
         CATIA.StatusBar = "已装配 " & count & " 个 " & fastenerPN & " -> " & targetPN & _
                           IIf(g_flipDir, "  [方向已翻转]", "")
-        
+
     Loop
 
     Unload FlipForm
@@ -367,10 +335,10 @@ End Sub
 
 
 ' ============================================================================
-' Helper: Build an orthonormal frame {outX, outY, inZ} from a given Z axis.
+' 辅助函数：根据给定的 Z 轴构建正交坐标系 {outX, outY, inZ}。
 ' ============================================================================
 Private Sub BuildFrame(ByRef inZ() As Double, ByRef outX() As Double, ByRef outY() As Double)
-    ' Pick a reference vector not (anti-)parallel to inZ
+    ' 选取一个与 inZ 不（反）平行的参考向量
     Dim refV(2) As Double
     If Abs(inZ(0)) < 0.9 Then
         refV(0) = 1: refV(1) = 0: refV(2) = 0
@@ -378,14 +346,14 @@ Private Sub BuildFrame(ByRef inZ() As Double, ByRef outX() As Double, ByRef outY
         refV(0) = 0: refV(1) = 1: refV(2) = 0
     End If
 
-    ' outX = cross(inZ, refV), then normalise
+    ' outX = cross(inZ, refV)，然后归一化
     outX(0) = inZ(1) * refV(2) - inZ(2) * refV(1)
     outX(1) = inZ(2) * refV(0) - inZ(0) * refV(2)
     outX(2) = inZ(0) * refV(1) - inZ(1) * refV(0)
     Dim xLen As Double
     xLen = Sqr(outX(0) * outX(0) + outX(1) * outX(1) + outX(2) * outX(2))
     If xLen < 0.000000000001 Then
-        ' inZ was a zero vector; return a safe default frame to avoid crash
+        ' inZ 为零向量；返回安全默认坐标系以防止崩溃
         outX(0) = 1: outX(1) = 0: outX(2) = 0
         outY(0) = 0: outY(1) = 1: outY(2) = 0
         Exit Sub
@@ -402,8 +370,8 @@ End Sub
 
 
 ' ============================================================================
-' Helper: Return the [row]-th element of column [col] of frame {vx, vy, vz}.
-' col 0 = vx, col 1 = vy, col 2 = vz
+' 辅助函数：返回坐标系 {vx, vy, vz} 第 [col] 列的第 [row] 行分量。
+' col 0 = vx，col 1 = vy，col 2 = vz
 ' ============================================================================
 Private Function FrameCol(ByVal row As Integer, ByVal col As Integer, _
                           ByRef vx() As Double, ByRef vy() As Double, _
@@ -417,17 +385,17 @@ End Function
 
 
 ' ============================================================================
-' Helper: Compute the absolute transform of prod in the root assembly.
+' 辅助函数：计算产品 prod 在根装配坐标系中的绝对变换矩阵。
 '
-' Walks up the product tree, chaining Position.GetComponents matrices until
-' the root product is reached.
+' 沿产品树向上逐级链接 Position.GetComponents 矩阵，
+' 直到到达根产品。
 '
-' On return:  point_in_root = outR * point_in_local + outT
+' 返回后：根坐标系中的点 = outR * 局部坐标中的点 + outT
 ' ============================================================================
 Private Sub ComputeAbsoluteTransform(ByVal prod As Object, _
                                      ByRef outR() As Double, _
                                      ByRef outT() As Double)
-    ' Start with identity
+    ' 初始化为单位矩阵
     outR(0, 0) = 1: outR(0, 1) = 0: outR(0, 2) = 0
     outR(1, 0) = 0: outR(1, 1) = 1: outR(1, 2) = 0
     outR(2, 0) = 0: outR(2, 1) = 0: outR(2, 2) = 1
@@ -439,22 +407,22 @@ Private Sub ComputeAbsoluteTransform(ByVal prod As Object, _
     Dim current As Object
     Set current = prod
 
-    ' Walk up: current -> parent -> ... -> root
+    ' 向上遍历：current -> parent -> ... -> root
     On Error Resume Next
     Do
-        ' Stop when we have reached the root product.
+        ' 当到达根产品时停止
         If current.PartNumber = rootProd.PartNumber Then
             Dim testName As String
             testName = ""
             testName = current.Parent.Parent.PartNumber
             If Err.Number <> 0 Then
                 Err.Clear
-                Exit Do   ' current.Parent.Parent failed => we are at root
+                Exit Do   ' current.Parent.Parent 失败 => 已到达根节点
             End If
             If current.Name = rootProd.Name Then Exit Do
         End If
 
-        ' Read position of current relative to its parent
+        ' 读取 current 相对其父产品的位置
         Dim pos(11) As Double
         current.Position.GetComponents pos
         If Err.Number <> 0 Then
@@ -462,7 +430,7 @@ Private Sub ComputeAbsoluteTransform(ByVal prod As Object, _
             Exit Do
         End If
 
-        ' Extract rotation Rl and translation Tl from pos
+        ' 从 pos 中提取旋转矩阵 Rl 和平移向量 Tl
         Dim Rl(2, 2) As Double
         Rl(0, 0) = pos(0):  Rl(1, 0) = pos(1):  Rl(2, 0) = pos(2)
         Rl(0, 1) = pos(3):  Rl(1, 1) = pos(4):  Rl(2, 1) = pos(5)
@@ -470,7 +438,7 @@ Private Sub ComputeAbsoluteTransform(ByVal prod As Object, _
         Dim Tl(2) As Double
         Tl(0) = pos(9): Tl(1) = pos(10): Tl(2) = pos(11)
 
-        ' Chain:  newR = Rl * outR ,  newT = Rl * outT + Tl
+        ' 链式累积：newR = Rl * outR，newT = Rl * outT + Tl
         Dim newR(2, 2) As Double
         Dim newT(2) As Double
         Dim ci As Integer, cj As Integer, ck As Integer
@@ -489,7 +457,7 @@ Private Sub ComputeAbsoluteTransform(ByVal prod As Object, _
             Next ck
         Next ci
 
-        ' Overwrite accumulator
+        ' 覆盖累加器
         For ci = 0 To 2
             For cj = 0 To 2
                 outR(ci, cj) = newR(ci, cj)
@@ -497,7 +465,7 @@ Private Sub ComputeAbsoluteTransform(ByVal prod As Object, _
             outT(ci) = newT(ci)
         Next ci
 
-        ' Move up: Product -> Products collection -> parent Product
+        ' 向上移动：Product -> Products 集合 -> 父 Product
         Set current = current.Parent.Parent
         If Err.Number <> 0 Then
             Err.Clear
@@ -510,22 +478,23 @@ End Sub
 
 
 ' ============================================================================
-' ── FlipForm UserForm code ──────────────────────────────────────────────────
+' ── FlipForm UserForm 代码 ──────────────────────────────────────────────────
 '
-' SETUP: In the VBA IDE, Insert > UserForm.  Set (Name) = "FlipForm" and
-'        Caption = "方向控制".  Add ONE CommandButton to the form:
-'          (Name)   = "btnFlip"
-'          Caption  = "翻转方向: 否"
-'          Width    = 160  Height = 36  (adjust to taste)
-' Then open the form's code module and paste the code below.
+' 创建步骤：在 VBA IDE 中，Insert > UserForm。
+'   - 将窗体 (Name) 设为 "FlipForm"，Caption 设为 "方向控制"。
+'   - 添加一个 CommandButton：
+'       (Name)   = "btnFlip"
+'       Caption  = "翻转方向: 否"
+'       Width    = 160  Height = 36（可按需调整）
+'   - 打开窗体的代码模块，将下方代码粘贴进去。
 ' ============================================================================
 '
-' ---- Paste the following into FlipForm's code module (NOT this module) ----
+' ---- 将以下代码粘贴到 FlipForm 的代码模块中（不是本模块）----
 '
 '  Private Sub btnFlip_Click()
 '      g_flipDir = Not g_flipDir
 '      If g_flipDir Then
-'          btnFlip.Caption = "翻转方向: 是 ?"
+'          btnFlip.Caption = "翻转方向: 是 ✓"
 '      Else
 '          btnFlip.Caption = "翻转方向: 否"
 '      End If
