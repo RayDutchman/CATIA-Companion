@@ -475,22 +475,13 @@ End Sub
 ' ============================================================================
 Public Sub MoveLastFastener()
 
-    ' ── 第一步：将已有组件重置到 targetProduct 原点（Identity） ───────────
-    ' Move.Apply 在某些 CATIA 版本中为相对变换，先置位到原点可确保后续
-    ' 矩阵以绝对方式生效，等效于 PlaceFastenerAtHole 对新建组件的处理。
+    ' Move.Apply 是相对（增量）变换，无法通过 Apply(identity) 重置到原点。
+    ' 正确做法：用 Position.SetComponents 直接以绝对方式设置组件在
+    ' targetProduct 坐标系中的位置，与 PlaceFastenerAtHole 的坐标系一致。
     Dim lastComp As Object
     Set lastComp = g_lastProducts.Item(g_lastCompIdx)
-    Dim moveObjReset As Object
-    Set moveObjReset = lastComp.Move
-    Set moveObjReset = moveObjReset.MovableObject
-    Dim identityMatrix(11)
-    identityMatrix(0) = 1: identityMatrix(1) = 0: identityMatrix(2) = 0
-    identityMatrix(3) = 0: identityMatrix(4) = 1: identityMatrix(5) = 0
-    identityMatrix(6) = 0: identityMatrix(7) = 0: identityMatrix(8) = 1
-    identityMatrix(9) = 0: identityMatrix(10) = 0: identityMatrix(11) = 0
-    moveObjReset.Apply identityMatrix
 
-    ' ── 第二步：使用与 PlaceFastenerAtHole 相同的逻辑重新定位 ────────────
+    ' ── 使用与 PlaceFastenerAtHole 相同的逻辑重新定位 ──────────────────
     ' insertionDir：根据当前 g_flipDir 决定方向
     Dim insertionDir(2) As Double
     If g_flipDir Then
@@ -532,7 +523,9 @@ Public Sub MoveLastFastener()
     translation(1) = holeCenterLocal(1) - rotatedAnchor(1)
     translation(2) = holeCenterLocal(2) - rotatedAnchor(2)
 
-    Dim moveMatrix(11)
+    ' Position.SetComponents 需要类型化的 Double 数组（Variant 数组会被静默忽略）。
+    ' 矩阵含义与 Move.Apply 相同：0-2 X轴，3-5 Y轴，6-8 Z轴，9-11 平移。
+    Dim moveMatrix(11) As Double
     moveMatrix(0) = R(0, 0): moveMatrix(1) = R(1, 0): moveMatrix(2) = R(2, 0)
     moveMatrix(3) = R(0, 1): moveMatrix(4) = R(1, 1): moveMatrix(5) = R(2, 1)
     moveMatrix(6) = R(0, 2): moveMatrix(7) = R(1, 2): moveMatrix(8) = R(2, 2)
@@ -540,11 +533,9 @@ Public Sub MoveLastFastener()
     moveMatrix(10) = translation(1)
     moveMatrix(11) = translation(2)
 
-    ' 对已有组件（已在步骤一重置到原点）应用最终定位矩阵
-    Dim moveObj As Object
-    Set moveObj = lastComp.Move
-    Set moveObj = moveObj.MovableObject
-    moveObj.Apply moveMatrix
+    ' 使用 Position.SetComponents 直接设置绝对位置（targetProduct 坐标系），
+    ' 避免 Move.Apply（相对变换）在组件已有非零位置时产生叠加误差。
+    lastComp.Position.SetComponents moveMatrix
 
 End Sub
 
