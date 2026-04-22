@@ -22,13 +22,39 @@ Option Explicit
 '   3. 提示用户切换到目标装配体文档窗口；通过 CATIA 状态栏提示，
 '      用户可自由切换文档窗口并在产品结构树中直接选择目标产品/部件。
 '   4. 装配循环：选择孔口圆形边 -> 添加紧固件实例并定位。
-'      随时点击浮动面板上的"翻转方向"按钮切换插入方向，
+'      装配完成后可点击浮动面板上的"翻转方向"按钮撤销并重装（方向相反）。
+'      翻转状态跨次保留：下一个紧固件默认使用上一个件的翻转状态。
 '      按 ESC 结束循环。
 '
 ' ----------------------------------------------------------------------------
 
-' 模块级翻转方向标志；由 FlipForm 按钮切换，不阻塞选择操作。
+' 翻转方向标志；由 FlipForm 按钮切换，跨次运行保持状态：
+' 上一个紧固件的翻转状态即为下一个的默认状态。
 Public g_flipDir As Boolean
+
+' 紧固件参考几何（由 CATMain 读取一次，PlaceFastenerAtHole 使用）
+Public g_faAxis(2)          ' 不声明 As Double，避免某些 CATIA 版本 GetAxis 无法写入
+Public g_faAnchorPt(2)
+
+' 目标产品在根装配坐标系中的绝对变换（CATMain 计算一次）
+Public g_absR(2, 2) As Double
+Public g_absT(2) As Double
+
+' 最近一次孔的几何（选孔后更新，供翻转重装使用）
+Public g_holeAxisX As Double, g_holeAxisY As Double, g_holeAxisZ As Double
+Public g_holePtX   As Double, g_holePtY   As Double, g_holePtZ   As Double
+
+' 最近装配件的删除信息（翻转重装时使用）
+Public g_hasLastComp  As Boolean   ' True = 当前可对最近件执行翻转重装
+Public g_lastProducts As Object    ' 最近装配件所属的 Products 集合
+Public g_lastCompIdx  As Long      ' 最近装配件在集合中的索引（1-based）
+
+' 装配循环共享状态（供 PlaceFastenerAtHole 及状态栏更新使用）
+Public g_targetProduct As Object
+Public g_fastenerPath  As String
+Public g_fastenerPN    As String
+Public g_targetPN      As String
+Public g_count         As Long
 
 Public Sub CATMain()
 
@@ -87,7 +113,6 @@ Public Sub CATMain()
     Set fastEdgeMeas = spa.GetMeasurable(fastEdgeRef)
 
     ' faAxis：圆形边轴线方向（GetAxis 返回值）。
-    ' 运行时可通过 FlipForm 按钮翻转方向。
     ' 注意：此处不声明 As Double，因为实测某些 CATIA 版本中 As Double 会导致
     ' GetAxis 无法写入数组；Variant 固定大小数组可正常接收值。
     ' GetAxis 不保证返回单位向量，BuildFrame 会在内部归一化。
@@ -99,6 +124,10 @@ Public Sub CATMain()
     fastEdgeMeas.GetCenter faAnchorPt
 
     sel.Clear
+
+    ' 写入模块级变量，供 PlaceFastenerAtHole 和翻转重装使用
+    g_faAxis(0) = faAxis(0): g_faAxis(1) = faAxis(1): g_faAxis(2) = faAxis(2)
+    g_faAnchorPt(0) = faAnchorPt(0): g_faAnchorPt(1) = faAnchorPt(1): g_faAnchorPt(2) = faAnchorPt(2)
 
     ' ── 调试：紧固件参考几何 ──────────────────────────────────────────────
     MsgBox "[DEBUG] 紧固件参考几何" & Chr(10) & _
@@ -133,56 +162,58 @@ Public Sub CATMain()
     Set assemblyDoc = CATIA.ActiveDocument
     Set sel = assemblyDoc.Selection
 
-    Dim targetProduct As Object
-    Set targetProduct = sel.Item(1).Value
-    Dim targetPN As String
-    targetPN = targetProduct.PartNumber
+    Set g_targetProduct = sel.Item(1).Value
+    g_targetPN = g_targetProduct.PartNumber
     sel.Clear
+
+    g_fastenerPath = fastenerPath
+    g_fastenerPN   = fastenerPN
 
     ' ── 计算目标产品的绝对变换矩阵 ───────────────────────────────────────
     ' SPAWorkbench 的测量结果以根装配坐标系为基准。
     ' Position.SetComponents 使用父产品局部坐标系。
     ' 需要目标产品绝对变换的逆矩阵进行坐标转换。
-    Dim absR(2, 2) As Double
-    Dim absT(2) As Double
-    Call ComputeAbsoluteTransform(targetProduct, absR, absT)
+    Call ComputeAbsoluteTransform(g_targetProduct, g_absR, g_absT)
 
-    ' ── 调试：目标产品绝对变换（absR / absT） ────────────────────────────
+    ' ── 调试：目标产品绝对变换（g_absR / g_absT） ────────────────────────
     MsgBox "[DEBUG] 目标产品绝对变换 (absR / absT)" & Chr(10) & _
-           "absR 第0行 = (" & Round(absR(0, 0), 4) & ", " & Round(absR(0, 1), 4) & ", " & Round(absR(0, 2), 4) & ")" & Chr(10) & _
-           "absR 第1行 = (" & Round(absR(1, 0), 4) & ", " & Round(absR(1, 1), 4) & ", " & Round(absR(1, 2), 4) & ")" & Chr(10) & _
-           "absR 第2行 = (" & Round(absR(2, 0), 4) & ", " & Round(absR(2, 1), 4) & ", " & Round(absR(2, 2), 4) & ")" & Chr(10) & _
-           "absT      = (" & Round(absT(0), 4) & ", " & Round(absT(1), 4) & ", " & Round(absT(2), 4) & ")", _
+           "absR 第0行 = (" & Round(g_absR(0, 0), 4) & ", " & Round(g_absR(0, 1), 4) & ", " & Round(g_absR(0, 2), 4) & ")" & Chr(10) & _
+           "absR 第1行 = (" & Round(g_absR(1, 0), 4) & ", " & Round(g_absR(1, 1), 4) & ", " & Round(g_absR(1, 2), 4) & ")" & Chr(10) & _
+           "absR 第2行 = (" & Round(g_absR(2, 0), 4) & ", " & Round(g_absR(2, 1), 4) & ", " & Round(g_absR(2, 2), 4) & ")" & Chr(10) & _
+           "absT      = (" & Round(g_absT(0), 4) & ", " & Round(g_absT(1), 4) & ", " & Round(g_absT(2), 4) & ")", _
            vbInformation, "快速装配紧固件 [DEBUG]"
 
     ' ── 5. 装配循环 ───────────────────────────────────────────────────────
-    ' 显示非阻塞翻转方向浮动面板。
-    ' 用户随时点击按钮即可切换 g_flipDir，不会中断孔边选择。
-    g_flipDir = False
+    ' g_flipDir 不重置：上次装配的翻转状态即为本次默认值（跨次保留）。
+    ' 更新 FlipForm 按钮 caption 以反映当前 g_flipDir 状态。
+    g_count = 0
+    g_hasLastComp = False
     FlipForm.Show vbModeless
+    FlipForm.btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是 ✓", "翻转方向: 否")
 
-    Dim count As Long
-    count = 0
+    Dim holeFilter As Variant
+    holeFilter = Array("MonoDim")
 
     Do
         ' 5a. 选择孔口入口圆形边
+        '     选择新孔前锁定翻转重装（不能再撤销上一个已装配件）
+        g_hasLastComp = False
         Set sel = CATIA.ActiveDocument.Selection
         sel.Clear
 
-        Dim holeFilter As Variant
-        holeFilter = Array("MonoDim")
         status = sel.SelectElement2(holeFilter, _
-            "选择孔的入口圆形边 (" & fastenerPN & " -> " & targetPN & _
-            "  已装配:" & count & ")  [ESC终止]", False)
+            "选择孔的入口圆形边 (" & g_fastenerPN & " -> " & g_targetPN & _
+            "  已装配:" & g_count & "  翻转:" & IIf(g_flipDir, "是✓", "否") & ")  [ESC终止]", False)
         If status <> "Normal" Then Exit Do
 
-        Set spa = CATIA.ActiveDocument.GetWorkbench("SPAWorkbench")
+        Dim spa2 As Object
+        Set spa2 = CATIA.ActiveDocument.GetWorkbench("SPAWorkbench")
         Dim holeRef As Object
         Set holeRef = sel.Item(1).Reference
         Dim holeMeas As Object
-        Set holeMeas = spa.GetMeasurable(holeRef)
+        Set holeMeas = spa2.GetMeasurable(holeRef)
 
-        ' 与 faAxis 相同，不声明 As Double，避免 GetAxis 在某些 CATIA 版本中无法写入。
+        ' 与 g_faAxis 相同，不声明 As Double，避免 GetAxis 在某些 CATIA 版本中无法写入。
         ' BuildFrame 会在内部对传入向量进行归一化处理。
         Dim holeAxis(2)
         holeMeas.GetAxis holeAxis
@@ -191,144 +222,170 @@ Public Sub CATMain()
 
         sel.Clear
 
+        ' 写入模块级变量供 PlaceFastenerAtHole（含翻转重装路径）使用
+        g_holeAxisX = holeAxis(0): g_holeAxisY = holeAxis(1): g_holeAxisZ = holeAxis(2)
+        g_holePtX   = holePt(0):   g_holePtY   = holePt(1):   g_holePtZ   = holePt(2)
+
         ' ── 调试：孔的几何（装配坐标系） ─────────────────────────────────
         MsgBox "[DEBUG] 孔的几何（装配坐标）" & Chr(10) & _
                "holeAxis = (" & Round(holeAxis(0), 4) & ", " & Round(holeAxis(1), 4) & ", " & Round(holeAxis(2), 4) & ")" & Chr(10) & _
                "holePt   = (" & Round(holePt(0), 4) & ", " & Round(holePt(1), 4) & ", " & Round(holePt(2), 4) & ")", _
                vbInformation, "快速装配紧固件 [DEBUG]"
 
-        ' targetPt：圆心即孔轴线上的精确点
-        Dim targetPt(2) As Double
-        targetPt(0) = holePt(0)
-        targetPt(1) = holePt(1)
-        targetPt(2) = holePt(2)
+        ' 5b. 装配并定位紧固件
+        Call PlaceFastenerAtHole()
 
-        ' ta：插入方向，可由 FlipForm 按钮翻转
-        Dim ta(2) As Double
-        If g_flipDir Then
-            ta(0) = -holeAxis(0): ta(1) = -holeAxis(1): ta(2) = -holeAxis(2)
-        Else
-            ta(0) = holeAxis(0): ta(1) = holeAxis(1): ta(2) = holeAxis(2)
-        End If
-
-        ' ── 调试：目标点 ──────────────────────────────────────────────────
-        MsgBox "[DEBUG] 目标点（装配坐标）" & Chr(10) & _
-               "targetPt = (" & Round(targetPt(0), 4) & ", " & Round(targetPt(1), 4) & ", " & Round(targetPt(2), 4) & ")" & Chr(10) & _
-               "ta (目标轴向) = (" & Round(ta(0), 4) & ", " & Round(ta(1), 4) & ", " & Round(ta(2), 4) & ")", _
-               vbInformation, "快速装配紧固件 [DEBUG]"
-
-        ' ── 计算旋转矩阵 R：使 faAxis 旋转到 ta ──────────────────────────
-        ' 以 faAxis 为 Z 轴构建正交坐标系 F1
-        Dim f1x(2) As Double, f1y(2) As Double, f1z(2) As Double
-        f1z(0) = faAxis(0): f1z(1) = faAxis(1): f1z(2) = faAxis(2)
-        Call BuildFrame(f1z, f1x, f1y)
-
-        ' 以 ta 为 Z 轴构建正交坐标系 F2
-        Dim f2x(2) As Double, f2y(2) As Double, f2z(2) As Double
-        f2z(0) = ta(0): f2z(1) = ta(1): f2z(2) = ta(2)
-        Call BuildFrame(f2z, f2x, f2y)
-
-        ' R = F2 * F1^T（将 faAxis 映射到 ta，保持正交归一性）
-        Dim R(2, 2) As Double
-        Dim ri As Integer, rj As Integer
-        For ri = 0 To 2
-            For rj = 0 To 2
-                R(ri, rj) = FrameCol(ri, 0, f2x, f2y, f2z) * FrameCol(rj, 0, f1x, f1y, f1z) _
-                          + FrameCol(ri, 1, f2x, f2y, f2z) * FrameCol(rj, 1, f1x, f1y, f1z) _
-                          + FrameCol(ri, 2, f2x, f2y, f2z) * FrameCol(rj, 2, f1x, f1y, f1z)
-            Next rj
-        Next ri
-
-        ' ── 计算平移向量 ──────────────────────────────────────────────────
-        ' R * faAnchorPt + T = targetPt   =>  T = targetPt - R * faAnchorPt
-        Dim rfp(2) As Double
-        rfp(0) = R(0, 0) * faAnchorPt(0) + R(0, 1) * faAnchorPt(1) + R(0, 2) * faAnchorPt(2)
-        rfp(1) = R(1, 0) * faAnchorPt(0) + R(1, 1) * faAnchorPt(1) + R(1, 2) * faAnchorPt(2)
-        rfp(2) = R(2, 0) * faAnchorPt(0) + R(2, 1) * faAnchorPt(1) + R(2, 2) * faAnchorPt(2)
-
-        Dim Tvec(2) As Double
-        Tvec(0) = targetPt(0) - rfp(0)
-        Tvec(1) = targetPt(1) - rfp(1)
-        Tvec(2) = targetPt(2) - rfp(2)
-
-        ' ── 将根装配坐标转换为目标产品局部坐标 ───────────────────────────
-        ' localR = absR^T * R ;  localT = absR^T * (Tvec - absT)
-        Dim localR(2, 2) As Double
-        Dim localT(2) As Double
-        Dim li As Integer, lj As Integer, lk As Integer
-        For li = 0 To 2
-            For lj = 0 To 2
-                localR(li, lj) = 0
-                For lk = 0 To 2
-                    localR(li, lj) = localR(li, lj) + absR(lk, li) * R(lk, lj)
-                Next lk
-            Next lj
-        Next li
-        Dim diffT(2) As Double
-        diffT(0) = Tvec(0) - absT(0)
-        diffT(1) = Tvec(1) - absT(1)
-        diffT(2) = Tvec(2) - absT(2)
-        For li = 0 To 2
-            localT(li) = 0
-            For lk = 0 To 2
-                localT(li) = localT(li) + absR(lk, li) * diffT(lk)
-            Next lk
-        Next li
-
-        ' ── 添加紧固件实例 ────────────────────────────────────────────────
-        Dim products As Object
-        Set products = targetProduct.products
-
-        Dim pathArray As Variant
-        pathArray = Array(fastenerPath)
-        products.AddComponentsFromFiles pathArray, "All"
-
-        ' 最后添加的实例即为新组件
-        Dim newComp As Object
-        Set newComp = products.Item(products.count)
-
-        ' ── 设置位置（相对父产品坐标系） ─────────────────────────────────
-        ' CATIA Position 数组布局：
-        '   0-2  = 局部 X 轴在父坐标系中的方向
-        '   3-5  = 局部 Y 轴在父坐标系中的方向
-        '   6-8  = 局部 Z 轴在父坐标系中的方向
-        '   9-11 = 原点在父坐标系中的位置
-        Dim posMatrix(11) As Double
-        posMatrix(0) = localR(0, 0)
-        posMatrix(1) = localR(1, 0)
-        posMatrix(2) = localR(2, 0)
-        posMatrix(3) = localR(0, 1)
-        posMatrix(4) = localR(1, 1)
-        posMatrix(5) = localR(2, 1)
-        posMatrix(6) = localR(0, 2)
-        posMatrix(7) = localR(1, 2)
-        posMatrix(8) = localR(2, 2)
-        posMatrix(9) = localT(0)
-        posMatrix(10) = localT(1)
-        posMatrix(11) = localT(2)
-
-        ' ── 调试：发送给 SetComponents 的最终局部矩阵 ────────────────────
-        MsgBox "[DEBUG] 最终定位矩阵（相对父产品坐标）" & Chr(10) & _
-               "localR X轴 = (" & Round(localR(0, 0), 4) & ", " & Round(localR(1, 0), 4) & ", " & Round(localR(2, 0), 4) & ")" & Chr(10) & _
-               "localR Y轴 = (" & Round(localR(0, 1), 4) & ", " & Round(localR(1, 1), 4) & ", " & Round(localR(2, 1), 4) & ")" & Chr(10) & _
-               "localR Z轴 = (" & Round(localR(0, 2), 4) & ", " & Round(localR(1, 2), 4) & ", " & Round(localR(2, 2), 4) & ")" & Chr(10) & _
-               "localT 原点= (" & Round(localT(0), 4) & ", " & Round(localT(1), 4) & ", " & Round(localT(2), 4) & ")", _
-               vbInformation, "快速装配紧固件 [DEBUG]"
-
-        newComp.Position.SetComponents posMatrix
-
-        count = count + 1
-        CATIA.StatusBar = "已装配 " & count & " 个 " & fastenerPN & " -> " & targetPN & _
-                          IIf(g_flipDir, "  [方向已翻转]", "")
+        ' 装配完成后允许翻转重装
+        g_hasLastComp = True
+        CATIA.StatusBar = "已装配 " & g_count & " 个 " & g_fastenerPN & " -> " & g_targetPN & _
+                          "  [翻转:" & IIf(g_flipDir, "是✓", "否") & "]" & _
+                          "  可点击翻转按钮修改方向，选下一孔继续，ESC结束"
 
     Loop
 
+    g_hasLastComp = False
     Unload FlipForm
 
-    CATIA.StatusBar = "装配完成！共装配 " & count & " 个 " & fastenerPN
+    CATIA.StatusBar = "装配完成！共装配 " & g_count & " 个 " & g_fastenerPN
     MsgBox "装配完成！" & Chr(10) & _
-           "共装配 " & count & " 个 " & fastenerPN & " 到 " & targetPN & "。", _
+           "共装配 " & g_count & " 个 " & g_fastenerPN & " 到 " & g_targetPN & "。", _
            vbInformation, "快速装配紧固件"
+
+End Sub
+
+
+' ============================================================================
+' PlaceFastenerAtHole：根据模块级变量中存储的孔几何和紧固件参数，
+' 计算变换矩阵并添加一个紧固件实例。
+'
+' 读取：g_flipDir, g_faAxis, g_faAnchorPt, g_absR, g_absT,
+'        g_holeAxisX/Y/Z, g_holePtX/Y/Z, g_targetProduct, g_fastenerPath
+' 写入：g_count（+1），g_lastProducts，g_lastCompIdx
+' ============================================================================
+Public Sub PlaceFastenerAtHole()
+
+    ' ta：插入方向，根据 g_flipDir 决定正向或反向
+    Dim ta(2) As Double
+    If g_flipDir Then
+        ta(0) = -g_holeAxisX: ta(1) = -g_holeAxisY: ta(2) = -g_holeAxisZ
+    Else
+        ta(0) = g_holeAxisX: ta(1) = g_holeAxisY: ta(2) = g_holeAxisZ
+    End If
+
+    ' targetPt：孔圆心
+    Dim targetPt(2) As Double
+    targetPt(0) = g_holePtX: targetPt(1) = g_holePtY: targetPt(2) = g_holePtZ
+
+    ' ── 调试：目标点 ──────────────────────────────────────────────────────
+    MsgBox "[DEBUG] 目标点（装配坐标）" & Chr(10) & _
+           "targetPt = (" & Round(targetPt(0), 4) & ", " & Round(targetPt(1), 4) & ", " & Round(targetPt(2), 4) & ")" & Chr(10) & _
+           "ta (目标轴向) = (" & Round(ta(0), 4) & ", " & Round(ta(1), 4) & ", " & Round(ta(2), 4) & ")", _
+           vbInformation, "快速装配紧固件 [DEBUG]"
+
+    ' ── 计算旋转矩阵 R：使 g_faAxis 旋转到 ta ────────────────────────────
+    ' 以 g_faAxis 为 Z 轴构建正交坐标系 F1
+    Dim f1x(2) As Double, f1y(2) As Double, f1z(2) As Double
+    f1z(0) = g_faAxis(0): f1z(1) = g_faAxis(1): f1z(2) = g_faAxis(2)
+    Call BuildFrame(f1z, f1x, f1y)
+
+    ' 以 ta 为 Z 轴构建正交坐标系 F2
+    Dim f2x(2) As Double, f2y(2) As Double, f2z(2) As Double
+    f2z(0) = ta(0): f2z(1) = ta(1): f2z(2) = ta(2)
+    Call BuildFrame(f2z, f2x, f2y)
+
+    ' R = F2 * F1^T（将 g_faAxis 映射到 ta，保持正交归一性）
+    Dim R(2, 2) As Double
+    Dim ri As Integer, rj As Integer
+    For ri = 0 To 2
+        For rj = 0 To 2
+            R(ri, rj) = FrameCol(ri, 0, f2x, f2y, f2z) * FrameCol(rj, 0, f1x, f1y, f1z) _
+                      + FrameCol(ri, 1, f2x, f2y, f2z) * FrameCol(rj, 1, f1x, f1y, f1z) _
+                      + FrameCol(ri, 2, f2x, f2y, f2z) * FrameCol(rj, 2, f1x, f1y, f1z)
+        Next rj
+    Next ri
+
+    ' ── 计算平移向量 ──────────────────────────────────────────────────────
+    ' R * g_faAnchorPt + T = targetPt   =>  T = targetPt - R * g_faAnchorPt
+    Dim rfp(2) As Double
+    rfp(0) = R(0, 0) * g_faAnchorPt(0) + R(0, 1) * g_faAnchorPt(1) + R(0, 2) * g_faAnchorPt(2)
+    rfp(1) = R(1, 0) * g_faAnchorPt(0) + R(1, 1) * g_faAnchorPt(1) + R(1, 2) * g_faAnchorPt(2)
+    rfp(2) = R(2, 0) * g_faAnchorPt(0) + R(2, 1) * g_faAnchorPt(1) + R(2, 2) * g_faAnchorPt(2)
+
+    Dim Tvec(2) As Double
+    Tvec(0) = targetPt(0) - rfp(0)
+    Tvec(1) = targetPt(1) - rfp(1)
+    Tvec(2) = targetPt(2) - rfp(2)
+
+    ' ── 将根装配坐标转换为目标产品局部坐标 ───────────────────────────────
+    ' localR = g_absR^T * R ;  localT = g_absR^T * (Tvec - g_absT)
+    Dim localR(2, 2) As Double
+    Dim localT(2) As Double
+    Dim li As Integer, lj As Integer, lk As Integer
+    For li = 0 To 2
+        For lj = 0 To 2
+            localR(li, lj) = 0
+            For lk = 0 To 2
+                localR(li, lj) = localR(li, lj) + g_absR(lk, li) * R(lk, lj)
+            Next lk
+        Next lj
+    Next li
+    Dim diffT(2) As Double
+    diffT(0) = Tvec(0) - g_absT(0)
+    diffT(1) = Tvec(1) - g_absT(1)
+    diffT(2) = Tvec(2) - g_absT(2)
+    For li = 0 To 2
+        localT(li) = 0
+        For lk = 0 To 2
+            localT(li) = localT(li) + g_absR(lk, li) * diffT(lk)
+        Next lk
+    Next li
+
+    ' ── 添加紧固件实例 ────────────────────────────────────────────────────
+    Dim products As Object
+    Set products = g_targetProduct.products
+
+    Dim pathArray As Variant
+    pathArray = Array(g_fastenerPath)
+    products.AddComponentsFromFiles pathArray, "All"
+
+    ' 最后添加的实例即为新组件
+    Dim newComp As Object
+    Set newComp = products.Item(products.Count)
+
+    ' ── 设置位置（相对父产品坐标系） ─────────────────────────────────────
+    ' CATIA Position 数组布局：
+    '   0-2  = 局部 X 轴在父坐标系中的方向
+    '   3-5  = 局部 Y 轴在父坐标系中的方向
+    '   6-8  = 局部 Z 轴在父坐标系中的方向
+    '   9-11 = 原点在父坐标系中的位置
+    Dim posMatrix(11) As Double
+    posMatrix(0) = localR(0, 0)
+    posMatrix(1) = localR(1, 0)
+    posMatrix(2) = localR(2, 0)
+    posMatrix(3) = localR(0, 1)
+    posMatrix(4) = localR(1, 1)
+    posMatrix(5) = localR(2, 1)
+    posMatrix(6) = localR(0, 2)
+    posMatrix(7) = localR(1, 2)
+    posMatrix(8) = localR(2, 2)
+    posMatrix(9) = localT(0)
+    posMatrix(10) = localT(1)
+    posMatrix(11) = localT(2)
+
+    ' ── 调试：发送给 SetComponents 的最终局部矩阵 ────────────────────────
+    MsgBox "[DEBUG] 最终定位矩阵（相对父产品坐标）" & Chr(10) & _
+           "localR X轴 = (" & Round(localR(0, 0), 4) & ", " & Round(localR(1, 0), 4) & ", " & Round(localR(2, 0), 4) & ")" & Chr(10) & _
+           "localR Y轴 = (" & Round(localR(0, 1), 4) & ", " & Round(localR(1, 1), 4) & ", " & Round(localR(2, 1), 4) & ")" & Chr(10) & _
+           "localR Z轴 = (" & Round(localR(0, 2), 4) & ", " & Round(localR(1, 2), 4) & ", " & Round(localR(2, 2), 4) & ")" & Chr(10) & _
+           "localT 原点= (" & Round(localT(0), 4) & ", " & Round(localT(1), 4) & ", " & Round(localT(2), 4) & ")", _
+           vbInformation, "快速装配紧固件 [DEBUG]"
+
+    newComp.Position.SetComponents posMatrix
+
+    ' ── 记录最近装配件信息（供翻转重装使用） ─────────────────────────────
+    Set g_lastProducts = products
+    g_lastCompIdx = products.Count   ' 刚添加的件始终在末尾
+    g_count = g_count + 1
 
 End Sub
 
@@ -505,10 +562,18 @@ End Sub
 '
 '  Private Sub btnFlip_Click()
 '      g_flipDir = Not g_flipDir
-'      If g_flipDir Then
-'          btnFlip.Caption = "翻转方向: 是 ✓"
-'      Else
-'          btnFlip.Caption = "翻转方向: 否"
+'      btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是 ✓", "翻转方向: 否")
+'      ' 如果当前可翻转重装（装配后尚未选下一孔），
+'      ' 则自动删除最近装配件并用新方向重新装配。
+'      If g_hasLastComp Then
+'          g_hasLastComp = False
+'          g_lastProducts.Remove g_lastCompIdx
+'          g_count = g_count - 1
+'          Call PlaceFastenerAtHole()
+'          g_hasLastComp = True
+'          CATIA.StatusBar = "已重新装配（方向翻转）" & g_count & " 个 " & g_fastenerPN & _
+'                            "  [翻转:" & IIf(g_flipDir, "是✓", "否") & "]" & _
+'                            "  选下一孔继续，ESC结束"
 '      End If
 '  End Sub
 '
