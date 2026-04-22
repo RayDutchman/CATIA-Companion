@@ -2,7 +2,7 @@ Option Explicit
 ' fastener_assembly - VBA 模块
 '
 ' ── 调试开关：改为 False 关闭所有 [DEBUG] 弹窗（正式使用时设为 False）──────────
-Public Const DEBUG_MODE As Boolean = True
+Public Const DEBUG_MODE As Boolean = False
 '
 ' 使用前准备（需要在 VBA 编辑器中完成以下步骤）：
 '   1. 将本文件的全部内容粘贴到一个 MODULE 中
@@ -263,26 +263,6 @@ Public Sub ContinueSelectProduct()
         Dim holeAxis(2)
         Dim holePt(2)
 
-        ' ── 调试：确认 g_targetProduct 类型与坐标系位置 ──────────────────────
-        ' TypeName 应为 "Product"；Position T = (0,0,0) 说明该产品在根坐标系原点，
-        ' 此时根坐标系到局部坐标系的变换为恒等变换（无实际偏移）。
-        ' LeafProduct 为孔所在的最底层产品实例，可用于核对选孔是否正确。
-        If DEBUG_MODE Then
-            Dim dbgPos(11) As Double
-            On Error Resume Next
-            Err.Clear
-            g_targetProduct.Position.GetComponents dbgPos
-            On Error GoTo 0
-            MsgBox "[DEBUG] g_targetProduct 信息" & Chr(10) & _
-                   "TypeName    = " & TypeName(g_targetProduct) & Chr(10) & _
-                   "PartNumber  = " & g_targetProduct.PartNumber & Chr(10) & _
-                   "LeafProduct = " & sel.Item(1).LeafProduct.PartNumber & Chr(10) & _
-                   "Position T  = (" & Round(dbgPos(9), 3) & ", " & _
-                                       Round(dbgPos(10), 3) & ", " & _
-                                       Round(dbgPos(11), 3) & ")", _
-                   vbInformation, "快速装配紧固件 [DEBUG]"
-        End If
-
         ' 错误处理：若所选几何体不是圆形边（如直线边），GetMeasurableInContext/GetAxis 会报错
         ' 使用独立函数隔离错误域，避免某些 CATIA 版本中 On Error Resume Next 在调用层失效。
         Dim bHoleGeomOK As Boolean
@@ -314,7 +294,7 @@ Public Sub ContinueSelectProduct()
         ' 其中 R 的列向量 = g_targetProduct.Position.GetComponents 返回的 tpPos(0..8)（X/Y/Z 轴），
         ' T = tpPos(9..11)（原点偏移）。
         ' 若 g_targetProduct 与根坐标系重合（Position 为单位矩阵），则变换为恒等变换，结果不变。
-        Dim tpPos(11) As Double
+        Dim tpPos(11)   ' 不能加 As Double
         g_targetProduct.Position.GetComponents tpPos
         Dim pRel(2) As Double
         pRel(0) = holePt(0) - tpPos(9)
@@ -389,14 +369,6 @@ Public Sub PlaceFastenerAtHole()
     ' targetPt：孔圆心
     Dim targetPt(2) As Double
     targetPt(0) = g_holePtX: targetPt(1) = g_holePtY: targetPt(2) = g_holePtZ
-
-    ' ── 调试：目标点（g_targetProduct 坐标系） ────────────────────────────
-    If DEBUG_MODE Then
-        MsgBox "[DEBUG] 目标点（g_targetProduct 坐标系）" & Chr(10) & _
-               "targetPt = (" & Round(targetPt(0), 4) & ", " & Round(targetPt(1), 4) & ", " & Round(targetPt(2), 4) & ")" & Chr(10) & _
-               "ta (目标轴向) = (" & Round(ta(0), 4) & ", " & Round(ta(1), 4) & ", " & Round(ta(2), 4) & ")", _
-               vbInformation, "快速装配紧固件 [DEBUG]"
-    End If
 
     ' ── 计算旋转矩阵 R：使 g_faAxis 旋转到 ta ────────────────────────────
     ' 以 g_faAxis 为 Z 轴构建正交坐标系 F1
