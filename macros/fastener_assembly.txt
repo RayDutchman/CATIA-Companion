@@ -48,9 +48,6 @@ Public g_flipDir As Boolean
 Public g_faAxis(2)          ' 不声明 As Double，避免某些 CATIA 版本 GetAxis 无法写入
 Public g_faAnchorPt(2)
 
-' 目标产品在根装配坐标系中的绝对变换（CATMain 计算一次）
-Public g_absR(2, 2) As Double
-Public g_absT(2) As Double
 
 ' 最近一次孔的几何（选孔后更新，供翻转重装使用）
 Public g_holeAxisX As Double, g_holeAxisY As Double, g_holeAxisZ As Double
@@ -138,13 +135,20 @@ Public Sub CATMain()
     sel.Clear
 
     ' 写入模块级变量，供 PlaceFastenerAtHole 和翻转重装使用
-    g_faAxis(0) = faAxis(0): g_faAxis(1) = faAxis(1): g_faAxis(2) = faAxis(2)
+    ' 对 faAxis 归一化（GetAxis 不保证返回单位向量）
+    Dim faLen As Double
+    faLen = Sqr(faAxis(0)*faAxis(0) + faAxis(1)*faAxis(1) + faAxis(2)*faAxis(2))
+    If faLen > 0.000000000001 Then
+        g_faAxis(0) = faAxis(0)/faLen: g_faAxis(1) = faAxis(1)/faLen: g_faAxis(2) = faAxis(2)/faLen
+    Else
+        g_faAxis(0) = faAxis(0): g_faAxis(1) = faAxis(1): g_faAxis(2) = faAxis(2)
+    End If
     g_faAnchorPt(0) = faAnchorPt(0): g_faAnchorPt(1) = faAnchorPt(1): g_faAnchorPt(2) = faAnchorPt(2)
 
     ' ── 调试：紧固件参考几何 ──────────────────────────────────────────────
     MsgBox "[DEBUG] 紧固件参考几何" & Chr(10) & _
-           "faAxis    = (" & Round(faAxis(0), 4) & ", " & Round(faAxis(1), 4) & ", " & Round(faAxis(2), 4) & ")" & Chr(10) & _
-           "faAnchorPt= (" & Round(faAnchorPt(0), 4) & ", " & Round(faAnchorPt(1), 4) & ", " & Round(faAnchorPt(2), 4) & ")", _
+           "faAxis    = (" & Round(g_faAxis(0), 4) & ", " & Round(g_faAxis(1), 4) & ", " & Round(g_faAxis(2), 4) & ")" & Chr(10) & _
+           "faAnchorPt= (" & Round(g_faAnchorPt(0), 4) & ", " & Round(g_faAnchorPt(1), 4) & ", " & Round(g_faAnchorPt(2), 4) & ")", _
            vbInformation, "快速装配紧固件 [DEBUG]"
 
     ' ── 3. 等待用户切换到装配体文档（非模态浮动面板）────────────────────
@@ -199,20 +203,6 @@ Public Sub ContinueSelectProduct()
     g_targetPN = g_targetProduct.PartNumber
     sel.Clear
 
-    ' ── 计算目标产品的绝对变换矩阵 ───────────────────────────────────────
-    ' SPAWorkbench 的测量结果以根装配坐标系为基准。
-    ' Position.SetComponents 使用父产品局部坐标系。
-    ' 需要目标产品绝对变换的逆矩阵进行坐标转换。
-    Call ComputeAbsoluteTransform(g_targetProduct, g_absR, g_absT)
-
-    ' ── 调试：目标产品绝对变换（g_absR / g_absT） ────────────────────────
-    MsgBox "[DEBUG] 目标产品绝对变换 (absR / absT)" & Chr(10) & _
-           "absR 第0行 = (" & Round(g_absR(0, 0), 4) & ", " & Round(g_absR(0, 1), 4) & ", " & Round(g_absR(0, 2), 4) & ")" & Chr(10) & _
-           "absR 第1行 = (" & Round(g_absR(1, 0), 4) & ", " & Round(g_absR(1, 1), 4) & ", " & Round(g_absR(1, 2), 4) & ")" & Chr(10) & _
-           "absR 第2行 = (" & Round(g_absR(2, 0), 4) & ", " & Round(g_absR(2, 1), 4) & ", " & Round(g_absR(2, 2), 4) & ")" & Chr(10) & _
-           "absT      = (" & Round(g_absT(0), 4) & ", " & Round(g_absT(1), 4) & ", " & Round(g_absT(2), 4) & ")", _
-           vbInformation, "快速装配紧固件 [DEBUG]"
-
     ' ── 5. 装配循环 ───────────────────────────────────────────────────────
     ' g_flipDir 不重置：上次装配的翻转状态即为本次默认值（跨次保留）。
     ' 更新 FlipForm 按钮 caption 以反映当前 g_flipDir 状态。
@@ -243,23 +233,47 @@ Public Sub ContinueSelectProduct()
         Dim holeMeas As Object
         Set holeMeas = spa2.GetMeasurable(holeRef)
 
-        ' 与 g_faAxis 相同，不声明 As Double，避免 GetAxis 在某些 CATIA 版本中无法写入。
-        ' BuildFrame 会在内部对传入向量进行归一化处理。
+        ' 不声明 As Double：GetAxis 在某些 CATIA 版本中需要 Variant 数组才能写入。
         Dim holeAxis(2)
         holeMeas.GetAxis holeAxis
         Dim holePt(2)
         holeMeas.GetCenter holePt
 
+        ' SPA 返回的是零件局部坐标系中的值（因装配体不是工作对象）；
+        ' 通过叶节点产品的绝对变换，将其转换到装配体根坐标系。
+        Dim holeLeafProd As Object
+        Set holeLeafProd = sel.Item(1).LeafProduct
+        Dim holeLeafR(2, 2) As Double, holeLeafT(2) As Double
+        Call ComputeAbsoluteTransform(holeLeafProd, holeLeafR, holeLeafT)
+
+        Dim worldHoleAxis(2) As Double
+        worldHoleAxis(0) = holeLeafR(0, 0)*holeAxis(0) + holeLeafR(0, 1)*holeAxis(1) + holeLeafR(0, 2)*holeAxis(2)
+        worldHoleAxis(1) = holeLeafR(1, 0)*holeAxis(0) + holeLeafR(1, 1)*holeAxis(1) + holeLeafR(1, 2)*holeAxis(2)
+        worldHoleAxis(2) = holeLeafR(2, 0)*holeAxis(0) + holeLeafR(2, 1)*holeAxis(1) + holeLeafR(2, 2)*holeAxis(2)
+        Dim worldHolePt(2) As Double
+        worldHolePt(0) = holeLeafR(0, 0)*holePt(0) + holeLeafR(0, 1)*holePt(1) + holeLeafR(0, 2)*holePt(2) + holeLeafT(0)
+        worldHolePt(1) = holeLeafR(1, 0)*holePt(0) + holeLeafR(1, 1)*holePt(1) + holeLeafR(1, 2)*holePt(2) + holeLeafT(1)
+        worldHolePt(2) = holeLeafR(2, 0)*holePt(0) + holeLeafR(2, 1)*holePt(1) + holeLeafR(2, 2)*holePt(2) + holeLeafT(2)
+
+        ' 归一化轴向（GetAxis 不保证返回单位向量）
+        Dim holeAxisLen As Double
+        holeAxisLen = Sqr(worldHoleAxis(0)*worldHoleAxis(0) + worldHoleAxis(1)*worldHoleAxis(1) + worldHoleAxis(2)*worldHoleAxis(2))
+        If holeAxisLen > 0.000000000001 Then
+            worldHoleAxis(0) = worldHoleAxis(0)/holeAxisLen
+            worldHoleAxis(1) = worldHoleAxis(1)/holeAxisLen
+            worldHoleAxis(2) = worldHoleAxis(2)/holeAxisLen
+        End If
+
         sel.Clear
 
         ' 写入模块级变量供 PlaceFastenerAtHole（含翻转重装路径）使用
-        g_holeAxisX = holeAxis(0): g_holeAxisY = holeAxis(1): g_holeAxisZ = holeAxis(2)
-        g_holePtX   = holePt(0):   g_holePtY   = holePt(1):   g_holePtZ   = holePt(2)
+        g_holeAxisX = worldHoleAxis(0): g_holeAxisY = worldHoleAxis(1): g_holeAxisZ = worldHoleAxis(2)
+        g_holePtX   = worldHolePt(0):   g_holePtY   = worldHolePt(1):   g_holePtZ   = worldHolePt(2)
 
-        ' ── 调试：孔的几何（装配坐标系） ─────────────────────────────────
-        MsgBox "[DEBUG] 孔的几何（装配坐标）" & Chr(10) & _
-               "holeAxis = (" & Round(holeAxis(0), 4) & ", " & Round(holeAxis(1), 4) & ", " & Round(holeAxis(2), 4) & ")" & Chr(10) & _
-               "holePt   = (" & Round(holePt(0), 4) & ", " & Round(holePt(1), 4) & ", " & Round(holePt(2), 4) & ")", _
+        ' ── 调试：孔的几何（装配体根坐标） ───────────────────────────────
+        MsgBox "[DEBUG] 孔的几何（装配体根坐标）" & Chr(10) & _
+               "holeAxis = (" & Round(worldHoleAxis(0), 4) & ", " & Round(worldHoleAxis(1), 4) & ", " & Round(worldHoleAxis(2), 4) & ")" & Chr(10) & _
+               "holePt   = (" & Round(worldHolePt(0), 4) & ", " & Round(worldHolePt(1), 4) & ", " & Round(worldHolePt(2), 4) & ")", _
                vbInformation, "快速装配紧固件 [DEBUG]"
 
         ' 5b. 装配并定位紧固件
@@ -288,8 +302,9 @@ End Sub
 ' PlaceFastenerAtHole：根据模块级变量中存储的孔几何和紧固件参数，
 ' 计算变换矩阵并添加一个紧固件实例。
 '
-' 读取：g_flipDir, g_faAxis, g_faAnchorPt, g_absR, g_absT,
-'        g_holeAxisX/Y/Z, g_holePtX/Y/Z, g_targetProduct, g_fastenerPath
+' 读取：g_flipDir, g_faAxis, g_faAnchorPt,
+'        g_holeAxisX/Y/Z, g_holePtX/Y/Z（均为装配体根坐标），
+'        g_targetProduct, g_fastenerPath
 ' 写入：g_count（+1），g_lastProducts，g_lastCompIdx
 ' ============================================================================
 Public Sub PlaceFastenerAtHole()
@@ -346,30 +361,6 @@ Public Sub PlaceFastenerAtHole()
     Tvec(1) = targetPt(1) - rfp(1)
     Tvec(2) = targetPt(2) - rfp(2)
 
-    ' ── 将根装配坐标转换为目标产品局部坐标 ───────────────────────────────
-    ' localR = g_absR^T * R ;  localT = g_absR^T * (Tvec - g_absT)
-    Dim localR(2, 2) As Double
-    Dim localT(2) As Double
-    Dim li As Integer, lj As Integer, lk As Integer
-    For li = 0 To 2
-        For lj = 0 To 2
-            localR(li, lj) = 0
-            For lk = 0 To 2
-                localR(li, lj) = localR(li, lj) + g_absR(lk, li) * R(lk, lj)
-            Next lk
-        Next lj
-    Next li
-    Dim diffT(2) As Double
-    diffT(0) = Tvec(0) - g_absT(0)
-    diffT(1) = Tvec(1) - g_absT(1)
-    diffT(2) = Tvec(2) - g_absT(2)
-    For li = 0 To 2
-        localT(li) = 0
-        For lk = 0 To 2
-            localT(li) = localT(li) + g_absR(lk, li) * diffT(lk)
-        Next lk
-    Next li
-
     ' ── 添加紧固件实例 ────────────────────────────────────────────────────
     Dim products As Object
     Set products = g_targetProduct.products
@@ -382,35 +373,38 @@ Public Sub PlaceFastenerAtHole()
     Dim newComp As Object
     Set newComp = products.Item(products.Count)
 
-    ' ── 设置位置（相对父产品坐标系） ─────────────────────────────────────
-    ' CATIA Position 数组布局：
-    '   0-2  = 局部 X 轴在父坐标系中的方向
-    '   3-5  = 局部 Y 轴在父坐标系中的方向
-    '   6-8  = 局部 Z 轴在父坐标系中的方向
-    '   9-11 = 原点在父坐标系中的位置
-    Dim posMatrix(11) As Double
-    posMatrix(0) = localR(0, 0)
-    posMatrix(1) = localR(1, 0)
-    posMatrix(2) = localR(2, 0)
-    posMatrix(3) = localR(0, 1)
-    posMatrix(4) = localR(1, 1)
-    posMatrix(5) = localR(2, 1)
-    posMatrix(6) = localR(0, 2)
-    posMatrix(7) = localR(1, 2)
-    posMatrix(8) = localR(2, 2)
-    posMatrix(9) = localT(0)
-    posMatrix(10) = localT(1)
-    posMatrix(11) = localT(2)
+    ' ── 通过 Move.Apply 设置绝对位置（根装配坐标系） ─────────────────────
+    ' Move.Apply 接受根装配坐标系中的绝对变换（Variant 数组，不声明 As Double）：
+    '   0-2  = 根坐标系中局部 X 轴方向
+    '   3-5  = 根坐标系中局部 Y 轴方向
+    '   6-8  = 根坐标系中局部 Z 轴方向
+    '   9-11 = 根坐标系中原点位置
+    Dim moveMatrix(11)
+    moveMatrix(0) = R(0, 0)
+    moveMatrix(1) = R(1, 0)
+    moveMatrix(2) = R(2, 0)
+    moveMatrix(3) = R(0, 1)
+    moveMatrix(4) = R(1, 1)
+    moveMatrix(5) = R(2, 1)
+    moveMatrix(6) = R(0, 2)
+    moveMatrix(7) = R(1, 2)
+    moveMatrix(8) = R(2, 2)
+    moveMatrix(9) = Tvec(0)
+    moveMatrix(10) = Tvec(1)
+    moveMatrix(11) = Tvec(2)
 
-    ' ── 调试：发送给 SetComponents 的最终局部矩阵 ────────────────────────
-    MsgBox "[DEBUG] 最终定位矩阵（相对父产品坐标）" & Chr(10) & _
-           "localR X轴 = (" & Round(localR(0, 0), 4) & ", " & Round(localR(1, 0), 4) & ", " & Round(localR(2, 0), 4) & ")" & Chr(10) & _
-           "localR Y轴 = (" & Round(localR(0, 1), 4) & ", " & Round(localR(1, 1), 4) & ", " & Round(localR(2, 1), 4) & ")" & Chr(10) & _
-           "localR Z轴 = (" & Round(localR(0, 2), 4) & ", " & Round(localR(1, 2), 4) & ", " & Round(localR(2, 2), 4) & ")" & Chr(10) & _
-           "localT 原点= (" & Round(localT(0), 4) & ", " & Round(localT(1), 4) & ", " & Round(localT(2), 4) & ")", _
+    ' ── 调试：发送给 Move.Apply 的绝对矩阵 ───────────────────────────────
+    MsgBox "[DEBUG] 最终定位矩阵（装配体根坐标，绝对）" & Chr(10) & _
+           "R X轴 = (" & Round(R(0, 0), 4) & ", " & Round(R(1, 0), 4) & ", " & Round(R(2, 0), 4) & ")" & Chr(10) & _
+           "R Y轴 = (" & Round(R(0, 1), 4) & ", " & Round(R(1, 1), 4) & ", " & Round(R(2, 1), 4) & ")" & Chr(10) & _
+           "R Z轴 = (" & Round(R(0, 2), 4) & ", " & Round(R(1, 2), 4) & ", " & Round(R(2, 2), 4) & ")" & Chr(10) & _
+           "T 原点= (" & Round(Tvec(0), 4) & ", " & Round(Tvec(1), 4) & ", " & Round(Tvec(2), 4) & ")", _
            vbInformation, "快速装配紧固件 [DEBUG]"
 
-    newComp.Position.SetComponents posMatrix
+    Dim moveObj As Object
+    Set moveObj = newComp.Move
+    Set moveObj = moveObj.MovableObject
+    moveObj.Apply moveMatrix
 
     ' ── 记录最近装配件信息（供翻转重装使用） ─────────────────────────────
     Set g_lastProducts = products
@@ -426,7 +420,7 @@ End Sub
 Private Sub BuildFrame(ByRef inZ() As Double, ByRef outX() As Double, ByRef outY() As Double)
     ' GetAxis 返回的向量不保证是单位向量，必须先对 inZ 归一化。
     ' 否则 outY = cross(nz, outX) 的长度会等于 |inZ|，
-    ' 导致旋转矩阵列向量非单位，SetComponents 报 type mismatch。
+    ' 导致旋转矩阵列向量非单位，Move.Apply 报 type mismatch。
     Dim zLen As Double
     zLen = Sqr(inZ(0) * inZ(0) + inZ(1) * inZ(1) + inZ(2) * inZ(2))
     If zLen < 0.000000000001 Then
@@ -522,7 +516,7 @@ Private Sub ComputeAbsoluteTransform(ByVal prod As Object, _
         End If
 
         ' 读取 current 相对其父产品的位置
-        Dim pos(11) As Double
+        Dim pos(11)
         current.Position.GetComponents pos
         If Err.Number <> 0 Then
             Err.Clear
