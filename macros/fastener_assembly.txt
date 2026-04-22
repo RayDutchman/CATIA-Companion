@@ -242,33 +242,40 @@ Public Sub ContinueSelectProduct()
 
     Do
         ' 5a. 选择孔口入口圆形边
-        '     注意：不在此处重置 g_hasLastComp，保留上一个紧固件的翻转重装能力。
         Set sel = CATIA.ActiveDocument.Selection
         sel.Clear
 
-        ' [DEBUG] 记录进入 SelectElement2 前的翻转状态，用于检测调用期间的意外修改
-        Dim dbgFlipBefore As Boolean
-        dbgFlipBefore = g_flipDir
-        CATIA.StatusBar = "[DBG] 进入SelectElement2 flipDir=" & IIf(g_flipDir, "是", "否") & _
-                          " hasLast=" & g_hasLastComp & " count=" & g_count
+        ' ── SelectElement2 竞态保护 ─────────────────────────────────────────────
+        ' CATIA COM 消息泵在 SelectElement2 执行期间会处理 Windows 消息队列。
+        ' 若用户在上一次装配后点击了翻转按钮，鼠标抬起事件可能延迟到本次
+        ' SelectElement2 内部才被分发，触发 btnFlip_Click。
+        ' 若此时 g_hasLastComp=True，btnFlip_Click 会在 SelectElement2 内部
+        ' 执行 Remove+PlaceFastenerAtHole，导致已放置的紧固件被意外翻转。
+        '
+        ' 解决方案：进入 SelectElement2 前将 g_hasLastComp 置 False，
+        ' 阻止内部的翻转重装（btnFlip_Click 仍会更新 g_flipDir 和按钮标题）；
+        ' SelectElement2 返回后，若 g_flipDir 被更改，说明用户确实点击了翻转，
+        ' 则在此处统一执行翻转重装，保证时序正确。
+        Dim savedFlipDir As Boolean
+        Dim savedHasLastComp As Boolean
+        savedFlipDir = g_flipDir
+        savedHasLastComp = g_hasLastComp
+        g_hasLastComp = False   ' 阻止 SelectElement2 内部发生翻转重装
 
         status = sel.SelectElement2(holeFilter, _
             "选择孔的入口圆形边 (" & g_fastenerPN & " -> " & g_targetPN & _
             "  已装配:" & g_count & ")  [ESC终止]", False)
 
-        ' [DEBUG] 检查 SelectElement2 返回后翻转状态是否被意外改变
-        If g_flipDir <> dbgFlipBefore Then
-            MsgBox "[调试] SelectElement2 内部发生了意外翻转！" & Chr(10) & Chr(10) & _
-                   "进入时 g_flipDir = " & IIf(dbgFlipBefore, "是（翻转）", "否（正常）") & Chr(10) & _
-                   "返回后 g_flipDir = " & IIf(g_flipDir, "是（翻转）", "否（正常）") & Chr(10) & Chr(10) & _
-                   "SelectElement2 状态 = " & status & Chr(10) & _
-                   "g_hasLastComp = " & g_hasLastComp & Chr(10) & _
-                   "g_count = " & g_count, _
-                   vbExclamation, "翻转调试"
-        Else
-            CATIA.StatusBar = "[DBG] SelectElement2返回 status=" & status & _
-                              " flipDir=" & IIf(g_flipDir, "是", "否") & " (未变)"
+        ' 若 SelectElement2 期间 g_flipDir 被更改（btnFlip_Click 在消息泵内触发），
+        ' 且原本存在可翻转的上一个紧固件，则在此处统一执行翻转重装。
+        If g_flipDir <> savedFlipDir And savedHasLastComp Then
+            g_lastProducts.Remove g_lastCompIdx
+            g_count = g_count - 1
+            Call PlaceFastenerAtHole()
+            savedHasLastComp = True
         End If
+        ' 恢复 hasLastComp（SelectElement2 期间的翻转重装已在上方处理完毕）
+        g_hasLastComp = savedHasLastComp
 
         If status <> "Normal" Then
             g_loopActive = False
@@ -600,13 +607,6 @@ End Function
 ' ---- 将以下代码粘贴到 FlipForm 的代码模块中（不是本模块）----
 '
 '  Private Sub btnFlip_Click()
-'      ' [调试] 记录按钮触发时刻的状态
-'      MsgBox "[调试] btnFlip_Click 触发！" & Chr(10) & Chr(10) & _
-'             "g_loopActive  = " & g_loopActive & Chr(10) & _
-'             "当前 g_flipDir = " & IIf(g_flipDir, "是（翻转）", "否（正常）") & Chr(10) & _
-'             "g_hasLastComp = " & g_hasLastComp & Chr(10) & _
-'             "g_count       = " & g_count, _
-'             vbInformation, "翻转按钮调试"
 '      ' g_loopActive 在 ESC 退出循环时设为 False；
 '      ' 若此时消息队列中有残留的点击事件，本行可防止意外改变 g_flipDir。
 '      If Not g_loopActive Then Exit Sub
