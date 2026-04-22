@@ -1,5 +1,5 @@
 Option Explicit
-' bracket_nut_assembly - VBA 模块（nut plate 快速装配）
+' nut_plate_assembly - VBA 模块（nut plate 快速装配）
 '
 ' ── 调试开关：改为 False 关闭所有 [DEBUG] 弹窗（正式使用时设为 False）──────────
 Public Const DEBUG_MODE As Boolean = False
@@ -34,7 +34,7 @@ Public Const DEBUG_MODE As Boolean = False
 ' 操作流程：
 '   1. CATMain 显示非模态浮动面板 SwitchToPartForm，然后返回。
 '      用户可自由切换到 nut plate（CATPart）文档窗口，切换完成后点击面板上的"继续"
-'      按钮，由 ContinueSelectBracketNut() 确认当前活动文档为 PartDocument 并继续。
+'      按钮，由 ContinueSelectNutPlate() 确认当前活动文档为 PartDocument 并继续。
 '   2. 用户选择 nut plate 上的两个圆形边（铆钉孔），
 '      - 两个圆心的中点作为 nut plate 的 Anchor Point
 '      - 两个圆心的连线决定第一轴线方向
@@ -53,7 +53,7 @@ Public Const DEBUG_MODE As Boolean = False
 ' 翻转方向标志；由 FlipForm 按钮切换，跨次运行保持状态：
 Public g_flipDir As Boolean
 
-' nut plate 参考几何（由 CATMain 读取一次，PlaceBracketNutAtHole 使用）
+' nut plate 参考几何（由 CATMain 读取一次，PlaceNutPlateAtHole 使用）
 Public g_bnAxis1(2)         ' 第一轴线（两个铆钉孔圆心连线方向）
 Public g_bnAxis2(2)         ' 第二轴线（第一个圆的轴线，已调整为与第一轴线垂直）
 Public g_bnAnchorPt(2)      ' 锚点（两个铆钉孔圆心的中点）
@@ -73,8 +73,8 @@ Public g_loopActive   As Boolean
 
 ' 装配循环共享状态
 Public targetProduct As Object
-Public g_bracketNutDoc As Object
-Public g_bracketNutPN  As String
+Public g_nutPlateDoc As Object
+Public g_nutPlatePN  As String
 Public g_targetPN      As String
 Public g_count         As Long
 
@@ -86,10 +86,10 @@ End Sub
 
 
 ' ============================================================================
-' ContinueSelectBracketNut - 由 SwitchToPartForm.btnContinue_Click() 调用。
+' ContinueSelectNutPlate - 由 SwitchToPartForm.btnContinue_Click() 调用。
 ' 在用户切换到 nut plate 文档后：选择两个参考圆形边（铆钉孔）+ 读取几何。
 ' ============================================================================
-Public Sub ContinueSelectBracketNut()
+Public Sub ContinueSelectNutPlate()
 
     ' 若当前文档不是 CATPart，提示后保持 SwitchToPartForm 打开，不做任何操作
     If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then
@@ -101,21 +101,21 @@ Public Sub ContinueSelectBracketNut()
 
     Unload SwitchToPartForm
 
-    Dim bracketNutDoc As Object
-    Set bracketNutDoc = CATIA.ActiveDocument
-    Set g_bracketNutDoc = bracketNutDoc
-    g_bracketNutPN = bracketNutDoc.Product.PartNumber
+    Dim nutPlateDoc As Object
+    Set nutPlateDoc = CATIA.ActiveDocument
+    Set g_nutPlateDoc = nutPlateDoc
+    g_nutPlatePN = nutPlateDoc.Product.PartNumber
 
     Dim sel As Object
-    Set sel = bracketNutDoc.Selection
+    Set sel = nutPlateDoc.Selection
     sel.Clear
 
     ' ── 2. 在 nut plate 上选择两个参考圆形边（铆钉孔）──────────────────────
     Dim edgeFilter As Variant
     edgeFilter = Array("MonoDim")
     Dim status As String
-    Dim spaBracketNut As Object
-    Set spaBracketNut = bracketNutDoc.GetWorkbench("SPAWorkbench")
+    Dim spaNutPlate As Object
+    Set spaNutPlate = nutPlateDoc.GetWorkbench("SPAWorkbench")
 
     Dim edge1Ref As Object, edge2Ref As Object
     Dim edge1Meas As Object, edge2Meas As Object
@@ -130,7 +130,7 @@ Public Sub ContinueSelectBracketNut()
         If status <> "Normal" Then Exit Sub
 
         Set edge1Ref = sel.Item(1).Reference
-        Set edge1Meas = spaBracketNut.GetMeasurable(edge1Ref)
+        Set edge1Meas = spaNutPlate.GetMeasurable(edge1Ref)
 
         bGeomOK = TryGetAxis(edge1Meas, axis1) And TryGetCenter(edge1Meas, center1)
         If Not bGeomOK Then
@@ -148,7 +148,7 @@ Public Sub ContinueSelectBracketNut()
         If status <> "Normal" Then Exit Sub
 
         Set edge2Ref = sel.Item(1).Reference
-        Set edge2Meas = spaBracketNut.GetMeasurable(edge2Ref)
+        Set edge2Meas = spaNutPlate.GetMeasurable(edge2Ref)
 
         bGeomOK = TryGetCenter(edge2Meas, center2)
         If Not bGeomOK Then
@@ -296,7 +296,7 @@ Public Sub ContinueSelectProduct()
 
         ' ── 选择安装孔的第一个圆 ──────────────────────────────────────────
         status = sel.SelectElement2(holeFilter, _
-            "选择安装孔的第一个圆 (" & g_bracketNutPN & " -> " & g_targetPN & _
+            "选择安装孔的第一个圆 (" & g_nutPlatePN & " -> " & g_targetPN & _
             "  已装配:" & g_count & ")  [ESC终止]", False)
         If status <> "Normal" Then
             g_loopActive = False
@@ -319,7 +319,7 @@ Public Sub ContinueSelectProduct()
         Else
             ' ── 选择安装孔的第二个圆 ──────────────────────────────────────
             status = sel.SelectElement2(holeFilter, _
-                "选择安装孔的第二个圆 (" & g_bracketNutPN & " -> " & g_targetPN & _
+                "选择安装孔的第二个圆 (" & g_nutPlatePN & " -> " & g_targetPN & _
                 "  已装配:" & g_count & ")  [ESC终止]", False)
             If status <> "Normal" Then
                 g_loopActive = False
@@ -426,7 +426,7 @@ Public Sub ContinueSelectProduct()
 
                         sel.Clear
 
-                        ' 写入模块级变量供 PlaceBracketNutAtHole 使用
+                        ' 写入模块级变量供 PlaceNutPlateAtHole 使用
                         g_holeAxis1X = holeAxis1(0): g_holeAxis1Y = holeAxis1(1): g_holeAxis1Z = holeAxis1(2)
                         g_holeAxis2X = holeAxis2(0): g_holeAxis2Y = holeAxis2(1): g_holeAxis2Z = holeAxis2(2)
                         g_holePtX    = holePt(0):    g_holePtY    = holePt(1):    g_holePtZ    = holePt(2)
@@ -441,11 +441,11 @@ Public Sub ContinueSelectProduct()
                         End If
 
                         ' 6c. 装配并定位 nut plate
-                        Call PlaceBracketNutAtHole()
+                        Call PlaceNutPlateAtHole()
 
                         ' 装配完成后允许翻转重装
                         g_hasLastComp = True
-                        CATIA.StatusBar = "已装配 " & g_count & " 个 " & g_bracketNutPN & " -> " & g_targetPN & _
+                        CATIA.StatusBar = "已装配 " & g_count & " 个 " & g_nutPlatePN & " -> " & g_targetPN & _
                                           "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
                                           "  可点击翻转按钮修改方向，选下一孔继续，ESC结束"
                     End If
@@ -459,16 +459,16 @@ Public Sub ContinueSelectProduct()
     g_hasLastComp = False
     Unload FlipForm
 
-    CATIA.StatusBar = "装配完成！共装配 " & g_count & " 个 " & g_bracketNutPN
+    CATIA.StatusBar = "装配完成！共装配 " & g_count & " 个 " & g_nutPlatePN
     MsgBox "装配完成！" & Chr(10) & _
-           "共装配 " & g_count & " 个 " & g_bracketNutPN & " 到 " & g_targetPN & "。", _
+           "共装配 " & g_count & " 个 " & g_nutPlatePN & " 到 " & g_targetPN & "。", _
            vbInformation, "快速装配 nut plate"
 
 End Sub
 
 
 ' ============================================================================
-' PlaceBracketNutAtHole：根据模块级变量中存储的孔几何和 nut plate 参数，
+' PlaceNutPlateAtHole：根据模块级变量中存储的孔几何和 nut plate 参数，
 ' 计算变换矩阵并添加一个 nut plate 实例。
 '
 ' 读取：g_flipDir, g_bnAxis1, g_bnAxis2, g_bnAnchorPt（nut plate 局部坐标系），
@@ -476,7 +476,7 @@ End Sub
 '        targetProduct
 ' 写入：g_count（+1），g_lastProducts，g_lastCompIdx
 ' ============================================================================
-Public Sub PlaceBracketNutAtHole()
+Public Sub PlaceNutPlateAtHole()
 
     ' 根据 g_flipDir 决定第二轴线的方向（翻转意味着第二轴线反向）
     Dim holeAxis2Dir(2) As Double
@@ -554,7 +554,7 @@ Public Sub PlaceBracketNutAtHole()
     Dim products As Object
     Set products = targetProduct.products
 
-    products.AddComponent g_bracketNutDoc.Product
+    products.AddComponent g_nutPlateDoc.Product
 
     ' 最后添加的实例即为新组件
     Dim newComp As Object
@@ -611,15 +611,15 @@ End Sub
 
 
 ' ============================================================================
-' MoveLastBracketNut：在不删除/重建的情况下，将最近装配的 nut plate 移动到
+' MoveLastNutPlate：在不删除/重建的情况下，将最近装配的 nut plate 移动到
 '   当前 g_flipDir 对应的翻转位置。
 ' ============================================================================
-Public Sub MoveLastBracketNut()
+Public Sub MoveLastNutPlate()
 
     Dim lastComp As Object
     Set lastComp = g_lastProducts.Item(g_lastCompIdx)
 
-    ' ── 使用与 PlaceBracketNutAtHole 相同的逻辑重新定位 ──────────────────
+    ' ── 使用与 PlaceNutPlateAtHole 相同的逻辑重新定位 ──────────────────
     ' Move.Apply 是相对变换，无法直接设置绝对位置。
     ' Position.SetComponents 可直接设置组件在 targetProduct 坐标系中的绝对位置。
     Dim holeAxis2Dir(2) As Double
@@ -762,8 +762,8 @@ End Function
 '      g_flipDir = Not g_flipDir
 '      btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
 '      If g_hasLastComp Then
-'          Call MoveLastBracketNut()
-'          CATIA.StatusBar = "已重新定向（方向翻转）" & g_count & " 个 " & g_bracketNutPN & _
+'          Call MoveLastNutPlate()
+'          CATIA.StatusBar = "已重新定向（方向翻转）" & g_count & " 个 " & g_nutPlatePN & _
 '                            "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
 '                            "  选下一孔继续，ESC结束"
 '      End If
@@ -790,7 +790,7 @@ End Function
 ' ---- 将以下代码粘贴到 SwitchToPartForm 的代码模块中（不是本模块）----
 '
 '  Private Sub btnContinue_Click()
-'      Call ContinueSelectBracketNut
+'      Call ContinueSelectNutPlate
 '  End Sub
 '
 '  Private Sub btnCancel_Click()
