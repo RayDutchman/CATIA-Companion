@@ -237,16 +237,25 @@ Public Sub ContinueSelectProduct()
             "  已装配:" & g_count & "  翻转:" & IIf(g_flipDir, "是✓", "否") & ")  [ESC终止]", False)
         If status <> "Normal" Then Exit Do
 
+        ' ── 调试：激活前的 ActiveDocument ────────────────────────────────────
+        MsgBox "[DEBUG] 激活assemblyDoc前 CATIA.ActiveDocument.Name = " & CATIA.ActiveDocument.Name, _
+               vbInformation, "快速装配紧固件 [DEBUG]"
+
+        ' 激活装配体文档，确保 SPA 在根装配坐标系（绝对坐标系）中返回测量值。
+        ' Move.Apply 同样在绝对坐标系中解释变换矩阵，两者坐标系一致，无需额外转换。
+        ' 必须在 spa2 = GetWorkbench("SPAWorkbench") 之前调用，否则 SPA 上下文已固定为当前活动文档。
+        assemblyDoc.Activate
+
+        ' ── 调试：激活后的 ActiveDocument ────────────────────────────────────
+        MsgBox "[DEBUG] 激活assemblyDoc后 CATIA.ActiveDocument.Name = " & CATIA.ActiveDocument.Name, _
+               vbInformation, "快速装配紧固件 [DEBUG]"
+
         Dim spa2 As Object
         Set spa2 = CATIA.ActiveDocument.GetWorkbench("SPAWorkbench")
         Dim holeRef As Object
         Set holeRef = sel.Item(1).Reference
         Dim holeMeas As Object
         Set holeMeas = spa2.GetMeasurable(holeRef)
-
-        ' 激活装配体文档，确保 SPA 在根装配坐标系（绝对坐标系）中返回测量值。
-        ' Move.Apply 同样在绝对坐标系中解释变换矩阵，两者坐标系一致，无需额外转换。
-        assemblyDoc.Activate
 
         ' 不声明 As Double：GetAxis 在某些 CATIA 版本中需要 Variant 数组才能写入。
         Dim holeAxis(2)
