@@ -146,14 +146,8 @@ Public Sub ContinueSelectFastener()
 
     ' 错误处理：若所选几何体不是圆形边（如直线边），GetAxis / GetCenter 会报错
     Dim bFaGeomOK As Boolean
-    bFaGeomOK = False
-    On Error Resume Next
-    fastEdgeMeas.GetAxis faAxis
-    If Err.Number = 0 Then
-        fastEdgeMeas.GetCenter faAnchorPt
-        If Err.Number = 0 Then bFaGeomOK = True
-    End If
-    On Error GoTo 0
+    ' 使用独立函数隔离错误域，避免某些 CATIA 版本中 On Error Resume Next 在调用层失效。
+    bFaGeomOK = TryGetAxis(fastEdgeMeas, faAxis) And TryGetCenter(fastEdgeMeas, faAnchorPt)
 
     If Not bFaGeomOK Then
         MsgBox "无法从所选几何体获取轴向和圆心。" & Chr(10) & _
@@ -283,19 +277,33 @@ Public Sub ContinueSelectProduct()
         Dim holeAxis(2)
         Dim holePt(2)
 
+        ' ── 调试：确认 g_targetProduct 类型与坐标系位置 ──────────────────────
+        ' TypeName 应为 "Product"；Position T = (0,0,0) 说明该产品在根坐标系原点，
+        ' 此时 GetMeasurableInContext 结果与根坐标系相同（无实际变换）。
+        ' LeafProduct 为孔所在的最底层产品实例，可用于核对选孔是否正确。
+        If DEBUG_MODE Then
+            Dim dbgPos(11) As Double
+            On Error Resume Next
+            Err.Clear
+            g_targetProduct.Position.GetComponents dbgPos
+            On Error GoTo 0
+            MsgBox "[DEBUG] g_targetProduct 信息" & Chr(10) & _
+                   "TypeName    = " & TypeName(g_targetProduct) & Chr(10) & _
+                   "PartNumber  = " & g_targetProduct.PartNumber & Chr(10) & _
+                   "LeafProduct = " & sel.Item(1).LeafProduct.PartNumber & Chr(10) & _
+                   "Position T  = (" & Round(dbgPos(9), 3) & ", " & _
+                                       Round(dbgPos(10), 3) & ", " & _
+                                       Round(dbgPos(11), 3) & ")", _
+                   vbInformation, "快速装配紧固件 [DEBUG]"
+        End If
+
         ' 错误处理：若所选几何体不是圆形边（如直线边），GetMeasurableInContext/GetAxis 会报错
+        ' 使用独立函数隔离错误域，避免某些 CATIA 版本中 On Error Resume Next 在调用层失效。
         Dim bHoleGeomOK As Boolean
         bHoleGeomOK = False
-        On Error Resume Next
-        Set holeMeas = spa2.GetMeasurableInContext(holeRef, g_targetProduct)
-        If Err.Number = 0 And Not holeMeas Is Nothing Then
-            holeMeas.GetAxis holeAxis
-            If Err.Number = 0 Then
-                holeMeas.GetCenter holePt
-                If Err.Number = 0 Then bHoleGeomOK = True
-            End If
+        If TryGetMeasurableInContext(spa2, holeRef, g_targetProduct, holeMeas) Then
+            bHoleGeomOK = TryGetAxis(holeMeas, holeAxis) And TryGetCenter(holeMeas, holePt)
         End If
-        On Error GoTo 0
 
         If Not bHoleGeomOK Then
             MsgBox "无法获取孔的轴向和圆心。" & Chr(10) & _
@@ -532,6 +540,39 @@ Private Function FrameCol(ByVal row As Integer, ByVal col As Integer, _
         Case 1: FrameCol = vy(row)
         Case 2: FrameCol = vz(row)
     End Select
+End Function
+
+
+' ============================================================================
+' TryGetAxis / TryGetCenter / TryGetMeasurableInContext
+' 在独立错误处理域中调用 COM 方法，使 On Error Resume Next 在函数边界生效，
+' 彻底避免某些 CATIA 版本中调用层错误处理失效时弹出 VB 运行时错误对话框。
+' ============================================================================
+
+Private Function TryGetAxis(meas As Object, axArr) As Boolean
+    On Error Resume Next
+    Err.Clear
+    meas.GetAxis axArr
+    TryGetAxis = (Err.Number = 0)
+End Function
+
+Private Function TryGetCenter(meas As Object, ptArr) As Boolean
+    On Error Resume Next
+    Err.Clear
+    meas.GetCenter ptArr
+    TryGetCenter = (Err.Number = 0)
+End Function
+
+' spa   : SPAWorkbench 对象
+' ref   : 待测量的 Reference 对象
+' ctx   : 上下文 Product（测量坐标系）
+' measOut : 输出的 Measurable 对象（通过 ByRef 返回）
+Private Function TryGetMeasurableInContext(spa As Object, ref As Object, _
+                                           ctx As Object, ByRef measOut As Object) As Boolean
+    On Error Resume Next
+    Err.Clear
+    Set measOut = spa.GetMeasurableInContext(ref, ctx)
+    TryGetMeasurableInContext = (Err.Number = 0 And Not measOut Is Nothing)
 End Function
 
 
