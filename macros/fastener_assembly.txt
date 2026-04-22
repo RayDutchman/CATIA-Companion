@@ -78,6 +78,7 @@ Public g_loopActive   As Boolean
 ' 装配循环共享状态（供 PlaceFastenerAtHole 及状态栏更新使用）
 Public targetProduct As Object
 Public g_fastenerDoc   As Object
+Public g_fastenerPath  As String
 Public g_fastenerPN    As String
 Public g_targetPN      As String
 Public g_count         As Long
@@ -114,6 +115,7 @@ Public Sub ContinueSelectFastener()
     Dim fastenerDoc As Object
     Set fastenerDoc = CATIA.ActiveDocument
     Set g_fastenerDoc = fastenerDoc
+    g_fastenerPath = fastenerDoc.FullName
     g_fastenerPN   = fastenerDoc.Product.PartNumber
 
     Dim sel As Object
@@ -141,7 +143,7 @@ Public Sub ContinueSelectFastener()
     ' 选择循环：若所选元素不是圆形边则提示重新选择；按 ESC 可退出宏
     Do
         status = sel.SelectElement2(fastEdgeFilter, _
-            "请选择紧固件断面上的圆或圆弧（确定轴向和定位点）[ESC 退出]", False)
+            "请选择紧固件上的圆或圆弧（确定轴向和定位点）[ESC 退出]", False)
         If status <> "Normal" Then Exit Sub
 
         Set fastEdgeRef = sel.Item(1).Reference
@@ -246,30 +248,9 @@ Public Sub ContinueSelectProduct()
         Set sel = CATIA.ActiveDocument.Selection
         sel.Clear
 
-        ' [DEBUG] 记录进入 SelectElement2 前的翻转状态，用于检测调用期间的意外修改
-        Dim dbgFlipBefore As Boolean
-        dbgFlipBefore = g_flipDir
-        CATIA.StatusBar = "[DBG] 进入SelectElement2 flipDir=" & IIf(g_flipDir, "是", "否") & _
-                          " hasLast=" & g_hasLastComp & " count=" & g_count
-
         status = sel.SelectElement2(holeFilter, _
             "选择孔的入口圆形边 (" & g_fastenerPN & " -> " & g_targetPN & _
             "  已装配:" & g_count & ")  [ESC终止]", False)
-
-        ' [DEBUG] 检查 SelectElement2 返回后翻转状态是否被意外改变
-        If g_flipDir <> dbgFlipBefore Then
-            MsgBox "[调试] SelectElement2 内部发生了意外翻转！" & Chr(10) & Chr(10) & _
-                   "进入时 g_flipDir = " & IIf(dbgFlipBefore, "是（翻转）", "否（正常）") & Chr(10) & _
-                   "返回后 g_flipDir = " & IIf(g_flipDir, "是（翻转）", "否（正常）") & Chr(10) & Chr(10) & _
-                   "SelectElement2 状态 = " & status & Chr(10) & _
-                   "g_hasLastComp = " & g_hasLastComp & Chr(10) & _
-                   "g_count = " & g_count, _
-                   vbExclamation, "翻转调试"
-        Else
-            CATIA.StatusBar = "[DBG] SelectElement2返回 status=" & status & _
-                              " flipDir=" & IIf(g_flipDir, "是", "否") & " (未变)"
-        End If
-
         If status <> "Normal" Then
             g_loopActive = False
             g_hasLastComp = False
@@ -380,14 +361,10 @@ End Sub
 '
 ' 读取：g_flipDir, g_faAxis, g_faAnchorPt（紧固件局部坐标系），
 '        g_holeAxisX/Y/Z, g_holePtX/Y/Z（均为 targetProduct 坐标系），
-'        targetProduct
+'        targetProduct, g_fastenerPath
 ' 写入：g_count（+1），g_lastProducts，g_lastCompIdx
 ' ============================================================================
 Public Sub PlaceFastenerAtHole()
-
-    ' [DEBUG] 记录每次调用时的翻转状态和调用上下文
-    CATIA.StatusBar = "[DBG] PlaceFastenerAtHole 调用 flipDir=" & IIf(g_flipDir, "是", "否") & _
-                      " count=" & g_count
 
     ' insertionDir：紧固件插入方向，根据 g_flipDir 决定正向或反向
     Dim insertionDir(2) As Double
@@ -600,13 +577,6 @@ End Function
 ' ---- 将以下代码粘贴到 FlipForm 的代码模块中（不是本模块）----
 '
 '  Private Sub btnFlip_Click()
-'      ' [调试] 记录按钮触发时刻的状态
-'      MsgBox "[调试] btnFlip_Click 触发！" & Chr(10) & Chr(10) & _
-'             "g_loopActive  = " & g_loopActive & Chr(10) & _
-'             "当前 g_flipDir = " & IIf(g_flipDir, "是（翻转）", "否（正常）") & Chr(10) & _
-'             "g_hasLastComp = " & g_hasLastComp & Chr(10) & _
-'             "g_count       = " & g_count, _
-'             vbInformation, "翻转按钮调试"
 '      ' g_loopActive 在 ESC 退出循环时设为 False；
 '      ' 若此时消息队列中有残留的点击事件，本行可防止意外改变 g_flipDir。
 '      If Not g_loopActive Then Exit Sub
