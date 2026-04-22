@@ -244,11 +244,9 @@ Public Sub ContinueSelectProduct()
         Dim holeMeas As Object
         Set holeMeas = spa2.GetMeasurable(holeRef)
 
-        ' 将目标产品（g_targetProduct）设为当前工作对象（In Work Object）。
-        ' SPA 测量直接在 g_targetProduct 坐标系中返回值；
-        ' Move.Apply 也以 g_targetProduct 为父坐标系解释矩阵，两者坐标系一致，
-        ' 无需通过 Position 矩阵链手动转换到根装配坐标系。
-        g_targetProduct.Activate
+        ' 激活装配体文档，确保 SPA 在根装配坐标系（绝对坐标系）中返回测量值。
+        ' Move.Apply 同样在绝对坐标系中解释变换矩阵，两者坐标系一致，无需额外转换。
+        assemblyDoc.Activate
 
         ' 不声明 As Double：GetAxis 在某些 CATIA 版本中需要 Variant 数组才能写入。
         Dim holeAxis(2)
