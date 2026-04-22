@@ -1,6 +1,9 @@
 Option Explicit
 ' fastener_assembly - VBA 模块
 '
+' ── 调试开关：改为 False 关闭所有 [DEBUG] 弹窗（正式使用时设为 False）──────────
+Public Const DEBUG_MODE As Boolean = True
+'
 ' 使用前准备（需要在 VBA 编辑器中完成以下步骤）：
 '   1. 将本文件的全部内容粘贴到一个 MODULE 中
 '      （Tools > Macro > Macros... > Edit，或插入新模块）。
@@ -44,7 +47,7 @@ Option Explicit
 '      直接在 g_targetProduct 坐标系中获取测量值，与 Move.Apply 坐标系一致，无需坐标变换。
 '   5. 装配循环：选择孔口圆形边 -> 添加紧固件实例并定位。
 '      装配完成后可点击浮动面板上的"翻转方向"按钮撤销并重装（方向相反）。
-'      翻转状态跨次保留：下一个紧固件默认使用上一个件的翻转状态。
+'      翻转按钮在每次装配后始终有效（包括正在选下一孔时），影响最近一次装配的紧固件。
 '      按 ESC 结束循环。
 '
 ' ----------------------------------------------------------------------------
@@ -139,11 +142,26 @@ Public Sub ContinueSelectFastener()
     ' GetAxis 无法写入数组；Variant 固定大小数组可正常接收值。
     ' GetAxis 不保证返回单位向量，BuildFrame 会在内部归一化。
     Dim faAxis(2)
-    fastEdgeMeas.GetAxis faAxis
-
-    ' faAnchorPt：紧固件上的锚点（圆形边圆心）。
     Dim faAnchorPt(2)
-    fastEdgeMeas.GetCenter faAnchorPt
+
+    ' 错误处理：若所选几何体不是圆形边（如直线边），GetAxis / GetCenter 会报错
+    Dim bFaGeomOK As Boolean
+    bFaGeomOK = False
+    On Error Resume Next
+    fastEdgeMeas.GetAxis faAxis
+    If Err.Number = 0 Then
+        fastEdgeMeas.GetCenter faAnchorPt
+        If Err.Number = 0 Then bFaGeomOK = True
+    End If
+    On Error GoTo 0
+
+    If Not bFaGeomOK Then
+        MsgBox "无法从所选几何体获取轴向和圆心。" & Chr(10) & _
+               "请选择一条圆形边（而非直线边或平面）。", _
+               vbExclamation, "快速装配紧固件"
+        sel.Clear
+        Exit Sub
+    End If
 
     sel.Clear
 
@@ -159,10 +177,12 @@ Public Sub ContinueSelectFastener()
     g_faAnchorPt(0) = faAnchorPt(0): g_faAnchorPt(1) = faAnchorPt(1): g_faAnchorPt(2) = faAnchorPt(2)
 
     ' ── 调试：紧固件参考几何 ──────────────────────────────────────────────
-    MsgBox "[DEBUG] 紧固件参考几何" & Chr(10) & _
-           "faAxis    = (" & Round(g_faAxis(0), 4) & ", " & Round(g_faAxis(1), 4) & ", " & Round(g_faAxis(2), 4) & ")" & Chr(10) & _
-           "faAnchorPt= (" & Round(g_faAnchorPt(0), 4) & ", " & Round(g_faAnchorPt(1), 4) & ", " & Round(g_faAnchorPt(2), 4) & ")", _
-           vbInformation, "快速装配紧固件 [DEBUG]"
+    If DEBUG_MODE Then
+        MsgBox "[DEBUG] 紧固件参考几何" & Chr(10) & _
+               "faAxis    = (" & Round(g_faAxis(0), 4) & ", " & Round(g_faAxis(1), 4) & ", " & Round(g_faAxis(2), 4) & ")" & Chr(10) & _
+               "faAnchorPt= (" & Round(g_faAnchorPt(0), 4) & ", " & Round(g_faAnchorPt(1), 4) & ", " & Round(g_faAnchorPt(2), 4) & ")", _
+               vbInformation, "快速装配紧固件 [DEBUG]"
+    End If
 
     ' ── 3. 等待用户切换到装配体文档（非模态浮动面板）────────────────────
     ' SelectElement2 绑定调用时活动文档：在 PartDocument 上调用、再切换到
@@ -227,8 +247,7 @@ Public Sub ContinueSelectProduct()
 
     Do
         ' 5a. 选择孔口入口圆形边
-        '     选择新孔前锁定翻转重装（不能再撤销上一个已装配件）
-        g_hasLastComp = False
+        '     注意：不在此处重置 g_hasLastComp，保留上一个紧固件的翻转重装能力。
         Set sel = CATIA.ActiveDocument.Selection
         sel.Clear
 
@@ -238,8 +257,10 @@ Public Sub ContinueSelectProduct()
         If status <> "Normal" Then Exit Do
 
         ' ── 调试：激活前的 ActiveDocument ────────────────────────────────────
-        MsgBox "[DEBUG] 激活assemblyDoc前 CATIA.ActiveDocument.Name = " & CATIA.ActiveDocument.Name, _
-               vbInformation, "快速装配紧固件 [DEBUG]"
+        If DEBUG_MODE Then
+            MsgBox "[DEBUG] 激活assemblyDoc前 CATIA.ActiveDocument.Name = " & CATIA.ActiveDocument.Name, _
+                   vbInformation, "快速装配紧固件 [DEBUG]"
+        End If
 
         ' 激活装配体文档后获取 SPAWorkbench。
         ' GetMeasurableInContext 需要在装配体 SPA 上下文中调用；
@@ -247,8 +268,10 @@ Public Sub ContinueSelectProduct()
         assemblyDoc.Activate
 
         ' ── 调试：激活后的 ActiveDocument ────────────────────────────────────
-        MsgBox "[DEBUG] 激活assemblyDoc后 CATIA.ActiveDocument.Name = " & CATIA.ActiveDocument.Name, _
-               vbInformation, "快速装配紧固件 [DEBUG]"
+        If DEBUG_MODE Then
+            MsgBox "[DEBUG] 激活assemblyDoc后 CATIA.ActiveDocument.Name = " & CATIA.ActiveDocument.Name, _
+                   vbInformation, "快速装配紧固件 [DEBUG]"
+        End If
 
         Dim spa2 As Object
         Set spa2 = CATIA.ActiveDocument.GetWorkbench("SPAWorkbench")
@@ -257,13 +280,29 @@ Public Sub ContinueSelectProduct()
         ' GetMeasurableInContext(reference, contextProduct)：
         ' 在 g_targetProduct 坐标系中返回测量值，与 Move.Apply 坐标系一致，无需手动坐标变换。
         Dim holeMeas As Object
-        Set holeMeas = spa2.GetMeasurableInContext(holeRef, g_targetProduct)
-
-        ' 不声明 As Double：GetAxis 在某些 CATIA 版本中需要 Variant 数组才能写入。
         Dim holeAxis(2)
-        holeMeas.GetAxis holeAxis
         Dim holePt(2)
-        holeMeas.GetCenter holePt
+
+        ' 错误处理：若所选几何体不是圆形边（如直线边），GetMeasurableInContext/GetAxis 会报错
+        Dim bHoleGeomOK As Boolean
+        bHoleGeomOK = False
+        On Error Resume Next
+        Set holeMeas = spa2.GetMeasurableInContext(holeRef, g_targetProduct)
+        If Err.Number = 0 And Not holeMeas Is Nothing Then
+            holeMeas.GetAxis holeAxis
+            If Err.Number = 0 Then
+                holeMeas.GetCenter holePt
+                If Err.Number = 0 Then bHoleGeomOK = True
+            End If
+        End If
+        On Error GoTo 0
+
+        If Not bHoleGeomOK Then
+            MsgBox "无法获取孔的轴向和圆心。" & Chr(10) & _
+                   "请选择圆形边（孔入口处的圆弧边），而非直线边或平面。", _
+                   vbExclamation, "快速装配紧固件"
+            sel.Clear
+        Else
 
         ' 归一化轴向（GetAxis 不保证返回单位向量）
         Dim holeAxisLen As Double
@@ -281,10 +320,12 @@ Public Sub ContinueSelectProduct()
         g_holePtX   = holePt(0):   g_holePtY   = holePt(1):   g_holePtZ   = holePt(2)
 
         ' ── 调试：孔的几何（GetMeasurableInContext → g_targetProduct 坐标系） ──
-        MsgBox "[DEBUG] 孔的几何（GetMeasurableInContext, g_targetProduct 坐标系）" & Chr(10) & _
-               "holeAxis = (" & Round(holeAxis(0), 4) & ", " & Round(holeAxis(1), 4) & ", " & Round(holeAxis(2), 4) & ")" & Chr(10) & _
-               "holePt   = (" & Round(holePt(0), 4) & ", " & Round(holePt(1), 4) & ", " & Round(holePt(2), 4) & ")", _
-               vbInformation, "快速装配紧固件 [DEBUG]"
+        If DEBUG_MODE Then
+            MsgBox "[DEBUG] 孔的几何（GetMeasurableInContext, g_targetProduct 坐标系）" & Chr(10) & _
+                   "holeAxis = (" & Round(holeAxis(0), 4) & ", " & Round(holeAxis(1), 4) & ", " & Round(holeAxis(2), 4) & ")" & Chr(10) & _
+                   "holePt   = (" & Round(holePt(0), 4) & ", " & Round(holePt(1), 4) & ", " & Round(holePt(2), 4) & ")", _
+                   vbInformation, "快速装配紧固件 [DEBUG]"
+        End If
 
         ' 5b. 装配并定位紧固件
         Call PlaceFastenerAtHole()
@@ -294,6 +335,8 @@ Public Sub ContinueSelectProduct()
         CATIA.StatusBar = "已装配 " & g_count & " 个 " & g_fastenerPN & " -> " & g_targetPN & _
                           "  [翻转:" & IIf(g_flipDir, "是✓", "否") & "]" & _
                           "  可点击翻转按钮修改方向，选下一孔继续，ESC结束"
+
+        End If  ' bHoleGeomOK
 
     Loop
 
@@ -332,10 +375,12 @@ Public Sub PlaceFastenerAtHole()
     targetPt(0) = g_holePtX: targetPt(1) = g_holePtY: targetPt(2) = g_holePtZ
 
     ' ── 调试：目标点（g_targetProduct 坐标系） ────────────────────────────
-    MsgBox "[DEBUG] 目标点（g_targetProduct 坐标系）" & Chr(10) & _
-           "targetPt = (" & Round(targetPt(0), 4) & ", " & Round(targetPt(1), 4) & ", " & Round(targetPt(2), 4) & ")" & Chr(10) & _
-           "ta (目标轴向) = (" & Round(ta(0), 4) & ", " & Round(ta(1), 4) & ", " & Round(ta(2), 4) & ")", _
-           vbInformation, "快速装配紧固件 [DEBUG]"
+    If DEBUG_MODE Then
+        MsgBox "[DEBUG] 目标点（g_targetProduct 坐标系）" & Chr(10) & _
+               "targetPt = (" & Round(targetPt(0), 4) & ", " & Round(targetPt(1), 4) & ", " & Round(targetPt(2), 4) & ")" & Chr(10) & _
+               "ta (目标轴向) = (" & Round(ta(0), 4) & ", " & Round(ta(1), 4) & ", " & Round(ta(2), 4) & ")", _
+               vbInformation, "快速装配紧固件 [DEBUG]"
+    End If
 
     ' ── 计算旋转矩阵 R：使 g_faAxis 旋转到 ta ────────────────────────────
     ' 以 g_faAxis 为 Z 轴构建正交坐标系 F1
@@ -405,12 +450,14 @@ Public Sub PlaceFastenerAtHole()
     moveMatrix(11) = Tvec(2)
 
     ' ── 调试：发送给 Move.Apply 的矩阵（g_targetProduct 坐标系） ─────────
-    MsgBox "[DEBUG] 最终定位矩阵（g_targetProduct 坐标系）" & Chr(10) & _
-           "R X轴 = (" & Round(R(0, 0), 4) & ", " & Round(R(1, 0), 4) & ", " & Round(R(2, 0), 4) & ")" & Chr(10) & _
-           "R Y轴 = (" & Round(R(0, 1), 4) & ", " & Round(R(1, 1), 4) & ", " & Round(R(2, 1), 4) & ")" & Chr(10) & _
-           "R Z轴 = (" & Round(R(0, 2), 4) & ", " & Round(R(1, 2), 4) & ", " & Round(R(2, 2), 4) & ")" & Chr(10) & _
-           "T 原点= (" & Round(Tvec(0), 4) & ", " & Round(Tvec(1), 4) & ", " & Round(Tvec(2), 4) & ")", _
-           vbInformation, "快速装配紧固件 [DEBUG]"
+    If DEBUG_MODE Then
+        MsgBox "[DEBUG] 最终定位矩阵（g_targetProduct 坐标系）" & Chr(10) & _
+               "R X轴 = (" & Round(R(0, 0), 4) & ", " & Round(R(1, 0), 4) & ", " & Round(R(2, 0), 4) & ")" & Chr(10) & _
+               "R Y轴 = (" & Round(R(0, 1), 4) & ", " & Round(R(1, 1), 4) & ", " & Round(R(2, 1), 4) & ")" & Chr(10) & _
+               "R Z轴 = (" & Round(R(0, 2), 4) & ", " & Round(R(1, 2), 4) & ", " & Round(R(2, 2), 4) & ")" & Chr(10) & _
+               "T 原点= (" & Round(Tvec(0), 4) & ", " & Round(Tvec(1), 4) & ", " & Round(Tvec(2), 4) & ")", _
+               vbInformation, "快速装配紧固件 [DEBUG]"
+    End If
 
     Dim moveObj As Object
     Set moveObj = newComp.Move
