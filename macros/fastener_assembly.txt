@@ -78,7 +78,6 @@ Public g_loopActive   As Boolean
 ' 装配循环共享状态（供 PlaceFastenerAtHole 及状态栏更新使用）
 Public targetProduct As Object
 Public g_fastenerDoc   As Object
-Public g_fastenerPath  As String
 Public g_fastenerPN    As String
 Public g_targetPN      As String
 Public g_count         As Long
@@ -115,7 +114,6 @@ Public Sub ContinueSelectFastener()
     Dim fastenerDoc As Object
     Set fastenerDoc = CATIA.ActiveDocument
     Set g_fastenerDoc = fastenerDoc
-    g_fastenerPath = fastenerDoc.FullName
     g_fastenerPN   = fastenerDoc.Product.PartNumber
 
     Dim sel As Object
@@ -143,7 +141,7 @@ Public Sub ContinueSelectFastener()
     ' 选择循环：若所选元素不是圆形边则提示重新选择；按 ESC 可退出宏
     Do
         status = sel.SelectElement2(fastEdgeFilter, _
-            "请选择紧固件上的圆或圆弧（确定轴向和定位点）[ESC 退出]", False)
+            "请选择紧固件安装面上的圆或圆弧（确定轴向和定位点）[ESC 退出]", False)
         If status <> "Normal" Then Exit Sub
 
         Set fastEdgeRef = sel.Item(1).Reference
@@ -361,7 +359,7 @@ End Sub
 '
 ' 读取：g_flipDir, g_faAxis, g_faAnchorPt（紧固件局部坐标系），
 '        g_holeAxisX/Y/Z, g_holePtX/Y/Z（均为 targetProduct 坐标系），
-'        targetProduct, g_fastenerPath
+'        targetProduct
 ' 写入：g_count（+1），g_lastProducts，g_lastCompIdx
 ' ============================================================================
 Public Sub PlaceFastenerAtHole()
@@ -525,7 +523,7 @@ Public Sub MoveLastFastener()
 
     ' Position.SetComponents 需要类型化的 Double 数组（Variant 数组会被静默忽略）。
     ' 矩阵含义与 Move.Apply 相同：0-2 X轴，3-5 Y轴，6-8 Z轴，9-11 平移。
-    Dim moveMatrix(11) As Double
+    Dim moveMatrix(11)
     moveMatrix(0) = R(0, 0): moveMatrix(1) = R(1, 0): moveMatrix(2) = R(2, 0)
     moveMatrix(3) = R(0, 1): moveMatrix(4) = R(1, 1): moveMatrix(5) = R(2, 1)
     moveMatrix(6) = R(0, 2): moveMatrix(7) = R(1, 2): moveMatrix(8) = R(2, 2)
