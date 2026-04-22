@@ -1,10 +1,10 @@
 """
-Utility helpers for CATIA Companion.
+CATIA Companion 实用工具函数模块。
 
-Provides:
-- resource_path()        – resolve bundled resource files (PyInstaller-aware)
-- detect_catia_root()    – auto-detect CATIA installation directory via registry
-- estimate_column_width() – approximate Excel column width for CJK/ASCII text
+提供：
+- resource_path()        – 解析打包资源文件路径（支持 PyInstaller）
+- detect_catia_root()    – 通过注册表自动检测 CATIA 安装目录
+- estimate_column_width() – 估算 Excel 列宽度（支持中日韩字符）
 """
 
 import sys
@@ -17,11 +17,17 @@ logger = logging.getLogger(__name__)
 
 
 def resource_path(filename: str) -> Path:
-    """Return the absolute path to a bundled resource file.
+    """返回打包资源文件的绝对路径。
 
-    When running as a PyInstaller-frozen executable ``sys._MEIPASS`` is used
-    (the ``_internal/`` directory where PyInstaller 6.x extracts data files);
-    otherwise the project root directory is used.
+    当作为 PyInstaller 冻结的可执行文件运行时，使用 ``sys._MEIPASS``
+    （PyInstaller 6.x 解压数据文件的 ``_internal/`` 目录）；
+    否则使用项目根目录。
+
+    参数：
+        filename: 相对于项目根目录的文件路径
+
+    返回：
+        资源文件的绝对路径
     """
     if hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS) / filename
@@ -29,10 +35,13 @@ def resource_path(filename: str) -> Path:
 
 
 def detect_catia_root() -> str | None:
-    """Return the CATIA V5 installation root directory, or *None* if not found.
+    """返回 CATIA V5 安装根目录，如果未找到则返回 *None*。
 
-    Searches the Windows registry under HKEY_LOCAL_MACHINE for Dassault Systèmes
-    release keys and returns the first path that contains a ``win_b64`` sub-folder.
+    在 Windows 注册表的 HKEY_LOCAL_MACHINE 下搜索 Dassault Systèmes
+    发布版本键，返回第一个包含 ``win_b64`` 子文件夹的路径。
+
+    返回：
+        CATIA 安装根目录路径，或 None（如果未检测到）
     """
     registry_paths = [
         r"SOFTWARE\Dassault Systemes",
@@ -76,9 +85,15 @@ def detect_catia_root() -> str | None:
 
 
 def estimate_column_width(text: str) -> int:
-    """Return the approximate display width of *text* in Excel column-width units.
+    """返回 *text* 在 Excel 列宽度单位下的近似显示宽度。
 
-    CJK / wide characters count as 2; all others count as 1.
+    中日韩全角字符计为 2，其他字符计为 1。
+
+    参数：
+        text: 要测量的文本
+
+    返回：
+        估算的列宽度（Excel 单位）
     """
     return sum(
         2 if unicodedata.east_asian_width(c) in ("W", "F") else 1

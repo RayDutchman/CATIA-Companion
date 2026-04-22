@@ -1,13 +1,13 @@
 """
-CATIA Companion – application entry point.
+CATIA Companion - 应用程序入口点。
 
-All application logic lives under the ``catia_companion`` package.
-This file only bootstraps the Qt application and launches the main window.
+所有应用逻辑都在 ``catia_companion`` 包中实现。
+本文件仅负责启动 Qt 应用程序并显示主窗口。
 """
 
 import sys
 
-# Ensure logging and Qt signal emitter are initialised before any widget is created.
+# 确保在创建任何控件之前初始化日志系统和 Qt 信号发射器
 import catia_companion.logging_setup  # noqa: F401
 
 from PySide6.QtGui import QIcon
@@ -18,15 +18,19 @@ from catia_companion.ui.main_window import MainWindow
 
 
 def main() -> None:
+    """应用程序主入口函数。
+
+    初始化 Qt 应用程序，加载样式表和图标，显示主窗口。
+    """
     app = QApplication(sys.argv)
     app.setApplicationName("CATIA Companion")
 
-    # Apply the unified QSS stylesheet
+    # 应用统一的 QSS 样式表
     qss_path = resource_path(STYLESHEET_RELATIVE_PATH)
     if qss_path.exists():
         app.setStyleSheet(qss_path.read_text(encoding="utf-8"))
 
-    # Set application icon (resources/icon.ico); silently skipped if not yet provided
+    # 设置应用程序图标（resources/icon.ico）；如果文件不存在则静默跳过
     icon_path = resource_path(APP_ICON_PATH)
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
