@@ -9,7 +9,15 @@ Option Explicit
 '      - 将窗体的 (Name) 属性设为 "FlipForm"，Caption 设为 "方向控制"。
 '      - 添加一个 CommandButton：(Name) = "btnFlip"，Caption = "翻转方向: 否"，
 '        Width ≈ 160，Height ≈ 36。
-'      - 将本文件末尾的 FlipForm UserForm 代码粘贴到窗体的代码模块中。
+'      - 将本文件末尾 "FlipForm UserForm 代码" 部分粘贴到窗体的代码模块中。
+'   3. 插入名为 "SwitchDocForm" 的 UserForm（等待切换文档面板）：
+'      - Insert > UserForm，(Name) = "SwitchDocForm"，Caption = "等待切换文档"。
+'      - 添加一个 Label：(Name) = "lblMsg"，
+'        Caption = "紧固件几何已就绪。请切换到目标装配体（CATProduct）文档窗口，再点击""继续""。"
+'      - 添加两个 CommandButton：
+'          btnContinue：Caption = "继续"，Width ≈ 80，Height ≈ 28
+'          btnCancel  ：Caption = "取消"，Width ≈ 80，Height ≈ 28
+'      - 将本文件末尾 "SwitchDocForm UserForm 代码" 部分粘贴到窗体的代码模块中。
 '   直接在编辑器中运行 "CATMain"。
 '
 ' 紧固件 CATPart 文件路径通过运行时的 InputBox 输入。
@@ -19,11 +27,12 @@ Option Explicit
 '   1. 打开或引用紧固件 CATPart，读取零件号。
 '   2. 用户选择紧固件上的一条圆形边（RectilinearTriDimFeatEdge），
 '      GetAxis 获取紧固件轴向，GetCenter 获取定位锚点。
-'   3. 通过一个简单的 MsgBox（仅含 OK 按钮，非 UserForm）提示用户先切换到
-'      目标装配体文档窗口，点击确定后，宏在该文档上调用 SelectElement2 请用户
-'      在产品结构树中点击目标产品/部件。
-'      （SelectElement2 绑定调用时的活动文档；在调用前切换文档会使其自动取消，
-'      因此必须在目标文档已成为活动文档后才能调用；MsgBox 是最简的等待方式。）
+'   3. CATMain 取得紧固件几何后，显示非模态浮动面板 SwitchDocForm，然后返回。
+'      用户可自由切换到目标装配体（CATProduct）文档窗口，切换完成后点击面板上的
+'      "继续"按钮，由 ContinueSelectProduct() 在已激活的 ProductDocument 上调用
+'      SelectElement2，让用户在产品结构树中选择目标产品/部件。
+'      （SelectElement2 绑定调用时活动文档；MsgBox 为模态会阻塞窗口切换；
+'      非模态 UserForm 是正确的等待方式，允许用户自由切换文档后再继续。）
 '   4. 装配循环：选择孔口圆形边 -> 添加紧固件实例并定位。
 '      装配完成后可点击浮动面板上的"翻转方向"按钮撤销并重装（方向相反）。
 '      翻转状态跨次保留：下一个紧固件默认使用上一个件的翻转状态。
@@ -138,29 +147,47 @@ Public Sub CATMain()
            "faAnchorPt= (" & Round(faAnchorPt(0), 4) & ", " & Round(faAnchorPt(1), 4) & ", " & Round(faAnchorPt(2), 4) & ")", _
            vbInformation, "快速装配紧固件 [DEBUG]"
 
-    ' ── 3+4. 提示用户切换到装配体文档，然后选择目标产品 ─────────────────────
-    ' SelectElement2 绑定调用时的活动文档：若在选择等待期间切换文档，
-    ' CATIA 会自动取消该选择（返回非 "Normal"）。
-    ' 解决方案：先通过 MsgBox 等待用户切换到 CATProduct 文档后点 OK，
-    ' 然后在已切换好的文档上再调用 SelectElement2，就不会再被文档切换取消。
-    CATIA.StatusBar = "请先切换到目标装配体（CATProduct）文档窗口，然后点击确定继续。"
-    MsgBox "请先切换到目标装配体（CATProduct）文档窗口，" & Chr(10) & _
-           "然后点击确定继续。", vbInformation, "快速装配紧固件"
+    ' ── 3. 等待用户切换到装配体文档（非模态浮动面板）────────────────────
+    ' SelectElement2 绑定调用时活动文档：在 PartDocument 上调用、再切换到
+    ' ProductDocument 会使 CATIA 自动取消选择（返回非 "Normal"）。
+    ' MsgBox 为模态，会阻塞 CATIA 窗口切换，无法解决此问题。
+    ' 解决方案：显示非模态 SwitchDocForm，用户自由切换文档后点击"继续"，
+    ' 由 ContinueSelectProduct() 在已激活的 ProductDocument 上调用 SelectElement2。
+    g_fastenerPath = fastenerPath
+    g_fastenerPN   = fastenerPN
+    CATIA.StatusBar = "请切换到目标装配体（CATProduct）文档窗口，然后点击浮动面板上的""继续""按钮。"
+    SwitchDocForm.Show vbModeless
 
+End Sub
+
+' ============================================================================
+' ContinueSelectProduct - 由 SwitchDocForm.btnContinue_Click() 调用。
+' 在用户切换到装配体文档后：选择目标产品 + 执行孔装配循环。
+' ============================================================================
+Public Sub ContinueSelectProduct()
+
+    ' 若当前文档不是 CATProduct，提示后保持 SwitchDocForm 打开，不做任何操作
     If TypeName(CATIA.ActiveDocument) <> "ProductDocument" Then
         MsgBox "当前活动文档不是 CATProduct。" & Chr(10) & _
-               "请切换到目标装配体文档后重新运行宏。", _
+               "请先切换到目标装配体文档窗口，然后再点击""继续""。", _
                vbExclamation, "快速装配紧固件"
         Exit Sub
     End If
 
+    Unload SwitchDocForm
+
     Dim assemblyDoc As Object
     Set assemblyDoc = CATIA.ActiveDocument
+    Dim sel As Object
     Set sel = assemblyDoc.Selection
     sel.Clear
 
+    ' ── 4. 在产品结构树中选择目标产品 ────────────────────────────────────
+    ' 此时 ActiveDocument 已是目标 ProductDocument，
+    ' 用户无需再切换窗口，SelectElement2 不会被文档切换取消。
     Dim prodFilter As Variant
     prodFilter = Array("Product")
+    Dim status As String
     status = sel.SelectElement2(prodFilter, _
         "在产品结构树中选择紧固件要装入的产品/部件", False)
     If status <> "Normal" Then
@@ -171,9 +198,6 @@ Public Sub CATMain()
     Set g_targetProduct = sel.Item(1).Value
     g_targetPN = g_targetProduct.PartNumber
     sel.Clear
-
-    g_fastenerPath = fastenerPath
-    g_fastenerPN   = fastenerPN
 
     ' ── 计算目标产品的绝对变换矩阵 ───────────────────────────────────────
     ' SPAWorkbench 的测量结果以根装配坐标系为基准。
@@ -581,6 +605,39 @@ End Sub
 '                            "  [翻转:" & IIf(g_flipDir, "是✓", "否") & "]" & _
 '                            "  选下一孔继续，ESC结束"
 '      End If
+'  End Sub
+'
+' ---------------------------------------------------------------------------
+
+
+' ============================================================================
+' ── SwitchDocForm UserForm 代码 ─────────────────────────────────────────────
+'
+' 创建步骤：在 VBA IDE 中，Insert > UserForm。
+'   - 将窗体 (Name) 设为 "SwitchDocForm"，Caption 设为 "等待切换文档"。
+'   - 添加一个 Label：
+'       (Name)    = "lblMsg"
+'       Caption   = "紧固件几何已就绪。" & Chr(10) &
+'                   "请切换到目标装配体（CATProduct）文档窗口，" & Chr(10) &
+'                   "切换完成后点击""继续""按钮。"
+'       WordWrap  = True，AutoSize = True
+'   - 添加两个 CommandButton（横向排列）：
+'       btnContinue：Caption = "继续"，Width ≈ 80，Height ≈ 28
+'       btnCancel  ：Caption = "取消"，Width ≈ 80，Height ≈ 28
+'   - 打开窗体的代码模块，将下方代码粘贴进去。
+' ============================================================================
+'
+' ---- 将以下代码粘贴到 SwitchDocForm 的代码模块中（不是本模块）----
+'
+'  Private Sub btnContinue_Click()
+'      ' 调用主模块中的 ContinueSelectProduct。
+'      ' 若 ActiveDocument 不是 ProductDocument，该 Sub 会提示用户并直接返回，
+'      ' SwitchDocForm 保持打开，用户可再次切换后重试。
+'      Call ContinueSelectProduct
+'  End Sub
+'
+'  Private Sub btnCancel_Click()
+'      Unload SwitchDocForm
 '  End Sub
 '
 ' ---------------------------------------------------------------------------
