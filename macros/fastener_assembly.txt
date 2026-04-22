@@ -67,10 +67,10 @@ Public Sub CATMain()
     sel.Clear
 
     ' 2a. Select one circular edge on the fastener.
-    '     GetAxis  -> fastener axis direction (faBody)
+    '     GetAxis  -> fastener axis direction (faAxis)
     '     GetCenter -> anchor point that will coincide with the hole centre
     Dim fastEdgeFilter As Variant
-    fastEdgeFilter = Array("RectilinearTriDimFeatEdge")
+    fastEdgeFilter = Array("MonoDim")
     Dim status As String
     status = sel.SelectElement2(fastEdgeFilter, _
         "请选择紧固件的圆形边（用于确定轴向和定位点）", False)
@@ -86,22 +86,22 @@ Public Sub CATMain()
     Set fastEdgeRef = sel.Item(1).Reference
     Dim fastEdgeMeas As Object
     Set fastEdgeMeas = spa.GetMeasurable(fastEdgeRef)
-
-    ' faBody: axis direction as returned by GetAxis on the circular edge.
+    
+    ' faAxis: axis direction as returned by GetAxis on the circular edge.
     ' Use the FlipForm button at runtime to reverse if needed.
-    Dim faBody(2) As Double
-    fastEdgeMeas.GetAxis faBody
-
-    ' fastFacePt: anchor point on the fastener (circle centre).
-    Dim fastFacePt(2) As Double
-    fastEdgeMeas.GetCenter fastFacePt
+    Dim faAxis(2) ' 实测为Double类型但是不能写为Double，否则GetAxis会失败，无法获取值。
+    fastEdgeMeas.GetAxis faAxis
+    
+    ' faAnchorPt: anchor point on the fastener (circle centre).
+    Dim faAnchorPt(2)
+    fastEdgeMeas.GetCenter faAnchorPt
 
     sel.Clear
 
     ' ── DEBUG: fastener reference geometry ───────────────────────────────
     MsgBox "[DEBUG] 紧固件参考几何" & Chr(10) & _
-           "faBody    = (" & Round(faBody(0),4) & ", " & Round(faBody(1),4) & ", " & Round(faBody(2),4) & ")" & Chr(10) & _
-           "fastFacePt= (" & Round(fastFacePt(0),4) & ", " & Round(fastFacePt(1),4) & ", " & Round(fastFacePt(2),4) & ")", _
+           "faAxis    = (" & Round(faAxis(0), 4) & ", " & Round(faAxis(1), 4) & ", " & Round(faAxis(2), 4) & ")" & Chr(10) & _
+           "faAnchorPt= (" & Round(faAnchorPt(0), 4) & ", " & Round(faAnchorPt(1), 4) & ", " & Round(faAnchorPt(2), 4) & ")", _
            vbInformation, "快速装配紧固件 [DEBUG]"
 
     ' ── 3. Find and activate the target assembly document ────────────────
@@ -110,7 +110,7 @@ Public Sub CATMain()
     Dim assemblyDoc As Object
     Dim aIdx As Integer, aCount As Integer, aNames As String
     aCount = 0: aNames = ""
-    For aIdx = 1 To CATIA.Documents.Count
+    For aIdx = 1 To CATIA.Documents.count
         If TypeName(CATIA.Documents.Item(aIdx)) = "ProductDocument" Then
             aCount = aCount + 1
             aNames = aNames & aCount & ". " & CATIA.Documents.Item(aIdx).Name & Chr(10)
@@ -142,7 +142,7 @@ Public Sub CATMain()
         End If
         Dim bIdx As Integer, bCnt As Integer
         bCnt = 0
-        For bIdx = 1 To CATIA.Documents.Count
+        For bIdx = 1 To CATIA.Documents.count
             If TypeName(CATIA.Documents.Item(bIdx)) = "ProductDocument" Then
                 bCnt = bCnt + 1
                 If bCnt = pickN Then
@@ -184,10 +184,10 @@ Public Sub CATMain()
 
     ' ── DEBUG: absolute transform of target product ───────────────────────
     MsgBox "[DEBUG] 目标产品绝对变换 (absR / absT)" & Chr(10) & _
-           "absR row0 = (" & Round(absR(0,0),4) & ", " & Round(absR(0,1),4) & ", " & Round(absR(0,2),4) & ")" & Chr(10) & _
-           "absR row1 = (" & Round(absR(1,0),4) & ", " & Round(absR(1,1),4) & ", " & Round(absR(1,2),4) & ")" & Chr(10) & _
-           "absR row2 = (" & Round(absR(2,0),4) & ", " & Round(absR(2,1),4) & ", " & Round(absR(2,2),4) & ")" & Chr(10) & _
-           "absT      = (" & Round(absT(0),4) & ", " & Round(absT(1),4) & ", " & Round(absT(2),4) & ")", _
+           "absR row0 = (" & Round(absR(0, 0), 4) & ", " & Round(absR(0, 1), 4) & ", " & Round(absR(0, 2), 4) & ")" & Chr(10) & _
+           "absR row1 = (" & Round(absR(1, 0), 4) & ", " & Round(absR(1, 1), 4) & ", " & Round(absR(1, 2), 4) & ")" & Chr(10) & _
+           "absR row2 = (" & Round(absR(2, 0), 4) & ", " & Round(absR(2, 1), 4) & ", " & Round(absR(2, 2), 4) & ")" & Chr(10) & _
+           "absT      = (" & Round(absT(0), 4) & ", " & Round(absT(1), 4) & ", " & Round(absT(2), 4) & ")", _
            vbInformation, "快速装配紧固件 [DEBUG]"
 
     ' ── 5. Assembly loop ─────────────────────────────────────────────────
@@ -205,7 +205,7 @@ Public Sub CATMain()
         sel.Clear
 
         Dim holeFilter As Variant
-        holeFilter = Array("RectilinearTriDimFeatEdge")
+        holeFilter = Array("MonoDim")
         status = sel.SelectElement2(holeFilter, _
             "选择孔的入口圆形边 (" & fastenerPN & " -> " & targetPN & _
             "  已装配:" & count & ")  [ESC终止]", False)
@@ -217,17 +217,17 @@ Public Sub CATMain()
         Dim holeMeas As Object
         Set holeMeas = spa.GetMeasurable(holeRef)
 
-        Dim holeAxis(2) As Double
+        Dim holeAxis(2)
         holeMeas.GetAxis holeAxis
-        Dim holePt(2) As Double
+        Dim holePt(2)
         holeMeas.GetCenter holePt
 
         sel.Clear
 
         ' ── DEBUG: hole geometry (assembly coords) ───────────────────────
         MsgBox "[DEBUG] 孔的几何（装配坐标）" & Chr(10) & _
-               "holeAxis = (" & Round(holeAxis(0),4) & ", " & Round(holeAxis(1),4) & ", " & Round(holeAxis(2),4) & ")" & Chr(10) & _
-               "holePt   = (" & Round(holePt(0),4) & ", " & Round(holePt(1),4) & ", " & Round(holePt(2),4) & ")", _
+               "holeAxis = (" & Round(holeAxis(0), 4) & ", " & Round(holeAxis(1), 4) & ", " & Round(holeAxis(2), 4) & ")" & Chr(10) & _
+               "holePt   = (" & Round(holePt(0), 4) & ", " & Round(holePt(1), 4) & ", " & Round(holePt(2), 4) & ")", _
                vbInformation, "快速装配紧固件 [DEBUG]"
 
         ' targetPt is the circle center — always exactly on the hole axis
@@ -246,14 +246,14 @@ Public Sub CATMain()
 
         ' ── DEBUG: target point ───────────────────────────────────────────
         MsgBox "[DEBUG] 目标点（装配坐标）" & Chr(10) & _
-               "targetPt = (" & Round(targetPt(0),4) & ", " & Round(targetPt(1),4) & ", " & Round(targetPt(2),4) & ")" & Chr(10) & _
-               "ta (目标轴向) = (" & Round(ta(0),4) & ", " & Round(ta(1),4) & ", " & Round(ta(2),4) & ")", _
+               "targetPt = (" & Round(targetPt(0), 4) & ", " & Round(targetPt(1), 4) & ", " & Round(targetPt(2), 4) & ")" & Chr(10) & _
+               "ta (目标轴向) = (" & Round(ta(0), 4) & ", " & Round(ta(1), 4) & ", " & Round(ta(2), 4) & ")", _
                vbInformation, "快速装配紧固件 [DEBUG]"
 
-        ' ── Compute rotation matrix  R : faBody -> ta ─────────────────────
-        ' Build orthonormal frame F1 from faBody
+        ' ── Compute rotation matrix  R : faAxis -> ta ─────────────────────
+        ' Build orthonormal frame F1 from faAxis
         Dim f1x(2) As Double, f1y(2) As Double, f1z(2) As Double
-        f1z(0) = faBody(0): f1z(1) = faBody(1): f1z(2) = faBody(2)
+        f1z(0) = faAxis(0): f1z(1) = faAxis(1): f1z(2) = faAxis(2)
         Call BuildFrame(f1z, f1x, f1y)
 
         ' Build orthonormal frame F2 from ta
@@ -261,7 +261,7 @@ Public Sub CATMain()
         f2z(0) = ta(0): f2z(1) = ta(1): f2z(2) = ta(2)
         Call BuildFrame(f2z, f2x, f2y)
 
-        ' R = F2 * F1^T   (maps faBody -> ta and preserves orthonormality)
+        ' R = F2 * F1^T   (maps faAxis -> ta and preserves orthonormality)
         Dim R(2, 2) As Double
         Dim ri As Integer, rj As Integer
         For ri = 0 To 2
@@ -273,11 +273,11 @@ Public Sub CATMain()
         Next ri
 
         ' ── Compute translation ───────────────────────────────────────────
-        ' R * fastFacePt + T = targetPt   =>  T = targetPt - R * fastFacePt
+        ' R * faAnchorPt + T = targetPt   =>  T = targetPt - R * faAnchorPt
         Dim rfp(2) As Double
-        rfp(0) = R(0, 0) * fastFacePt(0) + R(0, 1) * fastFacePt(1) + R(0, 2) * fastFacePt(2)
-        rfp(1) = R(1, 0) * fastFacePt(0) + R(1, 1) * fastFacePt(1) + R(1, 2) * fastFacePt(2)
-        rfp(2) = R(2, 0) * fastFacePt(0) + R(2, 1) * fastFacePt(1) + R(2, 2) * fastFacePt(2)
+        rfp(0) = R(0, 0) * faAnchorPt(0) + R(0, 1) * faAnchorPt(1) + R(0, 2) * faAnchorPt(2)
+        rfp(1) = R(1, 0) * faAnchorPt(0) + R(1, 1) * faAnchorPt(1) + R(1, 2) * faAnchorPt(2)
+        rfp(2) = R(2, 0) * faAnchorPt(0) + R(2, 1) * faAnchorPt(1) + R(2, 2) * faAnchorPt(2)
 
         Dim Tvec(2) As Double
         Tvec(0) = targetPt(0) - rfp(0)
@@ -310,7 +310,7 @@ Public Sub CATMain()
 
         ' ── Add fastener component ────────────────────────────────────────
         Dim products As Object
-        Set products = targetProduct.Products
+        Set products = targetProduct.products
 
         Dim pathArray As Variant
         pathArray = Array(fastenerPath)
@@ -318,7 +318,7 @@ Public Sub CATMain()
 
         ' The newly added instance is the last item
         Dim newComp As Object
-        Set newComp = products.Item(products.Count)
+        Set newComp = products.Item(products.count)
 
         ' ── Set position (relative to parent) ────────────────────────────
         ' CATIA Position array layout:
@@ -327,25 +327,25 @@ Public Sub CATMain()
         '   6-8  = local Z axis in parent coords
         '   9-11 = origin in parent coords
         Dim posMatrix(11) As Double
-        posMatrix(0)  = localR(0, 0)
-        posMatrix(1)  = localR(1, 0)
-        posMatrix(2)  = localR(2, 0)
-        posMatrix(3)  = localR(0, 1)
-        posMatrix(4)  = localR(1, 1)
-        posMatrix(5)  = localR(2, 1)
-        posMatrix(6)  = localR(0, 2)
-        posMatrix(7)  = localR(1, 2)
-        posMatrix(8)  = localR(2, 2)
-        posMatrix(9)  = localT(0)
+        posMatrix(0) = localR(0, 0)
+        posMatrix(1) = localR(1, 0)
+        posMatrix(2) = localR(2, 0)
+        posMatrix(3) = localR(0, 1)
+        posMatrix(4) = localR(1, 1)
+        posMatrix(5) = localR(2, 1)
+        posMatrix(6) = localR(0, 2)
+        posMatrix(7) = localR(1, 2)
+        posMatrix(8) = localR(2, 2)
+        posMatrix(9) = localT(0)
         posMatrix(10) = localT(1)
         posMatrix(11) = localT(2)
 
         ' ── DEBUG: final local matrix sent to SetComponents ──────────────
         MsgBox "[DEBUG] 最终定位矩阵（相对父产品坐标）" & Chr(10) & _
-               "localR X轴 = (" & Round(localR(0,0),4) & ", " & Round(localR(1,0),4) & ", " & Round(localR(2,0),4) & ")" & Chr(10) & _
-               "localR Y轴 = (" & Round(localR(0,1),4) & ", " & Round(localR(1,1),4) & ", " & Round(localR(2,1),4) & ")" & Chr(10) & _
-               "localR Z轴 = (" & Round(localR(0,2),4) & ", " & Round(localR(1,2),4) & ", " & Round(localR(2,2),4) & ")" & Chr(10) & _
-               "localT 原点= (" & Round(localT(0),4) & ", " & Round(localT(1),4) & ", " & Round(localT(2),4) & ")", _
+               "localR X轴 = (" & Round(localR(0, 0), 4) & ", " & Round(localR(1, 0), 4) & ", " & Round(localR(2, 0), 4) & ")" & Chr(10) & _
+               "localR Y轴 = (" & Round(localR(0, 1), 4) & ", " & Round(localR(1, 1), 4) & ", " & Round(localR(2, 1), 4) & ")" & Chr(10) & _
+               "localR Z轴 = (" & Round(localR(0, 2), 4) & ", " & Round(localR(1, 2), 4) & ", " & Round(localR(2, 2), 4) & ")" & Chr(10) & _
+               "localT 原点= (" & Round(localT(0), 4) & ", " & Round(localT(1), 4) & ", " & Round(localT(2), 4) & ")", _
                vbInformation, "快速装配紧固件 [DEBUG]"
 
         newComp.Position.SetComponents posMatrix
@@ -525,7 +525,7 @@ End Sub
 '  Private Sub btnFlip_Click()
 '      g_flipDir = Not g_flipDir
 '      If g_flipDir Then
-'          btnFlip.Caption = "翻转方向: 是 ✓"
+'          btnFlip.Caption = "翻转方向: 是 ?"
 '      Else
 '          btnFlip.Caption = "翻转方向: 否"
 '      End If
