@@ -1,9 +1,8 @@
 """
-BOM edit dialog.
+BOM 编辑对话框模块。
 
-Provides:
-- BomEditDialog – editable table for completing BOM properties and writing them
-                  back to CATIA via COM.
+提供：
+- BomEditDialog – 可编辑表格，用于完成 BOM 属性并通过 COM 写回 CATIA。
 """
 
 import copy
@@ -35,12 +34,20 @@ from catia_companion.catia.bom_write import write_bom_to_catia
 
 logger = logging.getLogger(__name__)
 
-# Custom UserRole for QTreeWidgetItem: marks a row as locked (unreadable / not found)
+# 自定义 UserRole 用于 QTreeWidgetItem：标记行为锁定（不可读/未找到）
 _ITEM_LOCKED_ROLE: int = Qt.ItemDataRole.UserRole + 1
 
 
-def _find_catia_doc_by_path(docs, path: Path):
-    """Return the CATIA document object whose resolved path matches *path*, or ``None``."""
+def _find_catia_doc_by_path(docs, path: Path) -> object | None:
+    """返回解析路径与 *path* 匹配的 CATIA 文档对象，如果未找到则返回 ``None``。
+
+    参数：
+        docs: CATIA 文档集合
+        path: 要匹配的文件路径
+
+    返回：
+        匹配的 CATIA 文档对象，或 None
+    """
     for i in range(1, docs.count + 1):
         try:
             d = docs.item(i)
