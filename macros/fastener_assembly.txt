@@ -475,6 +475,22 @@ End Sub
 ' ============================================================================
 Public Sub MoveLastFastener()
 
+    ' ── 第一步：将已有组件重置到 targetProduct 原点（Identity） ───────────
+    ' Move.Apply 在某些 CATIA 版本中为相对变换，先置位到原点可确保后续
+    ' 矩阵以绝对方式生效，等效于 PlaceFastenerAtHole 对新建组件的处理。
+    Dim lastComp As Object
+    Set lastComp = g_lastProducts.Item(g_lastCompIdx)
+    Dim moveObjReset As Object
+    Set moveObjReset = lastComp.Move
+    Set moveObjReset = moveObjReset.MovableObject
+    Dim identityMatrix(11)
+    identityMatrix(0) = 1: identityMatrix(1) = 0: identityMatrix(2) = 0
+    identityMatrix(3) = 0: identityMatrix(4) = 1: identityMatrix(5) = 0
+    identityMatrix(6) = 0: identityMatrix(7) = 0: identityMatrix(8) = 1
+    identityMatrix(9) = 0: identityMatrix(10) = 0: identityMatrix(11) = 0
+    moveObjReset.Apply identityMatrix
+
+    ' ── 第二步：使用与 PlaceFastenerAtHole 相同的逻辑重新定位 ────────────
     ' insertionDir：根据当前 g_flipDir 决定方向
     Dim insertionDir(2) As Double
     If g_flipDir Then
@@ -524,9 +540,7 @@ Public Sub MoveLastFastener()
     moveMatrix(10) = translation(1)
     moveMatrix(11) = translation(2)
 
-    ' 直接对已有组件应用新矩阵，无需删除重建
-    Dim lastComp As Object
-    Set lastComp = g_lastProducts.Item(g_lastCompIdx)
+    ' 对已有组件（已在步骤一重置到原点）应用最终定位矩阵
     Dim moveObj As Object
     Set moveObj = lastComp.Move
     Set moveObj = moveObj.MovableObject
