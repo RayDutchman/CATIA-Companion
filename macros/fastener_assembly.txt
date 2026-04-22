@@ -40,8 +40,8 @@ Option Explicit
 '      SelectElement2，让用户在产品结构树中选择目标产品/部件（g_targetProduct）。
 '      （SelectElement2 绑定调用时活动文档；MsgBox 为模态会阻塞窗口切换；
 '      非模态 UserForm 是正确的等待方式，允许用户自由切换文档后再继续。）
-'   4. 将 g_targetProduct 设为当前工作对象（In Work Object）：SPA 测量直接在
-'      g_targetProduct 坐标系中返回值，与 Move.Apply 坐标系保持一致，无需坐标变换。
+'   4. 激活装配体文档后，用 SPAWorkbench.GetMeasurableInContext(holeRef, g_targetProduct)
+'      直接在 g_targetProduct 坐标系中获取测量值，与 Move.Apply 坐标系一致，无需坐标变换。
 '   5. 装配循环：选择孔口圆形边 -> 添加紧固件实例并定位。
 '      装配完成后可点击浮动面板上的"翻转方向"按钮撤销并重装（方向相反）。
 '      翻转状态跨次保留：下一个紧固件默认使用上一个件的翻转状态。
@@ -241,9 +241,9 @@ Public Sub ContinueSelectProduct()
         MsgBox "[DEBUG] 激活assemblyDoc前 CATIA.ActiveDocument.Name = " & CATIA.ActiveDocument.Name, _
                vbInformation, "快速装配紧固件 [DEBUG]"
 
-        ' 激活装配体文档，确保 SPA 在根装配坐标系（绝对坐标系）中返回测量值。
-        ' Move.Apply 同样在绝对坐标系中解释变换矩阵，两者坐标系一致，无需额外转换。
-        ' 必须在 spa2 = GetWorkbench("SPAWorkbench") 之前调用，否则 SPA 上下文已固定为当前活动文档。
+        ' 激活装配体文档后获取 SPAWorkbench。
+        ' GetMeasurableInContext 需要在装配体 SPA 上下文中调用；
+        ' 必须在 GetWorkbench("SPAWorkbench") 之前 Activate，否则 SPA 上下文仍绑定旧文档。
         assemblyDoc.Activate
 
         ' ── 调试：激活后的 ActiveDocument ────────────────────────────────────
@@ -254,8 +254,10 @@ Public Sub ContinueSelectProduct()
         Set spa2 = CATIA.ActiveDocument.GetWorkbench("SPAWorkbench")
         Dim holeRef As Object
         Set holeRef = sel.Item(1).Reference
+        ' GetMeasurableInContext(reference, contextProduct)：
+        ' 在 g_targetProduct 坐标系中返回测量值，与 Move.Apply 坐标系一致，无需手动坐标变换。
         Dim holeMeas As Object
-        Set holeMeas = spa2.GetMeasurable(holeRef)
+        Set holeMeas = spa2.GetMeasurableInContext(holeRef, g_targetProduct)
 
         ' 不声明 As Double：GetAxis 在某些 CATIA 版本中需要 Variant 数组才能写入。
         Dim holeAxis(2)
@@ -278,8 +280,8 @@ Public Sub ContinueSelectProduct()
         g_holeAxisX = holeAxis(0): g_holeAxisY = holeAxis(1): g_holeAxisZ = holeAxis(2)
         g_holePtX   = holePt(0):   g_holePtY   = holePt(1):   g_holePtZ   = holePt(2)
 
-        ' ── 调试：孔的几何（g_targetProduct 坐标系） ──────────────────────
-        MsgBox "[DEBUG] 孔的几何（g_targetProduct 坐标系）" & Chr(10) & _
+        ' ── 调试：孔的几何（GetMeasurableInContext → g_targetProduct 坐标系） ──
+        MsgBox "[DEBUG] 孔的几何（GetMeasurableInContext, g_targetProduct 坐标系）" & Chr(10) & _
                "holeAxis = (" & Round(holeAxis(0), 4) & ", " & Round(holeAxis(1), 4) & ", " & Round(holeAxis(2), 4) & ")" & Chr(10) & _
                "holePt   = (" & Round(holePt(0), 4) & ", " & Round(holePt(1), 4) & ", " & Round(holePt(2), 4) & ")", _
                vbInformation, "快速装配紧固件 [DEBUG]"
