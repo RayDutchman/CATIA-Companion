@@ -89,12 +89,14 @@ Public Sub CATMain()
 
     ' faAxis：圆形边轴线方向（GetAxis 返回值）。
     ' 运行时可通过 FlipForm 按钮翻转方向。
-    ' 注意：必须声明为 As Double 类型数组，Variant 类型会导致 GetAxis 写入失败（全为零）。
-    Dim faAxis(2) As Double
+    ' 注意：此处不声明 As Double，因为实测某些 CATIA 版本中 As Double 会导致
+    ' GetAxis 无法写入数组；Variant 固定大小数组可正常接收值。
+    ' GetAxis 不保证返回单位向量，BuildFrame 会在内部归一化。
+    Dim faAxis(2)
     fastEdgeMeas.GetAxis faAxis
 
     ' faAnchorPt：紧固件上的锚点（圆形边圆心）。
-    Dim faAnchorPt(2) As Double
+    Dim faAnchorPt(2)
     fastEdgeMeas.GetCenter faAnchorPt
 
     sel.Clear
@@ -183,11 +185,11 @@ Public Sub CATMain()
         Dim holeMeas As Object
         Set holeMeas = spa.GetMeasurable(holeRef)
 
-        ' 注意：必须声明为 As Double 类型，Variant 类型会导致 GetAxis 写入失败（全为零），
-        ' 进而使旋转矩阵退化，SetComponents 报 type mismatch。
-        Dim holeAxis(2) As Double
+        ' 与 faAxis 相同，不声明 As Double，避免 GetAxis 在某些 CATIA 版本中无法写入。
+        ' BuildFrame 会在内部对传入向量进行归一化处理。
+        Dim holeAxis(2)
         holeMeas.GetAxis holeAxis
-        Dim holePt(2) As Double
+        Dim holePt(2)
         holeMeas.GetCenter holePt
 
         sel.Clear
@@ -338,22 +340,35 @@ End Sub
 ' 辅助函数：根据给定的 Z 轴构建正交坐标系 {outX, outY, inZ}。
 ' ============================================================================
 Private Sub BuildFrame(ByRef inZ() As Double, ByRef outX() As Double, ByRef outY() As Double)
-    ' 选取一个与 inZ 不（反）平行的参考向量
+    ' GetAxis 返回的向量不保证是单位向量，必须先对 inZ 归一化。
+    ' 否则 outY = cross(nz, outX) 的长度会等于 |inZ|，
+    ' 导致旋转矩阵列向量非单位，SetComponents 报 type mismatch。
+    Dim zLen As Double
+    zLen = Sqr(inZ(0) * inZ(0) + inZ(1) * inZ(1) + inZ(2) * inZ(2))
+    If zLen < 0.000000000001 Then
+        ' inZ 为零向量；返回安全默认坐标系以防止崩溃
+        outX(0) = 1: outX(1) = 0: outX(2) = 0
+        outY(0) = 0: outY(1) = 1: outY(2) = 0
+        Exit Sub
+    End If
+    Dim nz(2) As Double
+    nz(0) = inZ(0) / zLen: nz(1) = inZ(1) / zLen: nz(2) = inZ(2) / zLen
+
+    ' 选取一个与 nz 不（反）平行的参考向量
     Dim refV(2) As Double
-    If Abs(inZ(0)) < 0.9 Then
+    If Abs(nz(0)) < 0.9 Then
         refV(0) = 1: refV(1) = 0: refV(2) = 0
     Else
         refV(0) = 0: refV(1) = 1: refV(2) = 0
     End If
 
-    ' outX = cross(inZ, refV)，然后归一化
-    outX(0) = inZ(1) * refV(2) - inZ(2) * refV(1)
-    outX(1) = inZ(2) * refV(0) - inZ(0) * refV(2)
-    outX(2) = inZ(0) * refV(1) - inZ(1) * refV(0)
+    ' outX = cross(nz, refV)，归一化
+    outX(0) = nz(1) * refV(2) - nz(2) * refV(1)
+    outX(1) = nz(2) * refV(0) - nz(0) * refV(2)
+    outX(2) = nz(0) * refV(1) - nz(1) * refV(0)
     Dim xLen As Double
     xLen = Sqr(outX(0) * outX(0) + outX(1) * outX(1) + outX(2) * outX(2))
     If xLen < 0.000000000001 Then
-        ' inZ 为零向量；返回安全默认坐标系以防止崩溃
         outX(0) = 1: outX(1) = 0: outX(2) = 0
         outY(0) = 0: outY(1) = 1: outY(2) = 0
         Exit Sub
@@ -362,10 +377,10 @@ Private Sub BuildFrame(ByRef inZ() As Double, ByRef outX() As Double, ByRef outY
     outX(1) = outX(1) / xLen
     outX(2) = outX(2) / xLen
 
-    ' outY = cross(inZ, outX)
-    outY(0) = inZ(1) * outX(2) - inZ(2) * outX(1)
-    outY(1) = inZ(2) * outX(0) - inZ(0) * outX(2)
-    outY(2) = inZ(0) * outX(1) - inZ(1) * outX(0)
+    ' outY = cross(nz, outX)，由于 nz 和 outX 均为单位向量且互相垂直，结果必为单位向量
+    outY(0) = nz(1) * outX(2) - nz(2) * outX(1)
+    outY(1) = nz(2) * outX(0) - nz(0) * outX(2)
+    outY(2) = nz(0) * outX(1) - nz(1) * outX(0)
 End Sub
 
 
