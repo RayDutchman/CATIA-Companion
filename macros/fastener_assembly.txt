@@ -112,51 +112,46 @@ Public Sub ContinueSelectFastener()
     g_fastenerPath = fastenerDoc.FullName
     g_fastenerPN   = fastenerDoc.Product.PartNumber
 
-    ' ── 2. 在紧固件上选择参考几何 ────────────────────────────────────────
     Dim sel As Object
     Set sel = fastenerDoc.Selection
     sel.Clear
 
-    ' 选择紧固件上的一条圆形边。
+    ' ── 2. 在紧固件上选择参考圆形边 ──────────────────────────────────────
     '   GetAxis   -> 紧固件轴线方向（faAxis，紧固件局部坐标系）
     '   GetCenter -> 与孔中心重合的锚点（faAnchorPt，紧固件局部坐标系）
     Dim fastEdgeFilter As Variant
     fastEdgeFilter = Array("MonoDim")
     Dim status As String
-    status = sel.SelectElement2(fastEdgeFilter, _
-        "请选择紧固件的圆形边（用于确定轴向和定位点）", False)
-    If status <> "Normal" Then
-        MsgBox "已取消选择。", vbInformation, "快速装配紧固件"
-        Exit Sub
-    End If
-
-    Dim spa As Object
-    Set spa = fastenerDoc.GetWorkbench("SPAWorkbench")
+    ' 绑定紧固件文档的 SPA 工作台，用于读取边的几何信息
+    Dim spaFastener As Object
+    Set spaFastener = fastenerDoc.GetWorkbench("SPAWorkbench")
 
     Dim fastEdgeRef As Object
-    Set fastEdgeRef = sel.Item(1).Reference
     Dim fastEdgeMeas As Object
-    Set fastEdgeMeas = spa.GetMeasurable(fastEdgeRef)
-
-    ' faAxis：圆形边轴线方向（GetAxis 返回值）。
-    ' 注意：此处不声明 As Double，因为实测某些 CATIA 版本中 As Double 会导致
-    ' GetAxis 无法写入数组；Variant 固定大小数组可正常接收值。
+    ' 不声明 As Double，避免某些 CATIA 版本中 GetAxis 无法写入数组（须为 Variant 固定大小数组）
     ' GetAxis 不保证返回单位向量，BuildFrame 会在内部归一化。
     Dim faAxis(2)
     Dim faAnchorPt(2)
-
-    ' 错误处理：若所选几何体不是圆形边（如直线边），GetAxis / GetCenter 会报错
     Dim bFaGeomOK As Boolean
-    ' 使用独立函数隔离错误域，避免某些 CATIA 版本中 On Error Resume Next 在调用层失效。
-    bFaGeomOK = TryGetAxis(fastEdgeMeas, faAxis) And TryGetCenter(fastEdgeMeas, faAnchorPt)
 
-    If Not bFaGeomOK Then
-        MsgBox "无法从所选几何体获取轴向和圆心。" & Chr(10) & _
-               "请选择一条圆形边（而非直线边或平面）。", _
-               vbExclamation, "快速装配紧固件"
-        sel.Clear
-        Exit Sub
-    End If
+    ' 选择循环：若所选元素不是圆形边则提示重新选择；按 ESC 可退出宏
+    Do
+        status = sel.SelectElement2(fastEdgeFilter, _
+            "请选择紧固件上的圆形边（确定轴向和定位点）[ESC 退出]", False)
+        If status <> "Normal" Then Exit Sub
+
+        Set fastEdgeRef = sel.Item(1).Reference
+        Set fastEdgeMeas = spaFastener.GetMeasurable(fastEdgeRef)
+
+        ' 使用独立函数隔离错误域，避免某些 CATIA 版本中 On Error Resume Next 在调用层失效
+        bFaGeomOK = TryGetAxis(fastEdgeMeas, faAxis) And TryGetCenter(fastEdgeMeas, faAnchorPt)
+        If Not bFaGeomOK Then
+            MsgBox "无法从所选几何体获取轴向和圆心。" & Chr(10) & _
+                   "请选择一条圆形边（而非直线边或平面）。", _
+                   vbExclamation, "快速装配紧固件"
+            sel.Clear
+        End If
+    Loop While Not bFaGeomOK
 
     sel.Clear
 
@@ -251,8 +246,9 @@ Public Sub ContinueSelectProduct()
             "  已装配:" & g_count & "  翻转:" & IIf(g_flipDir, "是✓", "否") & ")  [ESC终止]", False)
         If status <> "Normal" Then Exit Do
 
-        Dim spa2 As Object
-        Set spa2 = CATIA.ActiveDocument.GetWorkbench("SPAWorkbench")
+        ' 绑定装配体文档的 SPA 工作台，用于在根装配体坐标系中测量孔的几何
+        Dim spaAssembly As Object
+        Set spaAssembly = CATIA.ActiveDocument.GetWorkbench("SPAWorkbench")
         Dim holeRef As Object
         Set holeRef = sel.Item(1).Reference
         ' GetMeasurableInContext(reference, contextProduct)：
@@ -267,7 +263,7 @@ Public Sub ContinueSelectProduct()
         ' 使用独立函数隔离错误域，避免某些 CATIA 版本中 On Error Resume Next 在调用层失效。
         Dim bHoleGeomOK As Boolean
         bHoleGeomOK = False
-        If TryGetMeasurableInContext(spa2, holeRef, assemblyDoc.Product, holeMeas) Then
+        If TryGetMeasurableInContext(spaAssembly, holeRef, assemblyDoc.Product, holeMeas) Then
             bHoleGeomOK = TryGetAxis(holeMeas, holeAxis) And TryGetCenter(holeMeas, holePt)
         End If
 
@@ -291,23 +287,23 @@ Public Sub ContinueSelectProduct()
         ' SPA GetMeasurableInContext(ref, assemblyDoc.Product) 始终返回根装配体坐标系中的值。
         ' Move.Apply 在 g_targetProduct 局部坐标系中解释变换矩阵，因此需做逆变换：
         '   local = R^T * (world - T)
-        ' 其中 R 的列向量 = g_targetProduct.Position.GetComponents 返回的 tpPos(0..8)（X/Y/Z 轴），
-        ' T = tpPos(9..11)（原点偏移）。
+        ' 其中 R 的列向量 = g_targetProduct.Position.GetComponents 返回的 tpMatrix(0..8)（X/Y/Z 轴），
+        ' T = tpMatrix(9..11)（原点偏移）。
         ' 若 g_targetProduct 与根坐标系重合（Position 为单位矩阵），则变换为恒等变换，结果不变。
-        Dim tpPos(11)   ' 不能加 As Double
-        g_targetProduct.Position.GetComponents tpPos
-        Dim pRel(2) As Double
-        pRel(0) = holePt(0) - tpPos(9)
-        pRel(1) = holePt(1) - tpPos(10)
-        pRel(2) = holePt(2) - tpPos(11)
-        holePt(0) = tpPos(0)*pRel(0) + tpPos(1)*pRel(1) + tpPos(2)*pRel(2)
-        holePt(1) = tpPos(3)*pRel(0) + tpPos(4)*pRel(1) + tpPos(5)*pRel(2)
-        holePt(2) = tpPos(6)*pRel(0) + tpPos(7)*pRel(1) + tpPos(8)*pRel(2)
-        Dim axW(2) As Double
-        axW(0) = holeAxis(0): axW(1) = holeAxis(1): axW(2) = holeAxis(2)
-        holeAxis(0) = tpPos(0)*axW(0) + tpPos(1)*axW(1) + tpPos(2)*axW(2)
-        holeAxis(1) = tpPos(3)*axW(0) + tpPos(4)*axW(1) + tpPos(5)*axW(2)
-        holeAxis(2) = tpPos(6)*axW(0) + tpPos(7)*axW(1) + tpPos(8)*axW(2)
+        Dim tpMatrix(11)   ' 不能加 As Double
+        g_targetProduct.Position.GetComponents tpMatrix
+        Dim holePtOffset(2) As Double
+        holePtOffset(0) = holePt(0) - tpMatrix(9)
+        holePtOffset(1) = holePt(1) - tpMatrix(10)
+        holePtOffset(2) = holePt(2) - tpMatrix(11)
+        holePt(0) = tpMatrix(0)*holePtOffset(0) + tpMatrix(1)*holePtOffset(1) + tpMatrix(2)*holePtOffset(2)
+        holePt(1) = tpMatrix(3)*holePtOffset(0) + tpMatrix(4)*holePtOffset(1) + tpMatrix(5)*holePtOffset(2)
+        holePt(2) = tpMatrix(6)*holePtOffset(0) + tpMatrix(7)*holePtOffset(1) + tpMatrix(8)*holePtOffset(2)
+        Dim holeAxisWorld(2) As Double
+        holeAxisWorld(0) = holeAxis(0): holeAxisWorld(1) = holeAxis(1): holeAxisWorld(2) = holeAxis(2)
+        holeAxis(0) = tpMatrix(0)*holeAxisWorld(0) + tpMatrix(1)*holeAxisWorld(1) + tpMatrix(2)*holeAxisWorld(2)
+        holeAxis(1) = tpMatrix(3)*holeAxisWorld(0) + tpMatrix(4)*holeAxisWorld(1) + tpMatrix(5)*holeAxisWorld(2)
+        holeAxis(2) = tpMatrix(6)*holeAxisWorld(0) + tpMatrix(7)*holeAxisWorld(1) + tpMatrix(8)*holeAxisWorld(2)
 
         sel.Clear
 
@@ -358,30 +354,30 @@ End Sub
 ' ============================================================================
 Public Sub PlaceFastenerAtHole()
 
-    ' ta：插入方向，根据 g_flipDir 决定正向或反向
-    Dim ta(2) As Double
+    ' insertionDir：紧固件插入方向，根据 g_flipDir 决定正向或反向
+    Dim insertionDir(2) As Double
     If g_flipDir Then
-        ta(0) = -g_holeAxisX: ta(1) = -g_holeAxisY: ta(2) = -g_holeAxisZ
+        insertionDir(0) = -g_holeAxisX: insertionDir(1) = -g_holeAxisY: insertionDir(2) = -g_holeAxisZ
     Else
-        ta(0) = g_holeAxisX: ta(1) = g_holeAxisY: ta(2) = g_holeAxisZ
+        insertionDir(0) = g_holeAxisX: insertionDir(1) = g_holeAxisY: insertionDir(2) = g_holeAxisZ
     End If
 
-    ' targetPt：孔圆心
-    Dim targetPt(2) As Double
-    targetPt(0) = g_holePtX: targetPt(1) = g_holePtY: targetPt(2) = g_holePtZ
+    ' holeCenterLocal：孔圆心（g_targetProduct 局部坐标系）
+    Dim holeCenterLocal(2) As Double
+    holeCenterLocal(0) = g_holePtX: holeCenterLocal(1) = g_holePtY: holeCenterLocal(2) = g_holePtZ
 
-    ' ── 计算旋转矩阵 R：使 g_faAxis 旋转到 ta ────────────────────────────
+    ' ── 计算旋转矩阵 R：使 g_faAxis 旋转到 insertionDir ──────────────────
     ' 以 g_faAxis 为 Z 轴构建正交坐标系 F1
     Dim f1x(2) As Double, f1y(2) As Double, f1z(2) As Double
     f1z(0) = g_faAxis(0): f1z(1) = g_faAxis(1): f1z(2) = g_faAxis(2)
     Call BuildFrame(f1z, f1x, f1y)
 
-    ' 以 ta 为 Z 轴构建正交坐标系 F2
+    ' 以 insertionDir 为 Z 轴构建正交坐标系 F2
     Dim f2x(2) As Double, f2y(2) As Double, f2z(2) As Double
-    f2z(0) = ta(0): f2z(1) = ta(1): f2z(2) = ta(2)
+    f2z(0) = insertionDir(0): f2z(1) = insertionDir(1): f2z(2) = insertionDir(2)
     Call BuildFrame(f2z, f2x, f2y)
 
-    ' R = F2 * F1^T（将 g_faAxis 映射到 ta，保持正交归一性）
+    ' R = F2 * F1^T（将 g_faAxis 映射到 insertionDir，保持正交归一性）
     Dim R(2, 2) As Double
     Dim ri As Integer, rj As Integer
     For ri = 0 To 2
@@ -393,16 +389,16 @@ Public Sub PlaceFastenerAtHole()
     Next ri
 
     ' ── 计算平移向量 ──────────────────────────────────────────────────────
-    ' R * g_faAnchorPt + T = targetPt   =>  T = targetPt - R * g_faAnchorPt
-    Dim rfp(2) As Double
-    rfp(0) = R(0, 0) * g_faAnchorPt(0) + R(0, 1) * g_faAnchorPt(1) + R(0, 2) * g_faAnchorPt(2)
-    rfp(1) = R(1, 0) * g_faAnchorPt(0) + R(1, 1) * g_faAnchorPt(1) + R(1, 2) * g_faAnchorPt(2)
-    rfp(2) = R(2, 0) * g_faAnchorPt(0) + R(2, 1) * g_faAnchorPt(1) + R(2, 2) * g_faAnchorPt(2)
+    ' R * g_faAnchorPt + translation = holeCenterLocal   =>  translation = holeCenterLocal - R * g_faAnchorPt
+    Dim rotatedAnchor(2) As Double
+    rotatedAnchor(0) = R(0, 0) * g_faAnchorPt(0) + R(0, 1) * g_faAnchorPt(1) + R(0, 2) * g_faAnchorPt(2)
+    rotatedAnchor(1) = R(1, 0) * g_faAnchorPt(0) + R(1, 1) * g_faAnchorPt(1) + R(1, 2) * g_faAnchorPt(2)
+    rotatedAnchor(2) = R(2, 0) * g_faAnchorPt(0) + R(2, 1) * g_faAnchorPt(1) + R(2, 2) * g_faAnchorPt(2)
 
-    Dim Tvec(2) As Double
-    Tvec(0) = targetPt(0) - rfp(0)
-    Tvec(1) = targetPt(1) - rfp(1)
-    Tvec(2) = targetPt(2) - rfp(2)
+    Dim translation(2) As Double
+    translation(0) = holeCenterLocal(0) - rotatedAnchor(0)
+    translation(1) = holeCenterLocal(1) - rotatedAnchor(1)
+    translation(2) = holeCenterLocal(2) - rotatedAnchor(2)
 
     ' ── 添加紧固件实例 ────────────────────────────────────────────────────
     Dim products As Object
@@ -433,9 +429,9 @@ Public Sub PlaceFastenerAtHole()
     moveMatrix(6) = R(0, 2)
     moveMatrix(7) = R(1, 2)
     moveMatrix(8) = R(2, 2)
-    moveMatrix(9) = Tvec(0)
-    moveMatrix(10) = Tvec(1)
-    moveMatrix(11) = Tvec(2)
+    moveMatrix(9) = translation(0)
+    moveMatrix(10) = translation(1)
+    moveMatrix(11) = translation(2)
 
     ' ── 调试：发送给 Move.Apply 的矩阵（g_targetProduct 坐标系） ─────────
     If DEBUG_MODE Then
@@ -443,7 +439,7 @@ Public Sub PlaceFastenerAtHole()
                "R X轴 = (" & Round(R(0, 0), 4) & ", " & Round(R(1, 0), 4) & ", " & Round(R(2, 0), 4) & ")" & Chr(10) & _
                "R Y轴 = (" & Round(R(0, 1), 4) & ", " & Round(R(1, 1), 4) & ", " & Round(R(2, 1), 4) & ")" & Chr(10) & _
                "R Z轴 = (" & Round(R(0, 2), 4) & ", " & Round(R(1, 2), 4) & ", " & Round(R(2, 2), 4) & ")" & Chr(10) & _
-               "T 原点= (" & Round(Tvec(0), 4) & ", " & Round(Tvec(1), 4) & ", " & Round(Tvec(2), 4) & ")", _
+               "平移  = (" & Round(translation(0), 4) & ", " & Round(translation(1), 4) & ", " & Round(translation(2), 4) & ")", _
                vbInformation, "快速装配紧固件 [DEBUG]"
     End If
 
