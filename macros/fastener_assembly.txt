@@ -19,8 +19,11 @@ Option Explicit
 '   1. 打开或引用紧固件 CATPart，读取零件号。
 '   2. 用户选择紧固件上的一条圆形边（RectilinearTriDimFeatEdge），
 '      GetAxis 获取紧固件轴向，GetCenter 获取定位锚点。
-'   3. 提示用户切换到目标装配体文档窗口；通过 CATIA 状态栏提示，
-'      用户可自由切换文档窗口并在产品结构树中直接选择目标产品/部件。
+'   3. 通过一个简单的 MsgBox（仅含 OK 按钮，非 UserForm）提示用户先切换到
+'      目标装配体文档窗口，点击确定后，宏在该文档上调用 SelectElement2 请用户
+'      在产品结构树中点击目标产品/部件。
+'      （SelectElement2 绑定调用时的活动文档；在调用前切换文档会使其自动取消，
+'      因此必须在目标文档已成为活动文档后才能调用；MsgBox 是最简的等待方式。）
 '   4. 装配循环：选择孔口圆形边 -> 添加紧固件实例并定位。
 '      装配完成后可点击浮动面板上的"翻转方向"按钮撤销并重装（方向相反）。
 '      翻转状态跨次保留：下一个紧固件默认使用上一个件的翻转状态。
@@ -135,25 +138,18 @@ Public Sub CATMain()
            "faAnchorPt= (" & Round(faAnchorPt(0), 4) & ", " & Round(faAnchorPt(1), 4) & ", " & Round(faAnchorPt(2), 4) & ")", _
            vbInformation, "快速装配紧固件 [DEBUG]"
 
-    ' ── 3+4. 在 CATIA 状态栏提示用户切换到装配体并选择目标产品 ──────────────
-    ' SelectElement2 在 CATIA 左下角状态栏显示提示文字，
-    ' 用户可自由切换到目标装配体文档窗口后直接在产品结构树中点击，
-    ' 无需任何弹窗，全程不中断宏运行。
-    Set sel = CATIA.ActiveDocument.Selection
-    sel.Clear
-
-    Dim prodFilter As Variant
-    prodFilter = Array("Product")
-    status = sel.SelectElement2(prodFilter, _
-        "请切换到目标装配体（CATProduct）文档窗口，在产品结构树中选择紧固件要装入的产品/部件", False)
-    If status <> "Normal" Then
-        MsgBox "已取消选择。", vbInformation, "快速装配紧固件"
-        Exit Sub
-    End If
+    ' ── 3+4. 提示用户切换到装配体文档，然后选择目标产品 ─────────────────────
+    ' SelectElement2 绑定调用时的活动文档：若在选择等待期间切换文档，
+    ' CATIA 会自动取消该选择（返回非 "Normal"）。
+    ' 解决方案：先通过 MsgBox 等待用户切换到 CATProduct 文档后点 OK，
+    ' 然后在已切换好的文档上再调用 SelectElement2，就不会再被文档切换取消。
+    CATIA.StatusBar = "请先切换到目标装配体（CATProduct）文档窗口，然后点击确定继续。"
+    MsgBox "请先切换到目标装配体（CATProduct）文档窗口，" & Chr(10) & _
+           "然后点击确定继续。", vbInformation, "快速装配紧固件"
 
     If TypeName(CATIA.ActiveDocument) <> "ProductDocument" Then
-        MsgBox "选中对象不在 CATProduct 文档中。" & Chr(10) & _
-               "请重新运行宏，切换到装配体文档后再选择产品/部件。", _
+        MsgBox "当前活动文档不是 CATProduct。" & Chr(10) & _
+               "请切换到目标装配体文档后重新运行宏。", _
                vbExclamation, "快速装配紧固件"
         Exit Sub
     End If
@@ -161,6 +157,16 @@ Public Sub CATMain()
     Dim assemblyDoc As Object
     Set assemblyDoc = CATIA.ActiveDocument
     Set sel = assemblyDoc.Selection
+    sel.Clear
+
+    Dim prodFilter As Variant
+    prodFilter = Array("Product")
+    status = sel.SelectElement2(prodFilter, _
+        "在产品结构树中选择紧固件要装入的产品/部件", False)
+    If status <> "Normal" Then
+        MsgBox "已取消选择。", vbInformation, "快速装配紧固件"
+        Exit Sub
+    End If
 
     Set g_targetProduct = sel.Item(1).Value
     g_targetPN = g_targetProduct.PartNumber
