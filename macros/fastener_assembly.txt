@@ -71,6 +71,10 @@ Public g_hasLastComp  As Boolean   ' True = 当前可对最近件执行翻转重
 Public g_lastProducts As Object    ' 最近装配件所属的 Products 集合
 Public g_lastCompIdx  As Long      ' 最近装配件在集合中的索引（1-based）
 
+' 装配循环活动标志：ContinueSelectProduct 进入 Do 循环时设为 True，ESC/循环结束时设为 False。
+' FlipForm.btnFlip_Click 检查此标志，防止 ESC 退出后因消息队列中残留的点击事件意外改变 g_flipDir。
+Public g_loopActive   As Boolean
+
 ' 装配循环共享状态（供 PlaceFastenerAtHole 及状态栏更新使用）
 Public targetProduct As Object
 Public g_fastenerDoc   As Object
@@ -231,6 +235,7 @@ Public Sub ContinueSelectProduct()
     ' 更新 FlipForm 按钮 caption 以反映当前 g_flipDir 状态。
     g_count = 0
     g_hasLastComp = False
+    g_loopActive = True
     FlipForm.Show vbModeless
     FlipForm.btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
 
@@ -247,6 +252,7 @@ Public Sub ContinueSelectProduct()
             "选择孔的入口圆形边 (" & g_fastenerPN & " -> " & g_targetPN & _
             "  已装配:" & g_count & ")  [ESC终止]", False)
         If status <> "Normal" Then
+            g_loopActive = False
             g_hasLastComp = False
             Exit Do
         End If
@@ -337,6 +343,7 @@ Public Sub ContinueSelectProduct()
 
     Loop
 
+    g_loopActive = False
     g_hasLastComp = False
     Unload FlipForm
 
@@ -570,6 +577,9 @@ End Function
 ' ---- 将以下代码粘贴到 FlipForm 的代码模块中（不是本模块）----
 '
 '  Private Sub btnFlip_Click()
+'      ' g_loopActive 在 ESC 退出循环时设为 False；
+'      ' 若此时消息队列中有残留的点击事件，本行可防止意外改变 g_flipDir。
+'      If Not g_loopActive Then Exit Sub
 '      g_flipDir = Not g_flipDir
 '      btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
 '      ' 如果当前可翻转重装（装配后尚未选下一孔），

@@ -37,7 +37,6 @@ from catia_companion.ui.convert_dialog import FileConvertDialog
 from catia_companion.ui.export_bom_dialog import ExportBomDialog
 from catia_companion.ui.find_deps_dialog import FindDependenciesDialog
 from catia_companion.ui.bom_edit_dialog import BomEditDialog
-from catia_companion.ui.fastener_assembly_dialog import FastenerAssemblyDialog
 from catia_companion.ui.help_dialog import HelpDialog
 
 logger = logging.getLogger(__name__)
@@ -46,8 +45,8 @@ logger = logging.getLogger(__name__)
 class MainWindow(QMainWindow):
     """Primary application window."""
 
-    # 快速运行宏仅支持 CATScript 文件（.catvbs / .catscript），不支持 .catvba
-    _MACRO_EXTENSIONS: frozenset[str] = frozenset({".catvbs", ".catscript"})
+    # 快速运行宏支持 CATScript（.catvbs / .catscript）和 VBA（.catvba）文件。
+    _MACRO_EXTENSIONS: frozenset[str] = frozenset({".catvbs", ".catscript", ".catvba"})
 
     def __init__(self) -> None:
         super().__init__()
@@ -334,8 +333,11 @@ class MainWindow(QMainWindow):
             from pycatia import catia as _catia
             caa = _catia()
             app = caa.application
-            # 不传递额外参数，直接运行宏入口函数 CATMain
-            self._execute_catscript(app, macro_path, "CATMain", [])
+            if macro_path.suffix.lower() == ".catvba":
+                self._execute_catvba(app, macro_path, "CATMain", [])
+            else:
+                # .catvbs / .catscript — CATScript 目录模式
+                self._execute_catscript(app, macro_path, "CATMain", [])
             logger.info(f"宏执行成功：{macro_path.name}")
         except Exception as e:
             logger.error(f"宏执行失败 {macro_path.name}: {e}")
@@ -401,7 +403,18 @@ class MainWindow(QMainWindow):
         FindDependenciesDialog(self).exec()
 
     def _open_fastener_assembly_dialog(self) -> None:
-        FastenerAssemblyDialog(self).exec()
+        """直接运行 macros 文件夹中的 fastener_assembly.catvba VBA 宏。"""
+        catvba_path = self._macros_dir() / "fastener_assembly.catvba"
+        if not catvba_path.exists():
+            QMessageBox.warning(
+                self, "宏文件未找到",
+                f"未找到 VBA 宏文件：\n{catvba_path}\n\n"
+                "请在 CATIA VBA 编辑器中按照 macros/fastener_assembly.txt 创建宏，\n"
+                "将 VBA 项目导出为 fastener_assembly.catvba，\n"
+                "并放入 macros 文件夹后重试。",
+            )
+            return
+        self._run_macro(catvba_path)
 
     # ── Drawing generation ─────────────────────────────────────────────────
 
@@ -480,6 +493,26 @@ class MainWindow(QMainWindow):
         lib_dir = str(macro_path.parent)
         app.com_object.SystemService.ExecuteScript(
             lib_dir, 1, macro_path.name, func_name, params
+        )
+
+    def _execute_catvba(
+        self,
+        app,
+        macro_path: Path,
+        func_name: str,
+        params: list,
+    ) -> None:
+        """调用 CATIA SystemService.ExecuteScript 执行 VBA 宏（.catvba）。
+
+        此处使用 iLibraryType=2（VBA 项目文件模式）：
+          - iLibraryName：.catvba 文件完整路径
+          - iProgramName：VBA 模块名（通常为文件名不含扩展名）
+          - iFunctionName：要调用的函数/子程序名（通常为 "CATMain"）
+          - iParameters：传递给宏的参数列表
+        """
+        module_name = macro_path.stem
+        app.com_object.SystemService.ExecuteScript(
+            str(macro_path), 2, module_name, func_name, params
         )
 
     def _run_template_macro(
