@@ -233,47 +233,35 @@ Public Sub ContinueSelectProduct()
         Dim holeMeas As Object
         Set holeMeas = spa2.GetMeasurable(holeRef)
 
+        ' 将根装配体设为当前工作对象（In Work Object），使 SPA 测量直接在
+        ' 装配体根坐标系中返回值，无需再通过 Position 矩阵链手动转换。
+        assemblyDoc.Product.Activate
+
         ' 不声明 As Double：GetAxis 在某些 CATIA 版本中需要 Variant 数组才能写入。
         Dim holeAxis(2)
         holeMeas.GetAxis holeAxis
         Dim holePt(2)
         holeMeas.GetCenter holePt
 
-        ' SPA 返回的是零件局部坐标系中的值（因装配体不是工作对象）；
-        ' 通过叶节点产品的绝对变换，将其转换到装配体根坐标系。
-        Dim holeLeafProd As Object
-        Set holeLeafProd = sel.Item(1).LeafProduct
-        Dim holeLeafR(2, 2) As Double, holeLeafT(2) As Double
-        Call ComputeAbsoluteTransform(holeLeafProd, holeLeafR, holeLeafT)
-
-        Dim worldHoleAxis(2) As Double
-        worldHoleAxis(0) = holeLeafR(0, 0)*holeAxis(0) + holeLeafR(0, 1)*holeAxis(1) + holeLeafR(0, 2)*holeAxis(2)
-        worldHoleAxis(1) = holeLeafR(1, 0)*holeAxis(0) + holeLeafR(1, 1)*holeAxis(1) + holeLeafR(1, 2)*holeAxis(2)
-        worldHoleAxis(2) = holeLeafR(2, 0)*holeAxis(0) + holeLeafR(2, 1)*holeAxis(1) + holeLeafR(2, 2)*holeAxis(2)
-        Dim worldHolePt(2) As Double
-        worldHolePt(0) = holeLeafR(0, 0)*holePt(0) + holeLeafR(0, 1)*holePt(1) + holeLeafR(0, 2)*holePt(2) + holeLeafT(0)
-        worldHolePt(1) = holeLeafR(1, 0)*holePt(0) + holeLeafR(1, 1)*holePt(1) + holeLeafR(1, 2)*holePt(2) + holeLeafT(1)
-        worldHolePt(2) = holeLeafR(2, 0)*holePt(0) + holeLeafR(2, 1)*holePt(1) + holeLeafR(2, 2)*holePt(2) + holeLeafT(2)
-
         ' 归一化轴向（GetAxis 不保证返回单位向量）
         Dim holeAxisLen As Double
-        holeAxisLen = Sqr(worldHoleAxis(0)*worldHoleAxis(0) + worldHoleAxis(1)*worldHoleAxis(1) + worldHoleAxis(2)*worldHoleAxis(2))
+        holeAxisLen = Sqr(holeAxis(0)*holeAxis(0) + holeAxis(1)*holeAxis(1) + holeAxis(2)*holeAxis(2))
         If holeAxisLen > 0.000000000001 Then
-            worldHoleAxis(0) = worldHoleAxis(0)/holeAxisLen
-            worldHoleAxis(1) = worldHoleAxis(1)/holeAxisLen
-            worldHoleAxis(2) = worldHoleAxis(2)/holeAxisLen
+            holeAxis(0) = holeAxis(0)/holeAxisLen
+            holeAxis(1) = holeAxis(1)/holeAxisLen
+            holeAxis(2) = holeAxis(2)/holeAxisLen
         End If
 
         sel.Clear
 
         ' 写入模块级变量供 PlaceFastenerAtHole（含翻转重装路径）使用
-        g_holeAxisX = worldHoleAxis(0): g_holeAxisY = worldHoleAxis(1): g_holeAxisZ = worldHoleAxis(2)
-        g_holePtX   = worldHolePt(0):   g_holePtY   = worldHolePt(1):   g_holePtZ   = worldHolePt(2)
+        g_holeAxisX = holeAxis(0): g_holeAxisY = holeAxis(1): g_holeAxisZ = holeAxis(2)
+        g_holePtX   = holePt(0):   g_holePtY   = holePt(1):   g_holePtZ   = holePt(2)
 
-        ' ── 调试：孔的几何（装配体根坐标） ───────────────────────────────
-        MsgBox "[DEBUG] 孔的几何（装配体根坐标）" & Chr(10) & _
-               "holeAxis = (" & Round(worldHoleAxis(0), 4) & ", " & Round(worldHoleAxis(1), 4) & ", " & Round(worldHoleAxis(2), 4) & ")" & Chr(10) & _
-               "holePt   = (" & Round(worldHolePt(0), 4) & ", " & Round(worldHolePt(1), 4) & ", " & Round(worldHolePt(2), 4) & ")", _
+        ' ── 调试：孔的几何（装配坐标） ────────────────────────────────────
+        MsgBox "[DEBUG] 孔的几何（装配坐标）" & Chr(10) & _
+               "holeAxis = (" & Round(holeAxis(0), 4) & ", " & Round(holeAxis(1), 4) & ", " & Round(holeAxis(2), 4) & ")" & Chr(10) & _
+               "holePt   = (" & Round(holePt(0), 4) & ", " & Round(holePt(1), 4) & ", " & Round(holePt(2), 4) & ")", _
                vbInformation, "快速装配紧固件 [DEBUG]"
 
         ' 5b. 装配并定位紧固件
@@ -475,99 +463,6 @@ Private Function FrameCol(ByVal row As Integer, ByVal col As Integer, _
         Case 2: FrameCol = vz(row)
     End Select
 End Function
-
-
-' ============================================================================
-' 辅助函数：计算产品 prod 在根装配坐标系中的绝对变换矩阵。
-'
-' 沿产品树向上逐级链接 Position.GetComponents 矩阵，
-' 直到到达根产品。
-'
-' 返回后：根坐标系中的点 = outR * 局部坐标中的点 + outT
-' ============================================================================
-Private Sub ComputeAbsoluteTransform(ByVal prod As Object, _
-                                     ByRef outR() As Double, _
-                                     ByRef outT() As Double)
-    ' 初始化为单位矩阵
-    outR(0, 0) = 1: outR(0, 1) = 0: outR(0, 2) = 0
-    outR(1, 0) = 0: outR(1, 1) = 1: outR(1, 2) = 0
-    outR(2, 0) = 0: outR(2, 1) = 0: outR(2, 2) = 1
-    outT(0) = 0: outT(1) = 0: outT(2) = 0
-
-    Dim rootProd As Object
-    Set rootProd = CATIA.ActiveDocument.Product
-
-    Dim current As Object
-    Set current = prod
-
-    ' 向上遍历：current -> parent -> ... -> root
-    On Error Resume Next
-    Do
-        ' 当到达根产品时停止
-        If current.PartNumber = rootProd.PartNumber Then
-            Dim testName As String
-            testName = ""
-            testName = current.Parent.Parent.PartNumber
-            If Err.Number <> 0 Then
-                Err.Clear
-                Exit Do   ' current.Parent.Parent 失败 => 已到达根节点
-            End If
-            If current.Name = rootProd.Name Then Exit Do
-        End If
-
-        ' 读取 current 相对其父产品的位置
-        Dim pos(11)
-        current.Position.GetComponents pos
-        If Err.Number <> 0 Then
-            Err.Clear
-            Exit Do
-        End If
-
-        ' 从 pos 中提取旋转矩阵 Rl 和平移向量 Tl
-        Dim Rl(2, 2) As Double
-        Rl(0, 0) = pos(0):  Rl(1, 0) = pos(1):  Rl(2, 0) = pos(2)
-        Rl(0, 1) = pos(3):  Rl(1, 1) = pos(4):  Rl(2, 1) = pos(5)
-        Rl(0, 2) = pos(6):  Rl(1, 2) = pos(7):  Rl(2, 2) = pos(8)
-        Dim Tl(2) As Double
-        Tl(0) = pos(9): Tl(1) = pos(10): Tl(2) = pos(11)
-
-        ' 链式累积：newR = Rl * outR，newT = Rl * outT + Tl
-        Dim newR(2, 2) As Double
-        Dim newT(2) As Double
-        Dim ci As Integer, cj As Integer, ck As Integer
-        For ci = 0 To 2
-            For cj = 0 To 2
-                newR(ci, cj) = 0
-                For ck = 0 To 2
-                    newR(ci, cj) = newR(ci, cj) + Rl(ci, ck) * outR(ck, cj)
-                Next ck
-            Next cj
-        Next ci
-        For ci = 0 To 2
-            newT(ci) = Tl(ci)
-            For ck = 0 To 2
-                newT(ci) = newT(ci) + Rl(ci, ck) * outT(ck)
-            Next ck
-        Next ci
-
-        ' 覆盖累加器
-        For ci = 0 To 2
-            For cj = 0 To 2
-                outR(ci, cj) = newR(ci, cj)
-            Next cj
-            outT(ci) = newT(ci)
-        Next ci
-
-        ' 向上移动：Product -> Products 集合 -> 父 Product
-        Set current = current.Parent.Parent
-        If Err.Number <> 0 Then
-            Err.Clear
-            Exit Do
-        End If
-    Loop
-    On Error GoTo 0
-
-End Sub
 
 
 ' ============================================================================
