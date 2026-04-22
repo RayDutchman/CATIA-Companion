@@ -21,10 +21,10 @@ Public Const DEBUG_MODE As Boolean = False
 '          btnContinue：Caption = "继续"，Width ≈ 80，Height ≈ 28
 '          btnCancel  ：Caption = "取消"，Width ≈ 80，Height ≈ 28
 '      - 将本文件末尾 "SwitchToPartForm UserForm 代码" 部分粘贴到窗体的代码模块中。
-'   4. 插入名为 "SwitchDocForm" 的 UserForm（等待切换到装配体文档面板）：
+'   4. 插入名为 "SwitchDocForm" 的 UserForm（等待切换到产品文档面板）：
 '      - Insert > UserForm，(Name) = "SwitchDocForm"，Caption = "等待切换文档"。
 '      - 添加一个 Label：(Name) = "lblMsg"，
-'        Caption = "紧固件几何已就绪。请切换到目标装配体（CATProduct）文档窗口，再点击""继续""。"
+'        Caption = "紧固件几何已就绪。请切换到目标产品（CATProduct）文档窗口，再点击""继续""。"
 '      - 添加两个 CommandButton：
 '          btnContinue：Caption = "继续"，Width ≈ 80，Height ≈ 28
 '          btnCancel  ：Caption = "取消"，Width ≈ 80，Height ≈ 28
@@ -38,12 +38,12 @@ Public Const DEBUG_MODE As Boolean = False
 '   2. 用户选择紧固件上的一条圆形边（RectilinearTriDimFeatEdge），
 '      GetAxis 获取紧固件轴向，GetCenter 获取定位锚点（均在紧固件局部坐标系中）。
 '   3. 取得紧固件几何后，显示非模态浮动面板 SwitchDocForm，然后返回。
-'      用户可自由切换到目标装配体（CATProduct）文档窗口，切换完成后点击面板上的
+'      用户可自由切换到目标产品（CATProduct）文档窗口，切换完成后点击面板上的
 '      "继续"按钮，由 ContinueSelectProduct() 在已激活的 ProductDocument 上调用
 '      SelectElement2，让用户在产品结构树中选择目标产品/部件（g_targetProduct）。
 '      （SelectElement2 绑定调用时活动文档；MsgBox 为模态会阻塞窗口切换；
 '      非模态 UserForm 是正确的等待方式，允许用户自由切换文档后再继续。）
-'   4. 用 SPAWorkbench.GetMeasurableInContext(holeRef, assemblyDoc.Product) 在根装配体
+'   4. 用 SPAWorkbench.GetMeasurableInContext(holeRef, assemblyDoc.Product) 在根产品
 '      坐标系中获取测量值，再通过 g_targetProduct.Position 的逆变换转换到 g_targetProduct
 '      局部坐标系，与 Move.Apply 所需的坐标系一致。
 '   5. 装配循环：选择孔口圆形边 -> 添加紧固件实例并定位。
@@ -137,7 +137,7 @@ Public Sub ContinueSelectFastener()
     ' 选择循环：若所选元素不是圆形边则提示重新选择；按 ESC 可退出宏
     Do
         status = sel.SelectElement2(fastEdgeFilter, _
-            "请选择紧固件上的圆形边（确定轴向和定位点）[ESC 退出]", False)
+            "请选择紧固件上的圆或圆弧（确定轴向和定位点）[ESC 退出]", False)
         If status <> "Normal" Then Exit Sub
 
         Set fastEdgeRef = sel.Item(1).Reference
@@ -146,8 +146,8 @@ Public Sub ContinueSelectFastener()
         ' 使用独立函数隔离错误域，避免某些 CATIA 版本中 On Error Resume Next 在调用层失效
         bFaGeomOK = TryGetAxis(fastEdgeMeas, faAxis) And TryGetCenter(fastEdgeMeas, faAnchorPt)
         If Not bFaGeomOK Then
-            MsgBox "无法从所选几何体获取轴向和圆心。" & Chr(10) & _
-                   "请选择一条圆形边（而非直线边或平面）。", _
+            MsgBox "无法从所选元素获取轴向和圆心。" & Chr(10) & _
+                   "请选择一个圆或一段圆弧（而非直线或曲线）。", _
                    vbExclamation, "快速装配紧固件"
             sel.Clear
         End If
@@ -174,27 +174,27 @@ Public Sub ContinueSelectFastener()
                vbInformation, "快速装配紧固件 [DEBUG]"
     End If
 
-    ' ── 3. 等待用户切换到装配体文档（非模态浮动面板）────────────────────
+    ' ── 3. 等待用户切换到产品文档（非模态浮动面板）────────────────────
     ' SelectElement2 绑定调用时活动文档：在 PartDocument 上调用、再切换到
     ' ProductDocument 会使 CATIA 自动取消选择（返回非 "Normal"）。
     ' MsgBox 为模态，会阻塞 CATIA 窗口切换，无法解决此问题。
     ' 解决方案：显示非模态 SwitchDocForm，用户自由切换文档后点击"继续"，
     ' 由 ContinueSelectProduct() 在已激活的 ProductDocument 上调用 SelectElement2。
-    CATIA.StatusBar = "请切换到目标装配体（CATProduct）文档窗口，然后点击浮动面板上的""继续""按钮。"
+    CATIA.StatusBar = "请切换到目标产品（CATProduct）文档窗口，然后点击浮动面板上的""继续""按钮。"
     SwitchDocForm.Show vbModeless
 
 End Sub
 
 ' ============================================================================
 ' ContinueSelectProduct - 由 SwitchDocForm.btnContinue_Click() 调用。
-' 在用户切换到装配体文档后：选择目标产品 + 执行孔装配循环。
+' 在用户切换到产品文档后：选择目标产品 + 执行孔装配循环。
 ' ============================================================================
 Public Sub ContinueSelectProduct()
 
     ' 若当前文档不是 CATProduct，提示后保持 SwitchDocForm 打开，不做任何操作
     If TypeName(CATIA.ActiveDocument) <> "ProductDocument" Then
         MsgBox "当前活动文档不是 CATProduct。" & Chr(10) & _
-               "请先切换到目标装配体文档窗口，然后再点击""继续""。", _
+               "请先切换到目标产品文档窗口，然后再点击""继续""。", _
                vbExclamation, "快速装配紧固件"
         Exit Sub
     End If
@@ -230,7 +230,7 @@ Public Sub ContinueSelectProduct()
     g_count = 0
     g_hasLastComp = False
     FlipForm.Show vbModeless
-    FlipForm.btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是 ✓", "翻转方向: 否")
+    FlipForm.btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
 
     Dim holeFilter As Variant
     holeFilter = Array("MonoDim")
@@ -243,16 +243,16 @@ Public Sub ContinueSelectProduct()
 
         status = sel.SelectElement2(holeFilter, _
             "选择孔的入口圆形边 (" & g_fastenerPN & " -> " & g_targetPN & _
-            "  已装配:" & g_count & "  翻转:" & IIf(g_flipDir, "是✓", "否") & ")  [ESC终止]", False)
+            "  已装配:" & g_count & ")  [ESC终止]", False)
         If status <> "Normal" Then Exit Do
 
-        ' 绑定装配体文档的 SPA 工作台，用于在根装配体坐标系中测量孔的几何
+        ' 绑定产品文档的 SPA 工作台，用于在根产品坐标系中测量孔的几何
         Dim spaAssembly As Object
         Set spaAssembly = CATIA.ActiveDocument.GetWorkbench("SPAWorkbench")
         Dim holeRef As Object
         Set holeRef = sel.Item(1).Reference
         ' GetMeasurableInContext(reference, contextProduct)：
-        ' 使用根装配体产品（assemblyDoc.Product）作为上下文，SPA 始终在根装配体坐标系中返回测量值。
+        ' 使用根产品（assemblyDoc.Product）作为上下文，SPA 始终在根产品坐标系中返回测量值。
         ' 随后通过 g_targetProduct.Position 的逆变换将结果转到 g_targetProduct 局部坐标系，
         ' 与 Move.Apply 所需坐标系一致。
         Dim holeMeas As Object
@@ -269,7 +269,7 @@ Public Sub ContinueSelectProduct()
 
         If Not bHoleGeomOK Then
             MsgBox "无法获取孔的轴向和圆心。" & Chr(10) & _
-                   "请选择圆形边（孔入口处的圆弧边），而非直线边或平面。", _
+                   "请选择孔入口处的圆或圆弧（而非直线或曲线）。", _
                    vbExclamation, "快速装配紧固件"
             sel.Clear
         Else
@@ -283,8 +283,8 @@ Public Sub ContinueSelectProduct()
             holeAxis(2) = holeAxis(2)/holeAxisLen
         End If
 
-        ' ── 将孔几何从根装配体坐标系变换到 g_targetProduct 局部坐标系 ────────
-        ' SPA GetMeasurableInContext(ref, assemblyDoc.Product) 始终返回根装配体坐标系中的值。
+        ' ── 将孔几何从根产品坐标系变换到 g_targetProduct 局部坐标系 ────────
+        ' SPA GetMeasurableInContext(ref, assemblyDoc.Product) 始终返回根产品坐标系中的值。
         ' Move.Apply 在 g_targetProduct 局部坐标系中解释变换矩阵，因此需做逆变换：
         '   local = R^T * (world - T)
         ' 其中 R 的列向量 = g_targetProduct.Position.GetComponents 返回的 tpMatrix(0..8)（X/Y/Z 轴），
@@ -311,7 +311,7 @@ Public Sub ContinueSelectProduct()
         g_holeAxisX = holeAxis(0): g_holeAxisY = holeAxis(1): g_holeAxisZ = holeAxis(2)
         g_holePtX   = holePt(0):   g_holePtY   = holePt(1):   g_holePtZ   = holePt(2)
 
-        ' ── 调试：孔的几何（根装配体坐标系 -> g_targetProduct 局部坐标系） ──
+        ' ── 调试：孔的几何（根产品坐标系 -> g_targetProduct 局部坐标系） ──
         If DEBUG_MODE Then
             MsgBox "[DEBUG] 孔的几何（已变换到 g_targetProduct 局部坐标系）" & Chr(10) & _
                    "holeAxis = (" & Round(holeAxis(0), 4) & ", " & Round(holeAxis(1), 4) & ", " & Round(holeAxis(2), 4) & ")" & Chr(10) & _
@@ -325,7 +325,7 @@ Public Sub ContinueSelectProduct()
         ' 装配完成后允许翻转重装
         g_hasLastComp = True
         CATIA.StatusBar = "已装配 " & g_count & " 个 " & g_fastenerPN & " -> " & g_targetPN & _
-                          "  [翻转:" & IIf(g_flipDir, "是✓", "否") & "]" & _
+                          "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
                           "  可点击翻转按钮修改方向，选下一孔继续，ESC结束"
 
         End If  ' bHoleGeomOK
@@ -541,7 +541,7 @@ End Function
 
 ' spa   : SPAWorkbench 对象
 ' ref   : 待测量的 Reference 对象
-' ctx   : 上下文 Product（传入 assemblyDoc.Product 以获取根装配体坐标系中的测量值）
+' ctx   : 上下文 Product（传入 assemblyDoc.Product 以获取根产品坐标系中的测量值）
 ' measOut : 输出的 Measurable 对象（通过 ByRef 返回）
 Private Function TryGetMeasurableInContext(spa As Object, ref As Object, _
                                            ctx As Object, ByRef measOut As Object) As Boolean
@@ -568,7 +568,7 @@ End Function
 '
 '  Private Sub btnFlip_Click()
 '      g_flipDir = Not g_flipDir
-'      btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是 ✓", "翻转方向: 否")
+'      btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
 '      ' 如果当前可翻转重装（装配后尚未选下一孔），
 '      ' 则自动删除最近装配件并用新方向重新装配。
 '      If g_hasLastComp Then
@@ -578,7 +578,7 @@ End Function
 '          Call PlaceFastenerAtHole()
 '          g_hasLastComp = True
 '          CATIA.StatusBar = "已重新装配（方向翻转）" & g_count & " 个 " & g_fastenerPN & _
-'                            "  [翻转:" & IIf(g_flipDir, "是✓", "否") & "]" & _
+'                            "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
 '                            "  选下一孔继续，ESC结束"
 '      End If
 '  End Sub
@@ -626,7 +626,7 @@ End Function
 '   - 添加一个 Label：
 '       (Name)    = "lblMsg"
 '       Caption   = "紧固件几何已就绪。" & Chr(10) &
-'                   "请切换到目标装配体（CATProduct）文档窗口，" & Chr(10) &
+'                   "请切换到目标产品（CATProduct）文档窗口，" & Chr(10) &
 '                   "切换完成后点击""继续""按钮。"
 '       WordWrap  = True，AutoSize = True
 '   - 添加两个 CommandButton（横向排列）：
