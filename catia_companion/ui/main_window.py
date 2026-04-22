@@ -156,12 +156,24 @@ class MainWindow(QMainWindow):
         btn_deps.setToolTip("通过 CATIA COM 查找文件的所有引用文档")
         btn_deps.clicked.connect(self._open_find_dependencies_dialog)
 
+        for btn in (btn_font, btn_iso, btn_crack, btn_stamp, btn_deps):
+            tools_layout.addWidget(btn)
+
+        # 快速装配：紧固件 + 托板螺母 并列一行
+        assembly_row = QHBoxLayout()
+        assembly_row.setSpacing(6)
+
         btn_fastener = QPushButton("快速装配紧固件")
         btn_fastener.setToolTip("在装配体中连续放置紧固件实例")
         btn_fastener.clicked.connect(self._open_fastener_assembly_dialog)
 
-        for btn in (btn_font, btn_iso, btn_crack, btn_stamp, btn_deps, btn_fastener):
-            tools_layout.addWidget(btn)
+        btn_nut_plate = QPushButton("快速装配托板螺母")
+        btn_nut_plate.setToolTip("在装配体中连续放置托板螺母实例")
+        btn_nut_plate.clicked.connect(self._open_nut_plate_assembly_dialog)
+
+        assembly_row.addWidget(btn_fastener)
+        assembly_row.addWidget(btn_nut_plate)
+        tools_layout.addLayout(assembly_row)
         layout.addWidget(tools_group)
 
         layout.addStretch()
@@ -229,6 +241,7 @@ class MainWindow(QMainWindow):
             ("刷写零件模板",              self._open_stamp_part_template_dialog),
             ("查找所有依赖项（未实现）",     self._open_find_dependencies_dialog),
             ("快速装配紧固件",              self._open_fastener_assembly_dialog),
+            ("快速装配托板螺母",            self._open_nut_plate_assembly_dialog),
         ):
             tools_menu.addAction(QAction(label, self, triggered=slot))
 
@@ -421,6 +434,20 @@ class MainWindow(QMainWindow):
                 f"未找到 VBA 宏文件：\n{catvba_path}\n\n"
                 "请在 CATIA VBA 编辑器中按照 macros/fastener_assembly.txt 创建宏，\n"
                 "将 VBA 项目导出为 fastener_assembly.catvba，\n"
+                "并放入 macros 文件夹后重试。",
+            )
+            return
+        self._run_macro(catvba_path)
+
+    def _open_nut_plate_assembly_dialog(self) -> None:
+        """直接运行 macros 文件夹中的 nut_plate_assembly.catvba VBA 宏。"""
+        catvba_path = self._macros_dir() / "nut_plate_assembly.catvba"
+        if not catvba_path.exists():
+            QMessageBox.warning(
+                self, "宏文件未找到",
+                f"未找到 VBA 宏文件：\n{catvba_path}\n\n"
+                "请在 CATIA VBA 编辑器中按照 macros/nut_plate_assembly.txt 创建宏，\n"
+                "将 VBA 项目导出为 nut_plate_assembly.catvba，\n"
                 "并放入 macros 文件夹后重试。",
             )
             return
