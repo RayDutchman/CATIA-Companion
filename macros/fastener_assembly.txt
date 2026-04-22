@@ -1,7 +1,7 @@
 Option Explicit
 ' fastener_assembly - VBA 模块
 '
-' 使用前准备（需要在 VBA 编辑器中完成三步）：
+' 使用前准备（需要在 VBA 编辑器中完成两步）：
 '   1. 将本文件的全部内容粘贴到一个 MODULE 中
 '      （Tools > Macro > Macros... > Edit，或插入新模块）。
 '   2. 插入名为 "FlipForm" 的 UserForm（翻转方向浮动面板）：
@@ -10,12 +10,6 @@ Option Explicit
 '      - 添加一个 CommandButton：(Name) = "btnFlip"，Caption = "翻转方向: 否"，
 '        Width ≈ 160，Height ≈ 36。
 '      - 将本文件末尾的 FlipForm UserForm 代码粘贴到窗体的代码模块中。
-'   3. 插入名为 "PromptForm" 的 UserForm（无模式切换窗口提示）：
-'      - 点击 Insert > UserForm。
-'      - 将窗体的 (Name) 属性设为 "PromptForm"，Caption 设为 "快速装配紧固件"。
-'      - 将 ShowModal 属性设为 False（关键：false = 无模式，不阻塞 CATIA 主窗口）。
-'      - 添加一个 Label：Caption 为提示文字，添加一个 CommandButton "确定"。
-'      - 将本文件末尾的 PromptForm UserForm 代码粘贴到窗体的代码模块中。
 '   直接在编辑器中运行 "CATMain"。
 '
 ' 紧固件 CATPart 文件路径通过运行时的 InputBox 输入。
@@ -25,8 +19,8 @@ Option Explicit
 '   1. 打开或引用紧固件 CATPart，读取零件号。
 '   2. 用户选择紧固件上的一条圆形边（RectilinearTriDimFeatEdge），
 '      GetAxis 获取紧固件轴向，GetCenter 获取定位锚点。
-'   3. 提示用户切换到目标装配体文档窗口后点击确定；
-'      宏随即在当前活动文档（CATProduct）中等待选择目标产品/部件。
+'   3. 提示用户切换到目标装配体文档窗口；通过 CATIA 状态栏提示，
+'      用户可自由切换文档窗口并在产品结构树中直接选择目标产品/部件。
 '   4. 装配循环：选择孔口圆形边 -> 添加紧固件实例并定位。
 '      随时点击浮动面板上的"翻转方向"按钮切换插入方向，
 '      按 ESC 结束循环。
@@ -35,9 +29,6 @@ Option Explicit
 
 ' 模块级翻转方向标志；由 FlipForm 按钮切换，不阻塞选择操作。
 Public g_flipDir As Boolean
-
-' 模块级标志：PromptForm 中点击"确定"后置为 True，通知主循环继续。
-Public g_switchReady As Boolean
 
 Public Sub CATMain()
 
@@ -115,37 +106,32 @@ Public Sub CATMain()
            "faAnchorPt= (" & Round(faAnchorPt(0), 4) & ", " & Round(faAnchorPt(1), 4) & ", " & Round(faAnchorPt(2), 4) & ")", _
            vbInformation, "快速装配紧固件 [DEBUG]"
 
-    ' ── 3. 用户切换到装配体文档后直接选择目标产品 ────────────────────────
-    ' 不再枚举所有已打开的 ProductDocument，而是通过无模式对话框提示用户
-    ' 切换到目标装配体窗口，全程不阻塞 CATIA 主窗口，不中断宏的运行。
-    g_switchReady = False
-    PromptForm.Show vbModeless   ' 无模式：CATIA 窗口可自由切换
-    Do While Not g_switchReady
-        DoEvents                 ' 让 Windows 消息泵继续派发，保持 UI 响应
-    Loop
+    ' ── 3+4. 在 CATIA 状态栏提示用户切换到装配体并选择目标产品 ──────────────
+    ' SelectElement2 在 CATIA 左下角状态栏显示提示文字，
+    ' 用户可自由切换到目标装配体文档窗口后直接在产品结构树中点击，
+    ' 无需任何弹窗，全程不中断宏运行。
+    Set sel = CATIA.ActiveDocument.Selection
+    sel.Clear
+
+    Dim prodFilter As Variant
+    prodFilter = Array("Product")
+    status = sel.SelectElement2(prodFilter, _
+        "请切换到目标装配体（CATProduct）文档窗口，在产品结构树中选择紧固件要装入的产品/部件", False)
+    If status <> "Normal" Then
+        MsgBox "已取消选择。", vbInformation, "快速装配紧固件"
+        Exit Sub
+    End If
 
     If TypeName(CATIA.ActiveDocument) <> "ProductDocument" Then
-        MsgBox "当前活动文档不是 CATProduct。" & Chr(10) & _
-               "请重新运行宏，在提示时切换到正确的装配体文档后再点击确定。", _
+        MsgBox "选中对象不在 CATProduct 文档中。" & Chr(10) & _
+               "请重新运行宏，切换到装配体文档后再选择产品/部件。", _
                vbExclamation, "快速装配紧固件"
         Exit Sub
     End If
 
     Dim assemblyDoc As Object
     Set assemblyDoc = CATIA.ActiveDocument
-
-    ' ── 4. 在装配体结构树中选择目标产品 ──────────────────────────────────
     Set sel = assemblyDoc.Selection
-    sel.Clear
-
-    Dim prodFilter As Variant
-    prodFilter = Array("Product")
-    status = sel.SelectElement2(prodFilter, _
-        "请在产品结构树中选择紧固件要装入的产品或部件", False)
-    If status <> "Normal" Then
-        MsgBox "已取消选择。", vbInformation, "快速装配紧固件"
-        Exit Sub
-    End If
 
     Dim targetProduct As Object
     Set targetProduct = sel.Item(1).Value
@@ -524,37 +510,6 @@ End Sub
 '      Else
 '          btnFlip.Caption = "翻转方向: 否"
 '      End If
-'  End Sub
-'
-' ---------------------------------------------------------------------------
-
-
-' ============================================================================
-' ── PromptForm UserForm 代码 ────────────────────────────────────────────────
-'
-' 此窗体以无模式（modeless）方式显示，不阻塞 CATIA 主窗口，
-' 用户点击"确定"后，主模块中的 DoEvents 轮询检测到 g_switchReady = True 后继续。
-'
-' 创建步骤：在 VBA IDE 中，Insert > UserForm。
-'   - 将窗体 (Name) 设为 "PromptForm"，Caption 设为 "快速装配紧固件"。
-'   - 添加一个 Label：
-'       (Name)   = "lblMsg"
-'       Caption  = "请切换到目标装配体（CATProduct）文档窗口，然后点击【确定】继续。"
-'       WordWrap = True
-'       Width    ≈ 280  Height ≈ 48
-'   - 添加一个 CommandButton：
-'       (Name)   = "btnOK"
-'       Caption  = "确定"
-'       Width    = 72  Height = 28
-'   - 将窗体的 ShowModal 属性设为 False（False = 无模式）。
-'   - 打开窗体的代码模块，将下方代码粘贴进去。
-' ============================================================================
-'
-' ---- 将以下代码粘贴到 PromptForm 的代码模块中（不是本模块）----
-'
-'  Private Sub btnOK_Click()
-'      g_switchReady = True   ' 通知主模块 DoEvents 循环可以退出
-'      Me.Hide
 '  End Sub
 '
 ' ---------------------------------------------------------------------------
