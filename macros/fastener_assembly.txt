@@ -1,7 +1,7 @@
 Option Explicit
 ' fastener_assembly - VBA 模块
 '
-' 使用前准备（需要在 VBA 编辑器中完成两步）：
+' 使用前准备（需要在 VBA 编辑器中完成以下步骤）：
 '   1. 将本文件的全部内容粘贴到一个 MODULE 中
 '      （Tools > Macro > Macros... > Edit，或插入新模块）。
 '   2. 插入名为 "FlipForm" 的 UserForm（翻转方向浮动面板）：
@@ -10,7 +10,15 @@ Option Explicit
 '      - 添加一个 CommandButton：(Name) = "btnFlip"，Caption = "翻转方向: 否"，
 '        Width ≈ 160，Height ≈ 36。
 '      - 将本文件末尾 "FlipForm UserForm 代码" 部分粘贴到窗体的代码模块中。
-'   3. 插入名为 "SwitchDocForm" 的 UserForm（等待切换文档面板）：
+'   3. 插入名为 "SwitchToPartForm" 的 UserForm（等待切换到紧固件文档面板）：
+'      - Insert > UserForm，(Name) = "SwitchToPartForm"，Caption = "选择紧固件文档"。
+'      - 添加一个 Label：(Name) = "lblMsg"，
+'        Caption = "请切换到紧固件（CATPart）文档窗口，再点击""继续""。"
+'      - 添加两个 CommandButton：
+'          btnContinue：Caption = "继续"，Width ≈ 80，Height ≈ 28
+'          btnCancel  ：Caption = "取消"，Width ≈ 80，Height ≈ 28
+'      - 将本文件末尾 "SwitchToPartForm UserForm 代码" 部分粘贴到窗体的代码模块中。
+'   4. 插入名为 "SwitchDocForm" 的 UserForm（等待切换到装配体文档面板）：
 '      - Insert > UserForm，(Name) = "SwitchDocForm"，Caption = "等待切换文档"。
 '      - 添加一个 Label：(Name) = "lblMsg"，
 '        Caption = "紧固件几何已就绪。请切换到目标装配体（CATProduct）文档窗口，再点击""继续""。"
@@ -20,20 +28,21 @@ Option Explicit
 '      - 将本文件末尾 "SwitchDocForm UserForm 代码" 部分粘贴到窗体的代码模块中。
 '   直接在编辑器中运行 "CATMain"。
 '
-' 紧固件 CATPart 文件路径通过运行时的 InputBox 输入。
-' 留空则使用当前活动文档。
-'
 ' 操作流程：
-'   1. 打开或引用紧固件 CATPart，读取零件号。
+'   1. CATMain 显示非模态浮动面板 SwitchToPartForm，然后返回。
+'      用户可自由切换到紧固件（CATPart）文档窗口，切换完成后点击面板上的"继续"
+'      按钮，由 ContinueSelectFastener() 确认当前活动文档为 PartDocument 并继续。
 '   2. 用户选择紧固件上的一条圆形边（RectilinearTriDimFeatEdge），
-'      GetAxis 获取紧固件轴向，GetCenter 获取定位锚点。
-'   3. CATMain 取得紧固件几何后，显示非模态浮动面板 SwitchDocForm，然后返回。
+'      GetAxis 获取紧固件轴向，GetCenter 获取定位锚点（均在紧固件局部坐标系中）。
+'   3. 取得紧固件几何后，显示非模态浮动面板 SwitchDocForm，然后返回。
 '      用户可自由切换到目标装配体（CATProduct）文档窗口，切换完成后点击面板上的
 '      "继续"按钮，由 ContinueSelectProduct() 在已激活的 ProductDocument 上调用
-'      SelectElement2，让用户在产品结构树中选择目标产品/部件。
+'      SelectElement2，让用户在产品结构树中选择目标产品/部件（g_targetProduct）。
 '      （SelectElement2 绑定调用时活动文档；MsgBox 为模态会阻塞窗口切换；
 '      非模态 UserForm 是正确的等待方式，允许用户自由切换文档后再继续。）
-'   4. 装配循环：选择孔口圆形边 -> 添加紧固件实例并定位。
+'   4. 将 g_targetProduct 设为当前工作对象（In Work Object）：SPA 测量直接在
+'      g_targetProduct 坐标系中返回值，与 Move.Apply 坐标系保持一致，无需坐标变换。
+'   5. 装配循环：选择孔口圆形边 -> 添加紧固件实例并定位。
 '      装配完成后可点击浮动面板上的"翻转方向"按钮撤销并重装（方向相反）。
 '      翻转状态跨次保留：下一个紧固件默认使用上一个件的翻转状态。
 '      按 ESC 结束循环。
@@ -67,42 +76,46 @@ Public g_count         As Long
 
 Public Sub CATMain()
 
-    ' ── 1. 解析紧固件路径 ─────────────────────────────────────────────────
-    Dim fastenerPath As String
-    fastenerPath = InputBox("输入紧固件 CATPart 文件完整路径" & Chr(10) & _
-                            "（留空则使用当前活动文档）", "快速装配紧固件", "")
+    ' ── 1. 提示用户切换到紧固件（CATPart）文档（非模态浮动面板）──────────
+    ' SelectElement2 绑定调用时活动文档。在 PartDocument 上调用时，若文档不是
+    ' 活动文档，CATIA 会自动取消选择（返回非 "Normal"）。
+    ' 解决方案：显示非模态 SwitchToPartForm，用户自由切换到紧固件文档后点击"继续"，
+    ' 由 ContinueSelectFastener() 在已激活的 PartDocument 上调用 SelectElement2。
+    CATIA.StatusBar = "请切换到紧固件（CATPart）文档窗口，然后点击浮动面板上的""继续""按钮。"
+    SwitchToPartForm.Show vbModeless
 
-    Dim fastenerDoc As Object
-    If fastenerPath = "" Then
-        If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then
-            MsgBox "当前活动文档不是 CATPart，请先打开紧固件文档。", _
-                   vbExclamation, "快速装配紧固件"
-            Exit Sub
-        End If
-        Set fastenerDoc = CATIA.ActiveDocument
-        fastenerPath = fastenerDoc.FullName
-    Else
-        On Error Resume Next
-        Set fastenerDoc = CATIA.Documents.Open(fastenerPath)
-        On Error GoTo 0
-        If fastenerDoc Is Nothing Then
-            MsgBox "无法打开紧固件文件：" & Chr(10) & fastenerPath, _
-                   vbCritical, "快速装配紧固件"
-            Exit Sub
-        End If
+End Sub
+
+
+' ============================================================================
+' ContinueSelectFastener - 由 SwitchToPartForm.btnContinue_Click() 调用。
+' 在用户切换到紧固件文档后：选择参考圆形边 + 读取轴向和锚点。
+' ============================================================================
+Public Sub ContinueSelectFastener()
+
+    ' 若当前文档不是 CATPart，提示后保持 SwitchToPartForm 打开，不做任何操作
+    If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then
+        MsgBox "当前活动文档不是 CATPart。" & Chr(10) & _
+               "请先切换到紧固件文档窗口，然后再点击""继续""。", _
+               vbExclamation, "快速装配紧固件"
+        Exit Sub
     End If
 
-    Dim fastenerPN As String
-    fastenerPN = fastenerDoc.Product.PartNumber
+    Unload SwitchToPartForm
+
+    Dim fastenerDoc As Object
+    Set fastenerDoc = CATIA.ActiveDocument
+    g_fastenerPath = fastenerDoc.FullName
+    g_fastenerPN   = fastenerDoc.Product.PartNumber
 
     ' ── 2. 在紧固件上选择参考几何 ────────────────────────────────────────
     Dim sel As Object
-    Set sel = CATIA.ActiveDocument.Selection
+    Set sel = fastenerDoc.Selection
     sel.Clear
 
-    ' 2a. 选择紧固件上的一条圆形边。
-    '     GetAxis   -> 紧固件轴线方向（faAxis）
-    '     GetCenter -> 与孔中心重合的锚点（faAnchorPt）
+    ' 选择紧固件上的一条圆形边。
+    '   GetAxis   -> 紧固件轴线方向（faAxis，紧固件局部坐标系）
+    '   GetCenter -> 与孔中心重合的锚点（faAnchorPt，紧固件局部坐标系）
     Dim fastEdgeFilter As Variant
     fastEdgeFilter = Array("MonoDim")
     Dim status As String
@@ -114,7 +127,7 @@ Public Sub CATMain()
     End If
 
     Dim spa As Object
-    Set spa = CATIA.ActiveDocument.GetWorkbench("SPAWorkbench")
+    Set spa = fastenerDoc.GetWorkbench("SPAWorkbench")
 
     Dim fastEdgeRef As Object
     Set fastEdgeRef = sel.Item(1).Reference
@@ -157,8 +170,6 @@ Public Sub CATMain()
     ' MsgBox 为模态，会阻塞 CATIA 窗口切换，无法解决此问题。
     ' 解决方案：显示非模态 SwitchDocForm，用户自由切换文档后点击"继续"，
     ' 由 ContinueSelectProduct() 在已激活的 ProductDocument 上调用 SelectElement2。
-    g_fastenerPath = fastenerPath
-    g_fastenerPN   = fastenerPN
     CATIA.StatusBar = "请切换到目标装配体（CATProduct）文档窗口，然后点击浮动面板上的""继续""按钮。"
     SwitchDocForm.Show vbModeless
 
@@ -233,9 +244,11 @@ Public Sub ContinueSelectProduct()
         Dim holeMeas As Object
         Set holeMeas = spa2.GetMeasurable(holeRef)
 
-        ' 将根装配体设为当前工作对象（In Work Object），使 SPA 测量直接在
-        ' 装配体根坐标系中返回值，无需再通过 Position 矩阵链手动转换。
-        assemblyDoc.Product.Activate
+        ' 将目标产品（g_targetProduct）设为当前工作对象（In Work Object）。
+        ' SPA 测量直接在 g_targetProduct 坐标系中返回值；
+        ' Move.Apply 也以 g_targetProduct 为父坐标系解释矩阵，两者坐标系一致，
+        ' 无需通过 Position 矩阵链手动转换到根装配坐标系。
+        g_targetProduct.Activate
 
         ' 不声明 As Double：GetAxis 在某些 CATIA 版本中需要 Variant 数组才能写入。
         Dim holeAxis(2)
@@ -258,8 +271,8 @@ Public Sub ContinueSelectProduct()
         g_holeAxisX = holeAxis(0): g_holeAxisY = holeAxis(1): g_holeAxisZ = holeAxis(2)
         g_holePtX   = holePt(0):   g_holePtY   = holePt(1):   g_holePtZ   = holePt(2)
 
-        ' ── 调试：孔的几何（装配坐标） ────────────────────────────────────
-        MsgBox "[DEBUG] 孔的几何（装配坐标）" & Chr(10) & _
+        ' ── 调试：孔的几何（g_targetProduct 坐标系） ──────────────────────
+        MsgBox "[DEBUG] 孔的几何（g_targetProduct 坐标系）" & Chr(10) & _
                "holeAxis = (" & Round(holeAxis(0), 4) & ", " & Round(holeAxis(1), 4) & ", " & Round(holeAxis(2), 4) & ")" & Chr(10) & _
                "holePt   = (" & Round(holePt(0), 4) & ", " & Round(holePt(1), 4) & ", " & Round(holePt(2), 4) & ")", _
                vbInformation, "快速装配紧固件 [DEBUG]"
@@ -290,8 +303,8 @@ End Sub
 ' PlaceFastenerAtHole：根据模块级变量中存储的孔几何和紧固件参数，
 ' 计算变换矩阵并添加一个紧固件实例。
 '
-' 读取：g_flipDir, g_faAxis, g_faAnchorPt,
-'        g_holeAxisX/Y/Z, g_holePtX/Y/Z（均为装配体根坐标），
+' 读取：g_flipDir, g_faAxis, g_faAnchorPt（紧固件局部坐标系），
+'        g_holeAxisX/Y/Z, g_holePtX/Y/Z（均为 g_targetProduct 坐标系），
 '        g_targetProduct, g_fastenerPath
 ' 写入：g_count（+1），g_lastProducts，g_lastCompIdx
 ' ============================================================================
@@ -309,8 +322,8 @@ Public Sub PlaceFastenerAtHole()
     Dim targetPt(2) As Double
     targetPt(0) = g_holePtX: targetPt(1) = g_holePtY: targetPt(2) = g_holePtZ
 
-    ' ── 调试：目标点 ──────────────────────────────────────────────────────
-    MsgBox "[DEBUG] 目标点（装配坐标）" & Chr(10) & _
+    ' ── 调试：目标点（g_targetProduct 坐标系） ────────────────────────────
+    MsgBox "[DEBUG] 目标点（g_targetProduct 坐标系）" & Chr(10) & _
            "targetPt = (" & Round(targetPt(0), 4) & ", " & Round(targetPt(1), 4) & ", " & Round(targetPt(2), 4) & ")" & Chr(10) & _
            "ta (目标轴向) = (" & Round(ta(0), 4) & ", " & Round(ta(1), 4) & ", " & Round(ta(2), 4) & ")", _
            vbInformation, "快速装配紧固件 [DEBUG]"
@@ -361,12 +374,13 @@ Public Sub PlaceFastenerAtHole()
     Dim newComp As Object
     Set newComp = products.Item(products.Count)
 
-    ' ── 通过 Move.Apply 设置绝对位置（根装配坐标系） ─────────────────────
-    ' Move.Apply 接受根装配坐标系中的绝对变换（Variant 数组，不声明 As Double）：
-    '   0-2  = 根坐标系中局部 X 轴方向
-    '   3-5  = 根坐标系中局部 Y 轴方向
-    '   6-8  = 根坐标系中局部 Z 轴方向
-    '   9-11 = 根坐标系中原点位置
+    ' ── 通过 Move.Apply 设置位置（g_targetProduct 坐标系） ───────────────
+    ' Move.Apply 以 g_targetProduct（紧固件的父产品）为坐标系解释变换矩阵，
+    ' 与 SPA 在 g_targetProduct 为 In Work Object 时的测量坐标系一致：
+    '   0-2  = g_targetProduct 坐标系中局部 X 轴方向
+    '   3-5  = g_targetProduct 坐标系中局部 Y 轴方向
+    '   6-8  = g_targetProduct 坐标系中局部 Z 轴方向
+    '   9-11 = g_targetProduct 坐标系中原点位置
     Dim moveMatrix(11)
     moveMatrix(0) = R(0, 0)
     moveMatrix(1) = R(1, 0)
@@ -381,8 +395,8 @@ Public Sub PlaceFastenerAtHole()
     moveMatrix(10) = Tvec(1)
     moveMatrix(11) = Tvec(2)
 
-    ' ── 调试：发送给 Move.Apply 的绝对矩阵 ───────────────────────────────
-    MsgBox "[DEBUG] 最终定位矩阵（装配体根坐标，绝对）" & Chr(10) & _
+    ' ── 调试：发送给 Move.Apply 的矩阵（g_targetProduct 坐标系） ─────────
+    MsgBox "[DEBUG] 最终定位矩阵（g_targetProduct 坐标系）" & Chr(10) & _
            "R X轴 = (" & Round(R(0, 0), 4) & ", " & Round(R(1, 0), 4) & ", " & Round(R(2, 0), 4) & ")" & Chr(10) & _
            "R Y轴 = (" & Round(R(0, 1), 4) & ", " & Round(R(1, 1), 4) & ", " & Round(R(2, 1), 4) & ")" & Chr(10) & _
            "R Z轴 = (" & Round(R(0, 2), 4) & ", " & Round(R(1, 2), 4) & ", " & Round(R(2, 2), 4) & ")" & Chr(10) & _
@@ -494,6 +508,38 @@ End Function
 '                            "  [翻转:" & IIf(g_flipDir, "是✓", "否") & "]" & _
 '                            "  选下一孔继续，ESC结束"
 '      End If
+'  End Sub
+'
+' ---------------------------------------------------------------------------
+
+
+' ============================================================================
+' ── SwitchToPartForm UserForm 代码 ──────────────────────────────────────────
+'
+' 创建步骤：在 VBA IDE 中，Insert > UserForm。
+'   - 将窗体 (Name) 设为 "SwitchToPartForm"，Caption 设为 "选择紧固件文档"。
+'   - 添加一个 Label：
+'       (Name)    = "lblMsg"
+'       Caption   = "请切换到紧固件（CATPart）文档窗口，" & Chr(10) &
+'                   "切换完成后点击""继续""按钮。"
+'       WordWrap  = True，AutoSize = True
+'   - 添加两个 CommandButton（横向排列）：
+'       btnContinue：Caption = "继续"，Width ≈ 80，Height ≈ 28
+'       btnCancel  ：Caption = "取消"，Width ≈ 80，Height ≈ 28
+'   - 打开窗体的代码模块，将下方代码粘贴进去。
+' ============================================================================
+'
+' ---- 将以下代码粘贴到 SwitchToPartForm 的代码模块中（不是本模块）----
+'
+'  Private Sub btnContinue_Click()
+'      ' 调用主模块中的 ContinueSelectFastener。
+'      ' 若 ActiveDocument 不是 PartDocument，该 Sub 会提示用户并直接返回，
+'      ' SwitchToPartForm 保持打开，用户可再次切换后重试。
+'      Call ContinueSelectFastener
+'  End Sub
+'
+'  Private Sub btnCancel_Click()
+'      Unload SwitchToPartForm
 '  End Sub
 '
 ' ---------------------------------------------------------------------------
