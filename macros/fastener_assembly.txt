@@ -43,8 +43,9 @@ Public Const DEBUG_MODE As Boolean = True
 '      SelectElement2，让用户在产品结构树中选择目标产品/部件（g_targetProduct）。
 '      （SelectElement2 绑定调用时活动文档；MsgBox 为模态会阻塞窗口切换；
 '      非模态 UserForm 是正确的等待方式，允许用户自由切换文档后再继续。）
-'   4. 激活装配体文档后，用 SPAWorkbench.GetMeasurableInContext(holeRef, g_targetProduct)
-'      直接在 g_targetProduct 坐标系中获取测量值，与 Move.Apply 坐标系一致，无需坐标变换。
+'   4. 用 SPAWorkbench.GetMeasurableInContext(holeRef, assemblyDoc.Product) 在根装配体
+'      坐标系中获取测量值，再通过 g_targetProduct.Position 的逆变换转换到 g_targetProduct
+'      局部坐标系，与 Move.Apply 所需的坐标系一致。
 '   5. 装配循环：选择孔口圆形边 -> 添加紧固件实例并定位。
 '      装配完成后可点击浮动面板上的"翻转方向"按钮撤销并重装（方向相反）。
 '      翻转按钮在每次装配后始终有效（包括正在选下一孔时），影响最近一次装配的紧固件。
@@ -250,36 +251,21 @@ Public Sub ContinueSelectProduct()
             "  已装配:" & g_count & "  翻转:" & IIf(g_flipDir, "是✓", "否") & ")  [ESC终止]", False)
         If status <> "Normal" Then Exit Do
 
-        ' ── 调试：激活前的 ActiveDocument ────────────────────────────────────
-        If DEBUG_MODE Then
-            MsgBox "[DEBUG] 激活assemblyDoc前 CATIA.ActiveDocument.Name = " & CATIA.ActiveDocument.Name, _
-                   vbInformation, "快速装配紧固件 [DEBUG]"
-        End If
-
-        ' 激活装配体文档后获取 SPAWorkbench。
-        ' GetMeasurableInContext 需要在装配体 SPA 上下文中调用；
-        ' 必须在 GetWorkbench("SPAWorkbench") 之前 Activate，否则 SPA 上下文仍绑定旧文档。
-        assemblyDoc.Activate
-
-        ' ── 调试：激活后的 ActiveDocument ────────────────────────────────────
-        If DEBUG_MODE Then
-            MsgBox "[DEBUG] 激活assemblyDoc后 CATIA.ActiveDocument.Name = " & CATIA.ActiveDocument.Name, _
-                   vbInformation, "快速装配紧固件 [DEBUG]"
-        End If
-
         Dim spa2 As Object
         Set spa2 = CATIA.ActiveDocument.GetWorkbench("SPAWorkbench")
         Dim holeRef As Object
         Set holeRef = sel.Item(1).Reference
         ' GetMeasurableInContext(reference, contextProduct)：
-        ' 在 g_targetProduct 坐标系中返回测量值，与 Move.Apply 坐标系一致，无需手动坐标变换。
+        ' 使用根装配体产品（assemblyDoc.Product）作为上下文，SPA 始终在根装配体坐标系中返回测量值。
+        ' 随后通过 g_targetProduct.Position 的逆变换将结果转到 g_targetProduct 局部坐标系，
+        ' 与 Move.Apply 所需坐标系一致。
         Dim holeMeas As Object
         Dim holeAxis(2)
         Dim holePt(2)
 
         ' ── 调试：确认 g_targetProduct 类型与坐标系位置 ──────────────────────
         ' TypeName 应为 "Product"；Position T = (0,0,0) 说明该产品在根坐标系原点，
-        ' 此时 GetMeasurableInContext 结果与根坐标系相同（无实际变换）。
+        ' 此时根坐标系到局部坐标系的变换为恒等变换（无实际偏移）。
         ' LeafProduct 为孔所在的最底层产品实例，可用于核对选孔是否正确。
         If DEBUG_MODE Then
             Dim dbgPos(11) As Double
@@ -301,7 +287,7 @@ Public Sub ContinueSelectProduct()
         ' 使用独立函数隔离错误域，避免某些 CATIA 版本中 On Error Resume Next 在调用层失效。
         Dim bHoleGeomOK As Boolean
         bHoleGeomOK = False
-        If TryGetMeasurableInContext(spa2, holeRef, g_targetProduct, holeMeas) Then
+        If TryGetMeasurableInContext(spa2, holeRef, assemblyDoc.Product, holeMeas) Then
             bHoleGeomOK = TryGetAxis(holeMeas, holeAxis) And TryGetCenter(holeMeas, holePt)
         End If
 
@@ -321,15 +307,37 @@ Public Sub ContinueSelectProduct()
             holeAxis(2) = holeAxis(2)/holeAxisLen
         End If
 
+        ' ── 将孔几何从根装配体坐标系变换到 g_targetProduct 局部坐标系 ────────
+        ' SPA GetMeasurableInContext(ref, assemblyDoc.Product) 始终返回根装配体坐标系中的值。
+        ' Move.Apply 在 g_targetProduct 局部坐标系中解释变换矩阵，因此需做逆变换：
+        '   local = R^T * (world - T)
+        ' 其中 R 的列向量 = g_targetProduct.Position.GetComponents 返回的 tpPos(0..8)（X/Y/Z 轴），
+        ' T = tpPos(9..11)（原点偏移）。
+        ' 若 g_targetProduct 与根坐标系重合（Position 为单位矩阵），则变换为恒等变换，结果不变。
+        Dim tpPos(11) As Double
+        g_targetProduct.Position.GetComponents tpPos
+        Dim pRel(2) As Double
+        pRel(0) = holePt(0) - tpPos(9)
+        pRel(1) = holePt(1) - tpPos(10)
+        pRel(2) = holePt(2) - tpPos(11)
+        holePt(0) = tpPos(0)*pRel(0) + tpPos(1)*pRel(1) + tpPos(2)*pRel(2)
+        holePt(1) = tpPos(3)*pRel(0) + tpPos(4)*pRel(1) + tpPos(5)*pRel(2)
+        holePt(2) = tpPos(6)*pRel(0) + tpPos(7)*pRel(1) + tpPos(8)*pRel(2)
+        Dim axW(2) As Double
+        axW(0) = holeAxis(0): axW(1) = holeAxis(1): axW(2) = holeAxis(2)
+        holeAxis(0) = tpPos(0)*axW(0) + tpPos(1)*axW(1) + tpPos(2)*axW(2)
+        holeAxis(1) = tpPos(3)*axW(0) + tpPos(4)*axW(1) + tpPos(5)*axW(2)
+        holeAxis(2) = tpPos(6)*axW(0) + tpPos(7)*axW(1) + tpPos(8)*axW(2)
+
         sel.Clear
 
         ' 写入模块级变量供 PlaceFastenerAtHole（含翻转重装路径）使用
         g_holeAxisX = holeAxis(0): g_holeAxisY = holeAxis(1): g_holeAxisZ = holeAxis(2)
         g_holePtX   = holePt(0):   g_holePtY   = holePt(1):   g_holePtZ   = holePt(2)
 
-        ' ── 调试：孔的几何（GetMeasurableInContext → g_targetProduct 坐标系） ──
+        ' ── 调试：孔的几何（根装配体坐标系 -> g_targetProduct 局部坐标系） ──
         If DEBUG_MODE Then
-            MsgBox "[DEBUG] 孔的几何（GetMeasurableInContext, g_targetProduct 坐标系）" & Chr(10) & _
+            MsgBox "[DEBUG] 孔的几何（已变换到 g_targetProduct 局部坐标系）" & Chr(10) & _
                    "holeAxis = (" & Round(holeAxis(0), 4) & ", " & Round(holeAxis(1), 4) & ", " & Round(holeAxis(2), 4) & ")" & Chr(10) & _
                    "holePt   = (" & Round(holePt(0), 4) & ", " & Round(holePt(1), 4) & ", " & Round(holePt(2), 4) & ")", _
                    vbInformation, "快速装配紧固件 [DEBUG]"
@@ -565,7 +573,7 @@ End Function
 
 ' spa   : SPAWorkbench 对象
 ' ref   : 待测量的 Reference 对象
-' ctx   : 上下文 Product（测量坐标系）
+' ctx   : 上下文 Product（传入 assemblyDoc.Product 以获取根装配体坐标系中的测量值）
 ' measOut : 输出的 Measurable 对象（通过 ByRef 返回）
 Private Function TryGetMeasurableInContext(spa As Object, ref As Object, _
                                            ctx As Object, ByRef measOut As Object) As Boolean
