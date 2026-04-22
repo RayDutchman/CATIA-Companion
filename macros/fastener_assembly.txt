@@ -248,28 +248,11 @@ Public Sub ContinueSelectProduct()
         Set sel = CATIA.ActiveDocument.Selection
         sel.Clear
 
-        ' 在 SelectElement2 调用前保存当前翻转状态。
-        ' 背景：SelectElement2 是阻塞式 COM 调用，CATIA 内部消息泵在处理 ESC 取消时会
-        ' 派发消息队列中残留的 btnFlip_Click 事件——此时 g_loopActive 仍为 True，
-        ' 导致翻转操作意外触发（"是"→"否"）。事后对比可检测并修复这一窗口期内的误操作。
-        Dim savedFlipDir As Boolean
-        savedFlipDir = g_flipDir
-
         status = sel.SelectElement2(holeFilter, _
             "选择孔的入口圆形边 (" & g_fastenerPN & " -> " & g_targetPN & _
             "  已装配:" & g_count & ")  [ESC终止]", False)
         If status <> "Normal" Then
             g_loopActive = False
-            ' 若 SelectElement2 内部消息处理期间发生了意外翻转（g_flipDir 与保存值不一致），
-            ' 则恢复为用户预期的方向，避免最后一个紧固件被误翻转。
-            ' 注意：PlaceFastenerAtHole 使用 AddComponent（非 AddComponentsFromFiles），
-            ' 因此即使紧固件文档尚未保存到磁盘，恢复操作也能正常执行。
-            If g_hasLastComp And (g_flipDir <> savedFlipDir) Then
-                g_flipDir = savedFlipDir
-                g_lastProducts.Remove g_lastCompIdx
-                g_count = g_count - 1
-                Call PlaceFastenerAtHole()
-            End If
             g_hasLastComp = False
             Exit Do
         End If
