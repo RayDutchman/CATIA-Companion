@@ -1,9 +1,9 @@
 """
-CATIA file-conversion helpers.
+CATIA 文件转换辅助模块。
 
-Provides:
-- convert_drawing_to_pdf()  – export CATDrawing files to PDF
-- convert_part_to_step()    – export CATPart/CATProduct files to STEP (.stp)
+提供：
+- convert_drawing_to_pdf()  – 将 CATDrawing 文件导出为 PDF
+- convert_part_to_step()    – 将 CATPart/CATProduct 文件导出为 STEP (.stp)
 """
 
 import logging
@@ -16,10 +16,16 @@ logger = logging.getLogger(__name__)
 
 
 def _prompt_overwrite(dest: Path) -> str:
-    """Show an overwrite-conflict dialog for *dest*.
+    """显示 *dest* 的覆盖冲突对话框。
 
-    Returns one of: ``"skip"``, ``"skip_all"``, ``"overwrite"``,
-    ``"overwrite_all"``, or ``"cancel"``.
+    返回以下之一：``"skip"``、``"skip_all"``、``"overwrite"``、
+    ``"overwrite_all"`` 或 ``"cancel"``。
+
+    参数：
+        dest: 目标文件路径
+
+    返回：
+        用户选择的操作
     """
     msg = QMessageBox()
     msg.setWindowTitle("文件已存在")
@@ -85,19 +91,22 @@ def convert_drawing_to_pdf(
     progress_callback: Callable[[int, int], None] | None = None,
     update_before_export: bool = False,
 ) -> int:
-    """Convert CATDrawing files to PDF using pyCATIA.
+    """使用 pyCATIA 将 CATDrawing 文件转换为 PDF。
 
-    If *prefix* is non-empty it is prepended to the output filename unless the
-    stem already starts with it.  If *suffix* is non-empty it is appended
-    unless the stem already ends with it.
+    如果 *prefix* 非空，则在输出文件名前添加前缀（除非文件名已包含该前缀）。
+    如果 *suffix* 非空，则在文件名后添加后缀（除非文件名已包含该后缀）。
 
-    *progress_callback*, if provided, is called as ``progress_callback(i, total)``
-    before processing each file (0-based index).
+    参数：
+        file_paths: CATDrawing 文件路径列表
+        output_folder: 输出文件夹路径，默认为源文件所在目录
+        prefix: 输出文件名前缀，默认 "DR_"
+        suffix: 输出文件名后缀，默认为空
+        progress_callback: 进度回调函数，在处理每个文件前调用 ``progress_callback(i, total)``
+                          （0 基索引）
+        update_before_export: 为 ``True`` 时，在导出 PDF 前更新图纸文档（刷新所有视图）
 
-    When *update_before_export* is ``True`` the drawing document is updated
-    (all views refreshed) before the PDF is written.
-
-    Returns the number of files successfully exported.
+    返回：
+        成功导出的文件数量
     """
     from pycatia import catia
     from pycatia.drafting_interfaces.drawing_document import DrawingDocument
@@ -171,16 +180,21 @@ def convert_part_to_step(
     suffix: str = "",
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> int:
-    """Convert CATPart/CATProduct files to STEP (.stp) using pyCATIA.
+    """使用 pyCATIA 将 CATPart/CATProduct 文件转换为 STEP (.stp)。
 
-    If *prefix* is non-empty it is prepended to the output filename unless the
-    stem already starts with it.  If *suffix* is non-empty it is appended
-    unless the stem already ends with it.
+    如果 *prefix* 非空，则在输出文件名前添加前缀（除非文件名已包含该前缀）。
+    如果 *suffix* 非空，则在文件名后添加后缀（除非文件名已包含该后缀）。
 
-    *progress_callback*, if provided, is called as ``progress_callback(i, total)``
-    before processing each file (0-based index).
+    参数：
+        file_paths: CATPart/CATProduct 文件路径列表
+        output_folder: 输出文件夹路径，默认为源文件所在目录
+        prefix: 输出文件名前缀，默认 "MD_"
+        suffix: 输出文件名后缀，默认为空
+        progress_callback: 进度回调函数，在处理每个文件前调用 ``progress_callback(i, total)``
+                          （0 基索引）
 
-    Returns the number of files successfully exported.
+    返回：
+        成功导出的文件数量
     """
     from pycatia import catia
 

@@ -78,6 +78,10 @@ _HELP_HTML = f"""\
 <tr><td><b>宏</b></td>
     <td>自动扫描 macros 文件夹中的 .catvbs / .catscript 文件，
     可直接在菜单中运行。支持打开宏文件夹和刷新宏列表。</td></tr>
+<tr><td><b>紧固件快速装配</b></td>
+    <td>使用 VBA 宏快速批量装配紧固件到产品孔位。<br/>
+    支持自动对齐孔轴线、定位紧固件中心，以及装配后即时翻转方向。<br/>
+    <i>需要在 CATIA 中打开紧固件 CATPart 文件和目标 CATProduct 文件。</i></td></tr>
 </table>
 
 <h4>四、视图</h4>

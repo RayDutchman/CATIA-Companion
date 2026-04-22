@@ -1,8 +1,8 @@
 """
-Main application window.
+主应用程序窗口模块。
 
-Provides:
-- MainWindow – the primary QMainWindow with a grouped-button UI and menu bar.
+提供：
+- MainWindow – 带有分组按钮 UI 和菜单栏的主 QMainWindow。
 """
 
 import sys
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
-    """Primary application window."""
+    """主应用程序窗口。"""
 
     # 快速运行宏支持 CATScript（.catvbs / .catscript）和 VBA（.catvba）文件。
     _MACRO_EXTENSIONS: frozenset[str] = frozenset({".catvbs", ".catscript", ".catvba"})
@@ -60,22 +60,23 @@ class MainWindow(QMainWindow):
         self._build_central_widget()
         self.statusBar().showMessage("就绪")
 
-    # ── Central widget ─────────────────────────────────────────────────────
+    # ── 中央控件区域 ──────────────────────────────────────────────────────
 
     def _build_central_widget(self) -> None:
+        """构建主窗口的中央控件区域。"""
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(16, 12, 16, 16)
         layout.setSpacing(12)
 
-        # Welcome label
+        # 欢迎标签
         welcome = QLabel(f"欢迎使用 {APP_NAME}")
         welcome.setAlignment(Qt.AlignmentFlag.AlignCenter)
         welcome.setStyleSheet("font-size: 11pt; font-weight: bold; color: #333;")
         layout.addWidget(welcome)
 
-        # ── Export group ─────────────────────────────────────────────────
+        # ── 导出功能组 ────────────────────────────────────────────────────
         export_group  = QGroupBox("导出")
         export_layout = QVBoxLayout(export_group)
         export_layout.setSpacing(6)
@@ -92,7 +93,7 @@ class MainWindow(QMainWindow):
             export_layout.addWidget(btn)
         layout.addWidget(export_group)
 
-        # ── BOM group ────────────────────────────────────────────────────
+        # ── BOM 功能组 ────────────────────────────────────────────────────
         bom_group  = QGroupBox("BOM")
         bom_layout = QVBoxLayout(bom_group)
         bom_layout.setSpacing(6)
@@ -109,7 +110,7 @@ class MainWindow(QMainWindow):
             bom_layout.addWidget(btn)
         layout.addWidget(bom_group)
 
-        # ── Drawing group ────────────────────────────────────────────────
+        # ── 图纸功能组 ────────────────────────────────────────────────────
         drawing_group  = QGroupBox("图纸")
         drawing_layout = QVBoxLayout(drawing_group)
         drawing_layout.setSpacing(6)
@@ -130,7 +131,7 @@ class MainWindow(QMainWindow):
         drawing_layout.addLayout(drawing_row)
         layout.addWidget(drawing_group)
 
-        # ── Tools group ──────────────────────────────────────────────────
+        # ── 工具功能组 ────────────────────────────────────────────────────
         tools_group  = QGroupBox("工具")
         tools_layout = QVBoxLayout(tools_group)
         tools_layout.setSpacing(6)
@@ -165,21 +166,25 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
 
-    # ── Menu bar ───────────────────────────────────────────────────────────
+    # ── 菜单栏 ────────────────────────────────────────────────────────────
+
+    def _show_not_implemented(self) -> None:
+        """显示"功能尚未实现"提示对话框。"""
+        QMessageBox.information(self, "提示", "功能尚未实现")
 
     def _build_menu_bar(self) -> None:
+        """构建应用程序菜单栏。"""
         bar = self.menuBar()
 
-        # File
+        # 文件菜单
         file_menu  = bar.addMenu("文件")
-        _not_implemented = lambda: QMessageBox.information(self, "提示", "功能尚未实现")
-        for label, slot in (("新建", _not_implemented), ("打开...", _not_implemented),
-                             ("保存", _not_implemented), ("另存为...", _not_implemented)):
+        for label, slot in (("新建", self._show_not_implemented), ("打开...", self._show_not_implemented),
+                             ("保存", self._show_not_implemented), ("另存为...", self._show_not_implemented)):
             file_menu.addAction(QAction(label, self, triggered=slot))
         file_menu.addSeparator()
         file_menu.addAction(QAction("退出", self, triggered=self.close))
 
-        # Export
+        # 导出菜单
         export_menu = bar.addMenu("导出")
         export_menu.addAction(QAction(
             "从CATDrawing导出pdf", self,
@@ -190,7 +195,7 @@ class MainWindow(QMainWindow):
             triggered=self._open_convert_part_dialog,
         ))
 
-        # BOM
+        # BOM 菜单
         bom_menu = bar.addMenu("BOM")
         bom_menu.addAction(QAction(
             "从CATProduct导出BOM", self,
@@ -200,7 +205,7 @@ class MainWindow(QMainWindow):
             "BOM属性补全", self, triggered=self._open_bom_edit_dialog
         ))
 
-        # Drawing
+        # 图纸菜单
         drawing_menu = bar.addMenu("图纸")
         drawing_menu.addAction(QAction(
             "从CATPart/CATProduct生成图纸", self,
@@ -211,11 +216,11 @@ class MainWindow(QMainWindow):
             triggered=self._open_refresh_drawing_dialog,
         ))
 
-        # Macro
+        # 宏菜单
         self._macro_menu = bar.addMenu("宏")
         self._rebuild_macro_menu()
 
-        # Tools
+        # 工具菜单
         tools_menu = bar.addMenu("工具")
         for label, slot in (
             ("复制字体文件到CATIA目录",  self._copy_font_to_catia),
@@ -227,15 +232,15 @@ class MainWindow(QMainWindow):
         ):
             tools_menu.addAction(QAction(label, self, triggered=slot))
 
-        # View
+        # 视图菜单
         view_menu = bar.addMenu("视图")
         view_menu.addAction(QAction(
             "放大", self,
-            triggered=lambda: QMessageBox.information(self, "提示", "功能尚未实现"),
+            triggered=self._show_not_implemented,
         ))
         view_menu.addAction(QAction(
             "缩小", self,
-            triggered=lambda: QMessageBox.information(self, "提示", "功能尚未实现"),
+            triggered=self._show_not_implemented,
         ))
         view_menu.addAction(QAction(
             "重置缩放", self,
@@ -247,7 +252,7 @@ class MainWindow(QMainWindow):
         self._show_log_action.toggled.connect(self._toggle_log_window)
         view_menu.addAction(self._show_log_action)
 
-        # Help
+        # 帮助菜单
         help_menu = bar.addMenu("帮助")
         help_menu.addAction(QAction(
             "文档", self,
@@ -258,9 +263,10 @@ class MainWindow(QMainWindow):
             triggered=self._show_about,
         ))
 
-    # ── Log window ─────────────────────────────────────────────────────────
+    # ── 日志窗口 ──────────────────────────────────────────────────────────
 
     def _toggle_log_window(self, checked: bool) -> None:
+        """切换日志窗口的显示/隐藏状态。"""
         if checked:
             self._log_window.show()
             self._log_window.raise_()
@@ -268,17 +274,21 @@ class MainWindow(QMainWindow):
             self._log_window.hide()
 
     def _show_about(self) -> None:
+        """显示关于对话框。"""
         QMessageBox.about(self, f"About {APP_NAME}", ABOUT_TEXT)
 
     def _show_help(self) -> None:
+        """显示帮助文档对话框。"""
         HelpDialog(self).exec()
 
-    # ── Macro menu helpers ─────────────────────────────────────────────────
+    # ── 宏菜单辅助方法 ────────────────────────────────────────────────────
 
     def _macros_dir(self) -> Path:
+        """返回宏文件夹路径。"""
         return resource_path("macros")
 
     def _rebuild_macro_menu(self) -> None:
+        """重建宏菜单，扫描 macros 文件夹并添加菜单项。"""
         self._macro_menu.clear()
         macros_dir   = self._macros_dir()
         macro_files: list[Path] = []

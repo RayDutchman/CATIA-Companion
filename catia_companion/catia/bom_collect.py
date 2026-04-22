@@ -1,11 +1,11 @@
 """
-BOM data-collection helpers.
+BOM 数据收集辅助模块。
 
-Provides:
-- get_product_filepath()     – resolve the backing file path of a CATIA product
-- collect_bom_rows()         – traverse a product tree and return a list of row dicts
-- flatten_bom_to_summary()   – collapse a hierarchical BOM into a flat summary
-                               (unique parts with cumulative quantities)
+提供：
+- get_product_filepath()     – 解析 CATIA 产品的支持文件路径
+- collect_bom_rows()         – 遍历产品树并返回行字典列表
+- flatten_bom_to_summary()   – 将层级 BOM 压缩为平面汇总
+                               （唯一零件及累计数量）
 """
 
 import logging
@@ -18,16 +18,22 @@ logger = logging.getLogger(__name__)
 
 
 def get_product_filepath(product) -> str:
-    """Return the full file path of the CATIA document backing *product*.
+    """返回支持 CATIA 产品 *product* 的文档完整路径。
 
-    Uses ``com_object.ReferenceProduct.Parent.FullName`` – a pure COM path
-    that works for both standalone products/parts and embedded 部件 (which
-    have no own file and return their parent's path).  Returns an empty
-    string on failure.
+    使用 ``com_object.ReferenceProduct.Parent.FullName`` – 纯 COM 路径，
+    适用于独立产品/零件和嵌入式部件（无自己的文件，返回父级路径）。
+    失败时返回空字符串。
+
+    参数：
+        product: CATIA 产品对象
+
+    返回：
+        文档完整路径，或空字符串（失败时）
     """
     try:
         return product.com_object.ReferenceProduct.Parent.FullName
-    except Exception:
+    except Exception as e:
+        logger.debug(f"无法获取产品文件路径: {e}")
         return ""
 
 
@@ -78,8 +84,8 @@ def collect_bom_rows(
                 value = getattr(target, attr)
                 if value is not None:
                     return str(value)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"无法从 {target} 获取属性 {name}: {e}")
         return ""
 
     def _get_user_prop(product, name: str) -> str:
@@ -94,8 +100,8 @@ def collect_bom_rows(
                 value = prop.value
                 if value is not None and str(value).strip():
                     return str(value)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"无法从 {target} 获取用户属性 {name}: {e}")
         return ""
 
     _total_count: int = 0
