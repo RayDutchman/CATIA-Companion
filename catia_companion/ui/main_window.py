@@ -506,11 +506,11 @@ class MainWindow(QMainWindow):
 
         此处使用 iLibraryType=2（VBA 项目文件模式）：
           - iLibraryName：.catvba 文件完整路径
-          - iProgramName：VBA 模块名（通常为文件名不含扩展名）
+          - iProgramName：VBA 模块名（catvba 默认模块名为 "模块1"，英文环境为 "Module1"）
           - iFunctionName：要调用的函数/子程序名（通常为 "CATMain"）
           - iParameters：传递给宏的参数列表
         """
-        module_name = macro_path.stem
+        module_name = "模块1"
         app.com_object.SystemService.ExecuteScript(
             str(macro_path), 2, module_name, func_name, params
         )
