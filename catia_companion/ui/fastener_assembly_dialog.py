@@ -1,9 +1,14 @@
 """
-Fastener quick-assembly dialog.
+Fastener quick-assembly dialog (file-browser variant).
 
 Provides:
 - FastenerAssemblyDialog – dialog for locating the ``fastener_assembly.catvba``
   VBA macro file and launching it inside the running CATIA instance.
+
+Note: The main window's "快速装配紧固件" button now runs the macro directly from
+the macros folder (``macros/fastener_assembly.catvba``) without opening this
+dialog.  This dialog is retained so advanced users can still launch an
+arbitrary ``.catvba`` file via the CATIA menu or direct import.
 """
 
 import logging
