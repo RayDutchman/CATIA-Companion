@@ -467,6 +467,75 @@ End Sub
 
 
 ' ============================================================================
+' MoveLastFastener：在不删除/重建的情况下，将最近装配的紧固件移动到
+'   当前 g_flipDir 对应的翻转位置。
+'
+' 读取：g_flipDir, g_faAxis, g_faAnchorPt, g_holeAxisX/Y/Z, g_holePtX/Y/Z,
+'       g_lastProducts, g_lastCompIdx
+' ============================================================================
+Public Sub MoveLastFastener()
+
+    ' insertionDir：根据当前 g_flipDir 决定方向
+    Dim insertionDir(2) As Double
+    If g_flipDir Then
+        insertionDir(0) = -g_holeAxisX: insertionDir(1) = -g_holeAxisY: insertionDir(2) = -g_holeAxisZ
+    Else
+        insertionDir(0) = g_holeAxisX: insertionDir(1) = g_holeAxisY: insertionDir(2) = g_holeAxisZ
+    End If
+
+    Dim holeCenterLocal(2) As Double
+    holeCenterLocal(0) = g_holePtX: holeCenterLocal(1) = g_holePtY: holeCenterLocal(2) = g_holePtZ
+
+    ' 构建 F1（以 g_faAxis 为 Z 轴）和 F2（以 insertionDir 为 Z 轴）
+    Dim f1x(2) As Double, f1y(2) As Double, f1z(2) As Double
+    f1z(0) = g_faAxis(0): f1z(1) = g_faAxis(1): f1z(2) = g_faAxis(2)
+    Call BuildFrame(f1z, f1x, f1y)
+
+    Dim f2x(2) As Double, f2y(2) As Double, f2z(2) As Double
+    f2z(0) = insertionDir(0): f2z(1) = insertionDir(1): f2z(2) = insertionDir(2)
+    Call BuildFrame(f2z, f2x, f2y)
+
+    ' R = F2 * F1^T
+    Dim R(2, 2) As Double
+    Dim ri As Integer, rj As Integer
+    For ri = 0 To 2
+        For rj = 0 To 2
+            R(ri, rj) = FrameCol(ri, 0, f2x, f2y, f2z) * FrameCol(rj, 0, f1x, f1y, f1z) _
+                      + FrameCol(ri, 1, f2x, f2y, f2z) * FrameCol(rj, 1, f1x, f1y, f1z) _
+                      + FrameCol(ri, 2, f2x, f2y, f2z) * FrameCol(rj, 2, f1x, f1y, f1z)
+        Next rj
+    Next ri
+
+    Dim rotatedAnchor(2) As Double
+    rotatedAnchor(0) = R(0, 0) * g_faAnchorPt(0) + R(0, 1) * g_faAnchorPt(1) + R(0, 2) * g_faAnchorPt(2)
+    rotatedAnchor(1) = R(1, 0) * g_faAnchorPt(0) + R(1, 1) * g_faAnchorPt(1) + R(1, 2) * g_faAnchorPt(2)
+    rotatedAnchor(2) = R(2, 0) * g_faAnchorPt(0) + R(2, 1) * g_faAnchorPt(1) + R(2, 2) * g_faAnchorPt(2)
+
+    Dim translation(2) As Double
+    translation(0) = holeCenterLocal(0) - rotatedAnchor(0)
+    translation(1) = holeCenterLocal(1) - rotatedAnchor(1)
+    translation(2) = holeCenterLocal(2) - rotatedAnchor(2)
+
+    Dim moveMatrix(11)
+    moveMatrix(0) = R(0, 0): moveMatrix(1) = R(1, 0): moveMatrix(2) = R(2, 0)
+    moveMatrix(3) = R(0, 1): moveMatrix(4) = R(1, 1): moveMatrix(5) = R(2, 1)
+    moveMatrix(6) = R(0, 2): moveMatrix(7) = R(1, 2): moveMatrix(8) = R(2, 2)
+    moveMatrix(9) = translation(0)
+    moveMatrix(10) = translation(1)
+    moveMatrix(11) = translation(2)
+
+    ' 直接对已有组件应用新矩阵，无需删除重建
+    Dim lastComp As Object
+    Set lastComp = g_lastProducts.Item(g_lastCompIdx)
+    Dim moveObj As Object
+    Set moveObj = lastComp.Move
+    Set moveObj = moveObj.MovableObject
+    moveObj.Apply moveMatrix
+
+End Sub
+
+
+' ============================================================================
 ' 辅助函数：根据给定的 Z 轴构建正交坐标系 {outX, outY, inZ}。
 ' ============================================================================
 Private Sub BuildFrame(ByRef inZ() As Double, ByRef outX() As Double, ByRef outY() As Double)
@@ -583,14 +652,10 @@ End Function
 '      g_flipDir = Not g_flipDir
 '      btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
 '      ' 如果当前可翻转重装（装配后尚未选下一孔），
-'      ' 则自动删除最近装配件并用新方向重新装配。
+'      ' 则直接将已有紧固件移动到翻转后的位置（不删除重建）。
 '      If g_hasLastComp Then
-'          g_hasLastComp = False
-'          g_lastProducts.Remove g_lastCompIdx
-'          g_count = g_count - 1
-'          Call PlaceFastenerAtHole()
-'          g_hasLastComp = True
-'          CATIA.StatusBar = "已重新装配（方向翻转）" & g_count & " 个 " & g_fastenerPN & _
+'          Call MoveLastFastener()
+'          CATIA.StatusBar = "已重新定向（方向翻转）" & g_count & " 个 " & g_fastenerPN & _
 '                            "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
 '                            "  选下一孔继续，ESC结束"
 '      End If
