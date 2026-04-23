@@ -414,6 +414,11 @@ Public Sub PlaceFastenerAtHole()
     Dim products As Object
     Set products = targetProduct.products
 
+    ' BeginURConcatenation / EndURConcatenation 将 AddComponent + SetComponents
+    ' 合并为一个原子撤销单元，防止 ESC 退出 SelectElement2 时 CATIA 内部回滚
+    ' 最后一个"未提交"操作（即仅回滚 SetComponents 而保留 AddComponent 导致的孤立实例）。
+    CATIA.BeginURConcatenation
+
     products.AddComponent g_fastenerDoc.Product
 
     ' 最后添加的实例即为新组件
@@ -461,6 +466,8 @@ Public Sub PlaceFastenerAtHole()
     '       但对已有非零位置的组件，Move.Apply 会产生叠加，因此本宏统一使用
     '       Position.SetComponents 避免累加误差。
     newComp.Position.SetComponents moveMatrix
+
+    CATIA.EndURConcatenation   ' 提交：AddComponent + SetComponents 作为一个撤销步骤
 
     ' ── 记录最近装配件信息（供翻转重装使用） ─────────────────────────────
     Set g_lastProducts = products
@@ -667,7 +674,12 @@ End Function
 '      ' 如果当前可翻转重装（装配后尚未选下一孔），
 '      ' 则直接将已有紧固件移动到翻转后的位置（不删除重建）。
 '      If g_hasLastComp Then
+'          ' BeginURConcatenation / EndURConcatenation 将翻转操作（SetComponents）
+'          ' 标记为已提交的撤销单元，防止后续 ESC 退出 SelectElement2 时
+'          ' CATIA 内部回滚最后一个"未提交"操作而将紧固件翻转还原。
+'          CATIA.BeginURConcatenation
 '          Call MoveLastFastener()
+'          CATIA.EndURConcatenation
 '          CATIA.StatusBar = "已重新定向（方向翻转）" & g_count & " 个 " & g_fastenerPN & _
 '                            "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
 '                            "  选下一孔继续，ESC结束"
