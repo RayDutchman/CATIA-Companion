@@ -43,9 +43,12 @@ Public Const DEBUG_MODE As Boolean = False
 '      SelectElement2，让用户在产品结构树中选择目标产品/部件（targetProduct）。
 '      （SelectElement2 绑定调用时活动文档；MsgBox 为模态会阻塞窗口切换；
 '      非模态 UserForm 是正确的等待方式，允许用户自由切换文档后再继续。）
-'   4. 用 SPAWorkbench.GetMeasurableInContext(holeRef, rootProduct.Product) 在根产品
-'      坐标系中获取测量值，再通过 targetProduct.Position 的逆变换转换到 targetProduct
-'      局部坐标系，与 Move.Apply 所需的坐标系一致。
+'   4. 用 SPAWorkbench.GetMeasurable(holeRef) 在叶层零件自己的坐标系中获取测量值，
+'      再通过 sel.Item(1).LeafProduct 沿结构树逐层向上推导到根产品坐标系，
+'      最后通过 targetProduct 的逆变换链转换到 targetProduct 局部坐标系，
+'      与 Position.SetComponents 所需的坐标系一致。
+'      此方式不依赖 GetMeasurableInContext，可避免同一零件存在多个实例时测量到
+'      错误实例的问题。
 '   5. 装配循环：选择孔口圆形边 -> 添加紧固件实例并定位。
 '      装配完成后可点击浮动面板上的"翻转方向"按钮撤销并重装（方向相反）。
 '      翻转按钮在每次装配后始终有效（包括正在选下一孔时），影响最近一次装配的紧固件。
@@ -266,24 +269,25 @@ Public Sub ContinueSelectProduct()
             Exit Do
         End If
 
-        ' 绑定产品文档的 SPA 工作台，用于在根产品坐标系中测量孔的几何
+        ' ── 绑定产品文档的 SPA 工作台 ─────────────────────────────────────
         Dim spaAssembly As Object
         Set spaAssembly = CATIA.ActiveDocument.GetWorkbench("SPAWorkbench")
         Dim holeRef As Object
         Set holeRef = sel.Item(1).Reference
-        ' GetMeasurableInContext(reference, contextProduct)：
-        ' 使用根产品（rootProduct.Product）作为上下文，SPA 始终在根产品坐标系中返回测量值。
-        ' 随后通过 targetProduct.Position 的逆变换将结果转到 targetProduct 局部坐标系，
-        ' 与 Move.Apply 所需坐标系一致。
+        ' 取当前选中项所属的叶层产品（具体实例）。
+        ' GetMeasurable（不带上下文）在叶层零件自己的坐标系中返回测量值，
+        ' 确保即使同一零件在装配体中存在多个实例，也能正确测量被点击实例的几何。
+        Dim leafProd As Object
+        Set leafProd = sel.Item(1).LeafProduct
         Dim holeMeas As Object
         Dim holeAxis(2)
         Dim holePt(2)
 
-        ' 错误处理：若所选几何体不是圆形边（如直线边），GetMeasurableInContext/GetAxis 会报错
+        ' 错误处理：若所选几何体不是圆形边（如直线边），GetMeasurable/GetAxis 会报错。
         ' 使用独立函数隔离错误域，避免某些 CATIA 版本中 On Error Resume Next 在调用层失效。
         Dim bHoleGeomOK As Boolean
         bHoleGeomOK = False
-        If TryGetMeasurableInContext(spaAssembly, holeRef, rootProduct.Product, holeMeas) Then
+        If TryGetMeasurable(spaAssembly, holeRef, holeMeas) Then
             bHoleGeomOK = TryGetAxis(holeMeas, holeAxis) And TryGetCenter(holeMeas, holePt)
         End If
 
@@ -303,27 +307,72 @@ Public Sub ContinueSelectProduct()
             holeAxis(2) = holeAxis(2)/holeAxisLen
         End If
 
-        ' ── 将孔几何从根产品坐标系变换到 targetProduct 局部坐标系 ────────
-        ' SPA GetMeasurableInContext(ref, rootProduct.Product) 始终返回根产品坐标系中的值。
-        ' Move.Apply 在 targetProduct 局部坐标系中解释变换矩阵，因此需做逆变换：
-        '   local = R^T * (world - T)
-        ' 其中 R 的列向量 = targetProduct.Position.GetComponents 返回的 tpMatrix(0..8)（X/Y/Z 轴），
-        ' T = tpMatrix(9..11)（原点偏移）。
-        ' 若 targetProduct 与根坐标系重合（Position 为单位矩阵），则变换为恒等变换，结果不变。
-        Dim tpMatrix(11)   ' 不能加 As Double
-        targetProduct.Position.GetComponents tpMatrix
-        Dim holePtOffset(2) As Double
-        holePtOffset(0) = holePt(0) - tpMatrix(9)
-        holePtOffset(1) = holePt(1) - tpMatrix(10)
-        holePtOffset(2) = holePt(2) - tpMatrix(11)
-        holePt(0) = tpMatrix(0)*holePtOffset(0) + tpMatrix(1)*holePtOffset(1) + tpMatrix(2)*holePtOffset(2)
-        holePt(1) = tpMatrix(3)*holePtOffset(0) + tpMatrix(4)*holePtOffset(1) + tpMatrix(5)*holePtOffset(2)
-        holePt(2) = tpMatrix(6)*holePtOffset(0) + tpMatrix(7)*holePtOffset(1) + tpMatrix(8)*holePtOffset(2)
-        Dim holeAxisWorld(2) As Double
-        holeAxisWorld(0) = holeAxis(0): holeAxisWorld(1) = holeAxis(1): holeAxisWorld(2) = holeAxis(2)
-        holeAxis(0) = tpMatrix(0)*holeAxisWorld(0) + tpMatrix(1)*holeAxisWorld(1) + tpMatrix(2)*holeAxisWorld(2)
-        holeAxis(1) = tpMatrix(3)*holeAxisWorld(0) + tpMatrix(4)*holeAxisWorld(1) + tpMatrix(5)*holeAxisWorld(2)
-        holeAxis(2) = tpMatrix(6)*holeAxisWorld(0) + tpMatrix(7)*holeAxisWorld(1) + tpMatrix(8)*holeAxisWorld(2)
+        ' ── 步骤1：从 leafProd 沿结构树向上推导，得到孔在根产品坐标系中的坐标 ─
+        ' GetMeasurable 返回孔在叶层零件自己坐标系（局部坐标）中的几何值。
+        ' 从 leafProd 向上逐层应用 Position.GetComponents 的正向变换：
+        '   parentPt = R * localPt + T
+        ' 其中矩阵格式：m(0..2)=X轴列, m(3..5)=Y轴列, m(6..8)=Z轴列, m(9..11)=平移T。
+        ' 循环直至 curProd.Parent 为 ProductDocument（到达根产品层）为止。
+        Dim curProd As Object
+        Set curProd = leafProd
+        Dim holeM(11)           ' Position 矩阵，不能声明 As Double
+        Dim holeParentColl As Object
+        Dim holeTx As Double, holeTy As Double, holeTz As Double
+        Do
+            Set holeParentColl = curProd.Parent
+            If TypeName(holeParentColl) = "ProductDocument" Then Exit Do
+            curProd.Position.GetComponents holeM
+            ' 正向变换点：newPt = R * pt + T
+            holeTx = holeM(0)*holePt(0) + holeM(3)*holePt(1) + holeM(6)*holePt(2) + holeM(9)
+            holeTy = holeM(1)*holePt(0) + holeM(4)*holePt(1) + holeM(7)*holePt(2) + holeM(10)
+            holeTz = holeM(2)*holePt(0) + holeM(5)*holePt(1) + holeM(8)*holePt(2) + holeM(11)
+            holePt(0) = holeTx: holePt(1) = holeTy: holePt(2) = holeTz
+            ' 正向变换轴向（方向向量不含平移）
+            holeTx = holeM(0)*holeAxis(0) + holeM(3)*holeAxis(1) + holeM(6)*holeAxis(2)
+            holeTy = holeM(1)*holeAxis(0) + holeM(4)*holeAxis(1) + holeM(7)*holeAxis(2)
+            holeTz = holeM(2)*holeAxis(0) + holeM(5)*holeAxis(1) + holeM(8)*holeAxis(2)
+            holeAxis(0) = holeTx: holeAxis(1) = holeTy: holeAxis(2) = holeTz
+            Set curProd = holeParentColl.Parent
+        Loop
+
+        ' ── 步骤2：收集 targetProduct→根 变换链，逆序施加逆变换到 targetProduct 坐标系 ─
+        ' targetProduct 可能位于结构树的任意层级，因此不能仅用单层 Position 求逆。
+        ' 先从 targetProduct 向上收集各层的 Position 矩阵（tpChain），
+        ' 再从根向下（逆序遍历）依次施加逆变换：local = R^T * (parent - T)，
+        ' 将孔的根坐标转换到 targetProduct 局部坐标系，
+        ' 与 Position.SetComponents 所需坐标系一致。
+        Dim tpChain(49, 11)     ' 最多50层，Variant（不能声明 As Double）
+        Dim tpDepth As Integer
+        tpDepth = 0
+        Set curProd = targetProduct
+        Dim tpParentColl As Object
+        Dim tpM(11)             ' 不能声明 As Double
+        Dim tpKk As Integer
+        Do
+            Set tpParentColl = curProd.Parent
+            If TypeName(tpParentColl) = "ProductDocument" Then Exit Do
+            curProd.Position.GetComponents tpM
+            For tpKk = 0 To 11: tpChain(tpDepth, tpKk) = tpM(tpKk): Next tpKk
+            tpDepth = tpDepth + 1
+            Set curProd = tpParentColl.Parent
+        Loop
+        ' 从根向下依次施加逆变换（逆序遍历 tpChain）
+        Dim tpii As Integer
+        Dim tpOff0 As Double, tpOff1 As Double, tpOff2 As Double
+        Dim tpAx As Double, tpAy As Double, tpAz As Double
+        For tpii = tpDepth - 1 To 0 Step -1
+            tpOff0 = holePt(0) - tpChain(tpii, 9)
+            tpOff1 = holePt(1) - tpChain(tpii, 10)
+            tpOff2 = holePt(2) - tpChain(tpii, 11)
+            holePt(0) = tpChain(tpii, 0)*tpOff0 + tpChain(tpii, 1)*tpOff1 + tpChain(tpii, 2)*tpOff2
+            holePt(1) = tpChain(tpii, 3)*tpOff0 + tpChain(tpii, 4)*tpOff1 + tpChain(tpii, 5)*tpOff2
+            holePt(2) = tpChain(tpii, 6)*tpOff0 + tpChain(tpii, 7)*tpOff1 + tpChain(tpii, 8)*tpOff2
+            ' 轴向逆变换（R^T * axis，方向向量不含平移）
+            tpAx = tpChain(tpii, 0)*holeAxis(0) + tpChain(tpii, 1)*holeAxis(1) + tpChain(tpii, 2)*holeAxis(2)
+            tpAy = tpChain(tpii, 3)*holeAxis(0) + tpChain(tpii, 4)*holeAxis(1) + tpChain(tpii, 5)*holeAxis(2)
+            tpAz = tpChain(tpii, 6)*holeAxis(0) + tpChain(tpii, 7)*holeAxis(1) + tpChain(tpii, 8)*holeAxis(2)
+            holeAxis(0) = tpAx: holeAxis(1) = tpAy: holeAxis(2) = tpAz
+        Next tpii
 
         sel.Clear
 
@@ -331,7 +380,7 @@ Public Sub ContinueSelectProduct()
         g_holeAxisX = holeAxis(0): g_holeAxisY = holeAxis(1): g_holeAxisZ = holeAxis(2)
         g_holePtX   = holePt(0):   g_holePtY   = holePt(1):   g_holePtZ   = holePt(2)
 
-        ' ── 调试：孔的几何（根产品坐标系 -> targetProduct 局部坐标系） ──
+        ' ── 调试：孔的几何（叶层零件坐标系 -> 根产品坐标系 -> targetProduct 局部坐标系） ──
         If DEBUG_MODE Then
             MsgBox "[DEBUG] 孔的几何（已变换到 targetProduct 局部坐标系）" & Chr(10) & _
                    "holeAxis = (" & Round(holeAxis(0), 4) & ", " & Round(holeAxis(1), 4) & ", " & Round(holeAxis(2), 4) & ")" & Chr(10) & _
@@ -620,7 +669,7 @@ End Function
 
 
 ' ============================================================================
-' TryGetAxis / TryGetCenter / TryGetMeasurableInContext
+' TryGetAxis / TryGetCenter / TryGetMeasurable / TryGetMeasurableInContext
 ' 在独立错误处理域中调用 COM 方法，使 On Error Resume Next 在函数边界生效，
 ' 彻底避免某些 CATIA 版本中调用层错误处理失效时弹出 VB 运行时错误对话框。
 ' ============================================================================
@@ -637,6 +686,18 @@ Private Function TryGetCenter(meas As Object, ptArr) As Boolean
     Err.Clear
     meas.GetCenter ptArr
     TryGetCenter = (Err.Number = 0)
+End Function
+
+' spa     : SPAWorkbench 对象
+' ref     : 待测量的 Reference 对象
+' measOut : 输出的 Measurable 对象（通过 ByRef 返回）
+' 返回叶层零件自己坐标系中的测量值（不使用上下文）。
+Private Function TryGetMeasurable(spa As Object, ref As Object, _
+                                  ByRef measOut As Object) As Boolean
+    On Error Resume Next
+    Err.Clear
+    Set measOut = spa.GetMeasurable(ref)
+    TryGetMeasurable = (Err.Number = 0 And Not measOut Is Nothing)
 End Function
 
 ' spa   : SPAWorkbench 对象
