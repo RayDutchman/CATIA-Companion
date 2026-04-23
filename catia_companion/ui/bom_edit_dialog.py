@@ -1430,7 +1430,7 @@ class BomEditDialog(QDialog):
 
         # ── 打开路径 ──────────────────────────────────────────────────────────
         act_open_path = menu.addAction("打开路径")
-        path_available = bool(fp) and (fp_path.exists() or (fp_path is not None and fp_path.parent.exists()))
+        path_available = bool(fp) and (fp_path.exists() or fp_path.parent.exists())
         act_open_path.setEnabled(path_available)
 
         # ── 在CATIA中打开 ─────────────────────────────────────────────────────
@@ -1466,9 +1466,9 @@ class BomEditDialog(QDialog):
         """Open the folder containing *fp* in Windows Explorer, highlighting the file."""
         p = Path(fp).resolve()
         if p.exists():
-            subprocess.Popen(f'explorer /select,"{p}"')
+            subprocess.Popen(["explorer", f"/select,{p}"])
         elif p.parent.exists():
-            subprocess.Popen(f'explorer "{p.parent}"')
+            subprocess.Popen(["explorer", str(p.parent)])
 
     def _open_in_catia(self, fp: str) -> None:
         """Open a CATPart file in CATIA (if not already open)."""
