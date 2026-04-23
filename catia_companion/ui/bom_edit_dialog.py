@@ -8,6 +8,7 @@ BOM 编辑对话框模块。
 import copy
 import os
 import logging
+import subprocess
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
     QPushButton, QTreeWidget, QTreeWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QCheckBox, QGroupBox, QMessageBox, QApplication,
     QFileDialog, QProgressDialog, QRadioButton, QButtonGroup, QStyledItemDelegate,
+    QMenu,
 )
 from PySide6.QtGui import QColor, QPen, QPainter
 from PySide6.QtCore import Qt, QSettings
@@ -170,7 +172,7 @@ class _FileRenameDialog(QDialog):
 
     def __init__(self, current_fp: str, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("修改文件名/路径")
+        self.setWindowTitle("编辑文件名/路径")
         self.setMinimumWidth(540)
         self._current_fp = current_fp
         self._p          = Path(current_fp)
@@ -499,6 +501,8 @@ class BomEditDialog(QDialog):
         self._table.itemChanged.connect(self._on_item_changed)
         _delegate = _BomTreeDelegate(lambda: self._columns, self._table)
         self._table.setItemDelegate(_delegate)
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._on_tree_context_menu)
         layout.addWidget(self._table, 1)
 
         # Bottom buttons
@@ -524,7 +528,7 @@ class BomEditDialog(QDialog):
         self._rename_btn.clicked.connect(self._rename_by_part_number)
         btn_row.addWidget(self._rename_btn)
 
-        self._rename_file_btn = QPushButton("修改选中文件名/路径")
+        self._rename_file_btn = QPushButton("编辑选中文件名/路径")
         self._rename_file_btn.setToolTip("为选中行的文件执行重命名或移动（通过CATIA另存为）")
         self._rename_file_btn.setEnabled(False)
         self._rename_file_btn.clicked.connect(self._rename_selected_file)
@@ -1400,3 +1404,117 @@ class BomEditDialog(QDialog):
     def _finish_and_close(self) -> None:
         """Write changes back to CATIA and close the dialog."""
         self._write_back(close_on_success=True)
+
+    # ── Right-click context menu ──────────────────────────────────────────────
+
+    def _on_tree_context_menu(self, pos) -> None:
+        """Show a context menu for the right-clicked BOM row."""
+        item = self._table.itemAt(pos)
+        if item is None:
+            return
+        row_idx = item.data(0, Qt.ItemDataRole.UserRole)
+        if row_idx is None:
+            return
+
+        row_data = self._rows[row_idx]
+        fp       = str(row_data.get("_filepath", ""))
+        fp_path  = Path(fp) if fp else None
+
+        # Ensure the right-clicked row is selected so that the downstream
+        # helpers (_rename_selected_file etc.) can find it.
+        if not item.isSelected():
+            self._table.clearSelection()
+            item.setSelected(True)
+
+        menu = QMenu(self)
+
+        # ── 打开路径 ──────────────────────────────────────────────────────────
+        act_open_path = menu.addAction("打开路径")
+        path_available = bool(fp) and (fp_path.exists() or (fp_path is not None and fp_path.parent.exists()))
+        act_open_path.setEnabled(path_available)
+
+        # ── 在CATIA中打开 ─────────────────────────────────────────────────────
+        # Only allow for CATPart files to avoid opening assemblies / products.
+        is_part_file = bool(fp) and fp.lower().endswith(".catpart")
+        act_open_catia = menu.addAction("在CATIA中打开")
+        act_open_catia.setEnabled(is_part_file and not bool(row_data.get("_not_found")))
+
+        menu.addSeparator()
+
+        # ── 编辑文件名/路径 ───────────────────────────────────────────────────
+        act_edit_path = menu.addAction("编辑文件名/路径")
+        act_edit_path.setEnabled(
+            bool(fp) and not bool(row_data.get("_not_found"))
+            and fp_path is not None and fp_path.exists()
+        )
+
+        # ── 删除 ─────────────────────────────────────────────────────────────
+        act_delete = menu.addAction("删除")
+
+        action = menu.exec(self._table.viewport().mapToGlobal(pos))
+
+        if action == act_open_path:
+            self._open_path(fp)
+        elif action == act_open_catia:
+            self._open_in_catia(fp)
+        elif action == act_edit_path:
+            self._rename_selected_file()
+        elif action == act_delete:
+            self._delete_row(row_idx)
+
+    def _open_path(self, fp: str) -> None:
+        """Open the folder containing *fp* in Windows Explorer, highlighting the file."""
+        p = Path(fp).resolve()
+        if p.exists():
+            subprocess.Popen(f'explorer /select,"{p}"')
+        elif p.parent.exists():
+            subprocess.Popen(f'explorer "{p.parent}"')
+
+    def _open_in_catia(self, fp: str) -> None:
+        """Open a CATPart file in CATIA (if not already open)."""
+        try:
+            from pycatia import catia as _pycatia
+            caa         = _pycatia()
+            application = caa.application
+            application.visible = True
+            src       = Path(fp).resolve()
+            documents = application.documents
+            if _find_catia_doc_by_path(documents, src) is None:
+                documents.open(str(src))
+        except Exception as e:
+            QMessageBox.warning(self, "在CATIA中打开失败", f"无法在CATIA中打开文件：\n{e}")
+
+    def _delete_row(self, row_idx: int) -> None:
+        """Remove a BOM row (and its children in hierarchical mode) from the display."""
+        if row_idx < 0 or row_idx >= len(self._rows):
+            return
+
+        row_data = self._rows[row_idx]
+        level    = int(row_data.get("Level", 0)) if not self._summarize else 0
+
+        # Collect the index of this row plus all immediate children (hierarchical mode).
+        indices_to_remove: set[int] = {row_idx}
+        if not self._summarize:
+            i = row_idx + 1
+            while i < len(self._rows):
+                if int(self._rows[i].get("Level", 0)) <= level:
+                    break
+                indices_to_remove.add(i)
+                i += 1
+
+        # Collect part numbers that are being removed.
+        removed_pns = {str(self._rows[i].get("Part Number", "")) for i in indices_to_remove}
+
+        # Delete rows in reverse order so that lower indices stay valid.
+        for idx in sorted(indices_to_remove, reverse=True):
+            del self._rows[idx]
+
+        # Clean up canonical / snapshot / modified data for PNs no longer in view.
+        remaining_pns = {str(r.get("Part Number", "")) for r in self._rows}
+        for pn in removed_pns:
+            if pn and pn not in remaining_pns:
+                self._canonical_data.pop(pn, None)
+                self._snapshot_data.pop(pn, None)
+                self._modified_keys.pop(pn, None)
+
+        self._populate_table()
