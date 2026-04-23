@@ -1516,7 +1516,7 @@ class BomEditDialog(QDialog):
         if action == act_open_path:
             self._open_path(fp)
         elif action == act_open_catia:
-            self._open_in_catia(pn)
+            self._open_in_catia(pn, fp)
         elif action == act_edit_path:
             self._rename_selected_file()
 
@@ -1532,11 +1532,20 @@ class BomEditDialog(QDialog):
         except Exception as exc:
             logger.warning(f"Failed to open path in Explorer: {exc}")
 
-    def _open_in_catia(self, pn: str) -> None:
-        """Activate the already-open CATIA document whose Part Number is *pn*.
+    def _open_in_catia(self, orig_pn: str, fp: str = "") -> None:
+        """Activate the already-open CATIA document for the row identified by
+        *orig_pn* (the Part Number as loaded from CATIA, used as the key into
+        ``_snapshot_data``) and optionally *fp* (the backing file path).
 
-        Looks up the document by Part Number only.  The caller must ensure that
-        broken-link (not_found) rows are excluded from triggering this method.
+        Lookup strategy (dual-track):
+        1. If *fp* resolves to an existing file, try to match by full path first.
+           This is immune to Part Number edits that have not yet been written back.
+        2. Fall back to matching by Part Number, using the value from
+           ``_snapshot_data`` – which is updated on every write-back and therefore
+           always reflects the PN that CATIA currently holds, even after a rename.
+
+        The caller must ensure that broken-link (not_found) rows are excluded
+        from triggering this method.
         """
         try:
             from pycatia import catia as _pycatia
@@ -1545,12 +1554,30 @@ class BomEditDialog(QDialog):
             application.visible = True
             documents   = application.documents
 
-            doc = _find_catia_doc_by_part_number(documents, pn)
+            doc: object | None = None
+
+            # ── 1st track: match by file path (not affected by PN edits) ─────
+            if fp:
+                fp_path = Path(fp)
+                if fp_path.exists():
+                    doc = _find_catia_doc_by_path(documents, fp_path.resolve())
+
+            # ── 2nd track: match by snapshot PN (reflects last write-back) ───
+            snapshot_pn = self._snapshot_data.get(orig_pn, {}).get(
+                "Part Number", orig_pn
+            )
+            if snapshot_pn != orig_pn:
+                logger.debug(
+                    "_open_in_catia: falling back to snapshot PN %r (orig %r)",
+                    snapshot_pn, orig_pn,
+                )
+            if doc is None:
+                doc = _find_catia_doc_by_part_number(documents, snapshot_pn)
 
             if doc is None:
                 QMessageBox.warning(
                     self, "在CATIA中打开失败",
-                    f"无法在CATIA中找到零件编号为 \"{pn}\" 的文档。\n\n"
+                    f"无法在CATIA中找到零件编号为 \"{snapshot_pn}\" 的文档。\n\n"
                     f"请确认该零件已在CATIA中打开。",
                 )
                 return
