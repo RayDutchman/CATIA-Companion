@@ -11,12 +11,11 @@ from catia_companion.constants import PART_NUMBER_VALID_PATTERN
 
 
 class _FileRenameDialog(QDialog):
-    """Dialog for renaming or moving a single CATIA file via CATIA SaveAs.
+    """通过 CATIA SaveAs 重命名或移动单个 CATIA 文件的对话框。
 
-    Lets the user change the file stem (name without extension) and/or the
-    target directory independently.  Validates the new stem with
-    :data:`~catia_companion.constants.PART_NUMBER_VALID_PATTERN` and creates
-    the target directory on demand.
+    允许用户独立更改文件茎名（不含扩展名的文件名）和/或目标目录。
+    使用 :data:`~catia_companion.constants.PART_NUMBER_VALID_PATTERN`
+    验证新文件茎名，并按需创建目标目录。
     """
 
     def __init__(self, current_fp: str, parent=None) -> None:
@@ -30,17 +29,17 @@ class _FileRenameDialog(QDialog):
         layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         layout.setSpacing(8)
 
-        # Current path (read-only)
+        # 当前路径（只读）
         cur_label = QLabel(current_fp)
         cur_label.setWordWrap(True)
         cur_label.setStyleSheet("color: #555;")
         layout.addRow("当前路径：", cur_label)
 
-        # New filename (stem only; extension is preserved automatically)
+        # 新文件名（仅文件茎；扩展名自动保留）
         self._name_edit = QLineEdit(self._p.stem)
         layout.addRow(f"新文件名（不含扩展名 {self._p.suffix}）：", self._name_edit)
 
-        # New directory (with browse button)
+        # 新目录（带浏览按钮）
         dir_widget = QWidget()
         dir_layout = QHBoxLayout(dir_widget)
         dir_layout.setContentsMargins(0, 0, 0, 0)
@@ -52,7 +51,7 @@ class _FileRenameDialog(QDialog):
         dir_layout.addWidget(dir_btn)
         layout.addRow("新目录：", dir_widget)
 
-        # Path preview
+        # 路径预览
         self._preview_label = QLabel()
         self._preview_label.setWordWrap(True)
         self._preview_label.setStyleSheet("color: #333; font-style: italic;")
@@ -62,7 +61,7 @@ class _FileRenameDialog(QDialog):
         self._dir_edit.textChanged.connect(self._update_preview)
         self._update_preview()
 
-        # Buttons
+        # 按钮
         btn_widget = QWidget()
         btn_row    = QHBoxLayout(btn_widget)
         btn_row.setContentsMargins(0, 0, 0, 0)

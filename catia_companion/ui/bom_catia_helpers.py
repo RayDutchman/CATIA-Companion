@@ -4,12 +4,11 @@ from pathlib import Path
 
 
 def _is_catia_com_error(exc: Exception) -> bool:
-    """Return True if *exc* is a ``pywintypes.com_error`` from the CATIA COM layer.
+    """如果 *exc* 是来自 CATIA COM 层的 ``pywintypes.com_error`` 则返回 True。
 
-    This distinguishes deliberate user-cancel signals (CATIA raises a COM error
-    when the user clicks Cancel or No in its own SaveAs dialog) from genuine
-    OS-level failures such as disk-full or permission-denied, which are plain
-    Python exceptions and must always be reported to the user.
+    用于区分用户主动取消信号（当用户在 CATIA 自己的 SaveAs 对话框中点击取消或否时，
+    CATIA 会抛出 COM 错误）与真正的操作系统级错误（如磁盘已满或权限拒绝），
+    后者是普通 Python 异常，必须始终报告给用户。
     """
     try:
         import pywintypes  # noqa: PLC0415

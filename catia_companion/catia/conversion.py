@@ -54,13 +54,13 @@ def _resolve_overwrite(
     dest: Path,
     bulk_action: str | None,
 ) -> tuple[str, str | None]:
-    """Decide what to do when *dest* already exists in a batch conversion loop.
+    """决定批量转换循环中 *dest* 已存在时的处理方式。
 
-    Returns ``(result, new_bulk_action)`` where *result* is one of:
+    返回 ``(result, new_bulk_action)``，其中 *result* 为以下之一：
 
-    * ``"proceed"``  – the caller may write the destination file (old file deleted).
-    * ``"skip"``     – skip this file and move to the next one.
-    * ``"cancel"``   – abort the entire batch.
+    * ``"proceed"``  – 调用者可以写入目标文件（旧文件已删除）。
+    * ``"skip"``     – 跳过此文件并移至下一个。
+    * ``"cancel"``   – 中止整个批次。
     """
     if bulk_action == "skip_all":
         logger.info(f"  Skipped (skip all): {dest}")
