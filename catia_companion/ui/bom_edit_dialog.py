@@ -8,7 +8,6 @@ BOM 编辑对话框模块。
 import copy
 import os
 import logging
-import struct
 import subprocess
 from pathlib import Path
 
@@ -34,6 +33,7 @@ from catia_companion.constants import (
 )
 from catia_companion.catia.bom_collect import collect_bom_rows, flatten_bom_to_summary
 from catia_companion.catia.bom_write import write_bom_to_catia
+from catia_companion.utils import read_catia_thumbnail
 
 logger = logging.getLogger(__name__)
 
@@ -60,330 +60,6 @@ def _find_catia_doc_by_path(docs, path: Path) -> object | None:
             pass
     return None
 
-
-# ---------------------------------------------------------------------------
-# CATIA V5 embedded-thumbnail helpers
-# ---------------------------------------------------------------------------
-
-def _dib_to_bmp(dib: bytes) -> bytes | None:
-    """Prepend a BITMAPFILEHEADER to a raw DIB blob to form a valid BMP byte string.
-
-    Returns *None* if the DIB header is too short or obviously malformed.
-    """
-    if len(dib) < 4:
-        return None
-    header_size: int = struct.unpack_from("<I", dib, 0)[0]
-    if header_size < 12 or header_size > len(dib):
-        return None
-    # Compute the color-table size so we can set bfOffBits correctly.
-    if header_size == 12:
-        # BITMAPCOREHEADER (OS/2 v1): color entries are RGBTRIPLE (3 bytes)
-        if len(dib) < 12:
-            return None
-        bit_count: int = struct.unpack_from("<H", dib, 10)[0]
-        colors = 0 if bit_count > 8 else (1 << bit_count)
-        color_table_bytes = colors * 3
-    else:
-        # BITMAPINFOHEADER (40 bytes) and later variants
-        if len(dib) < 24:
-            return None
-        bit_count = struct.unpack_from("<H", dib, 14)[0]
-        compression = struct.unpack_from("<I", dib, 16)[0]
-        colors_used = struct.unpack_from("<I", dib, 32)[0]
-        if bit_count in (1, 4, 8):
-            colors = colors_used if colors_used else (1 << bit_count)
-            color_table_bytes = colors * 4  # RGBQUAD
-        elif compression == 3:          # BI_BITFIELDS: three DWORD color masks
-            color_table_bytes = 12
-        else:
-            color_table_bytes = 0
-    pixel_offset = 14 + header_size + color_table_bytes
-    file_size    = 14 + len(dib)
-    bmp_header   = b"BM" + struct.pack("<IHHI", file_size, 0, 0, pixel_offset)
-    return bmp_header + dib
-
-
-def _parse_pidsi_thumbnail(data: bytes) -> bytes | None:
-    """Parse an OLE *\\x05SummaryInformation* property stream and return the
-    raw thumbnail bytes (JPEG or reconstructed BMP), or *None* if absent.
-
-    The thumbnail is property ID 17 (``PIDSI_THUMBNAIL``), of type ``VT_CF``
-    (0x47).  The ``CLIPDATA`` payload is returned as-is when it looks like a
-    JPEG (magic ``FF D8``), or wrapped in a ``BITMAPFILEHEADER`` when the
-    clipboard format indicates ``CF_DIB`` (8).
-    """
-    if len(data) < 48:
-        return None
-    byte_order: int = struct.unpack_from("<H", data, 0)[0]
-    if byte_order != 0xFFFE:
-        return None
-    num_sets: int = struct.unpack_from("<I", data, 24)[0]
-    if num_sets < 1:
-        return None
-    # Section 0: FMTID at offset 28 (16 bytes), section-stream-offset at 44
-    sec_offset: int = struct.unpack_from("<I", data, 44)[0]
-    if sec_offset + 8 > len(data):
-        return None
-    prop_count: int = struct.unpack_from("<I", data, sec_offset + 4)[0]
-    id_base = sec_offset + 8
-    for i in range(prop_count):
-        entry = id_base + i * 8
-        if entry + 8 > len(data):
-            break
-        prop_id, prop_off = struct.unpack_from("<II", data, entry)
-        if prop_id != 17:               # PIDSI_THUMBNAIL
-            continue
-        abs_off = sec_offset + prop_off
-        if abs_off + 12 > len(data):
-            break
-        vt_type: int = struct.unpack_from("<I", data, abs_off)[0]
-        if vt_type != 0x0047:           # VT_CF
-            break
-        # CLIPDATA: cbSize (4 bytes, includes ulClipFmt), ulClipFmt (4 bytes), data
-        cb_size  = struct.unpack_from("<I", data, abs_off + 4)[0]
-        clip_fmt = struct.unpack_from("<i", data, abs_off + 8)[0]   # signed int
-        if cb_size < 4:
-            break
-        img_bytes = data[abs_off + 12: abs_off + 4 + cb_size]
-        if not img_bytes:
-            break
-        # JPEG: starts with FF D8
-        if img_bytes[:2] == b"\xff\xd8":
-            return img_bytes
-        # CF_DIB (8): raw DIB without file header – reconstruct BMP
-        if clip_fmt == 8:
-            return _dib_to_bmp(img_bytes)
-        # Unknown format: return raw and let Qt try
-        return img_bytes
-    return None
-
-
-# Maximum bytes to read from a non-OLE file when scanning for an embedded JPEG.
-_CATIA_THUMB_SCAN_LIMIT = 4 * 1024 * 1024  # 4 MB
-
-
-def _scan_for_jpeg_in_file(filepath: str) -> bytes | None:
-    """Scan the first :data:`_CATIA_THUMB_SCAN_LIMIT` bytes of *filepath* for an
-    embedded JPEG thumbnail.
-
-    Newer CATIA V5-6R files are not stored as OLE2 Compound Documents but still
-    embed a JPEG preview in the raw binary.  This function locates the first
-    plausible JPEG (magic ``FF D8 FF`` … end-of-image ``FF D9``) that is at
-    least 100 bytes long.
-
-    Returns the JPEG bytes or *None* when nothing is found.
-    """
-    try:
-        with open(filepath, "rb") as fh:
-            data = fh.read(_CATIA_THUMB_SCAN_LIMIT)
-    except OSError:
-        return None
-    pos = 0
-    while True:
-        start = data.find(b"\xff\xd8\xff", pos)
-        if start == -1:
-            return None
-        end = data.find(b"\xff\xd9", start + 2)
-        if end == -1:
-            return None
-        jpeg = data[start : end + 2]
-        if len(jpeg) >= 100:
-            return jpeg
-        pos = start + 1
-
-
-def _read_thumbnail_via_windows_shell(filepath: str, size: int = 256) -> bytes | None:
-    """Use the Windows Shell ``IShellItemImageFactory`` API to get the thumbnail
-    that Windows Explorer shows for *filepath*.
-
-    This is the same mechanism as Windows Explorer and benefits from the system
-    thumbnail cache, making repeated calls for the same file very fast.  It
-    works for any file type with a registered shell thumbnail handler —
-    including CATIA V5 ``.CATPart`` / ``.CATProduct`` files when CATIA is
-    installed.
-
-    Returns raw BMP bytes suitable for ``QPixmap.loadFromData``, or *None* on
-    any failure.  Only available on Windows (``sys.platform == 'win32'``).
-    """
-    import sys
-    if sys.platform != "win32":
-        return None
-
-    import ctypes
-    import ctypes.wintypes as wt
-
-    shell32 = ctypes.windll.shell32
-    gdi32   = ctypes.windll.gdi32
-    user32  = ctypes.windll.user32
-
-    # ── COM / GDI structure definitions ─────────────────────────────────────
-
-    class GUID(ctypes.Structure):
-        _fields_ = [
-            ("Data1", wt.DWORD),
-            ("Data2", wt.WORD),
-            ("Data3", wt.WORD),
-            ("Data4", ctypes.c_ubyte * 8),
-        ]
-
-    # IID_IShellItemImageFactory  {BCC18B79-BA16-442F-80C4-8A59C30C463B}
-    IID_ISIIF = GUID(
-        0xBCC18B79, 0xBA16, 0x442F,
-        (ctypes.c_ubyte * 8)(0x80, 0xC4, 0x8A, 0x59, 0xC3, 0x0C, 0x46, 0x3B),
-    )
-
-    class _SIZE(ctypes.Structure):
-        _fields_ = [("cx", ctypes.c_long), ("cy", ctypes.c_long)]
-
-    class _BITMAP(ctypes.Structure):
-        _fields_ = [
-            ("bmType",       ctypes.c_long),
-            ("bmWidth",      ctypes.c_long),
-            ("bmHeight",     ctypes.c_long),
-            ("bmWidthBytes", ctypes.c_long),
-            ("bmPlanes",     ctypes.c_ushort),
-            ("bmBitsPixel",  ctypes.c_ushort),
-            ("bmBits",       ctypes.c_void_p),
-        ]
-
-    class _BITMAPINFOHEADER(ctypes.Structure):
-        _fields_ = [
-            ("biSize",          wt.DWORD),
-            ("biWidth",         ctypes.c_long),
-            ("biHeight",        ctypes.c_long),
-            ("biPlanes",        wt.WORD),
-            ("biBitCount",      wt.WORD),
-            ("biCompression",   wt.DWORD),
-            ("biSizeImage",     wt.DWORD),
-            ("biXPelsPerMeter", ctypes.c_long),
-            ("biYPelsPerMeter", ctypes.c_long),
-            ("biClrUsed",       wt.DWORD),
-            ("biClrImportant",  wt.DWORD),
-        ]
-
-    # ── Helper: invoke COM vtable method at slot *idx* ───────────────────────
-    _PSZ = ctypes.sizeof(ctypes.c_void_p)
-
-    def _vtcall(this: int, idx: int, restype, argtypes: list, args: list):
-        vtbl = ctypes.cast(this, ctypes.POINTER(ctypes.c_void_p))[0]
-        fptr = ctypes.cast(vtbl + idx * _PSZ, ctypes.POINTER(ctypes.c_void_p))[0]
-        fn   = ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(fptr)
-        return fn(this, *args)
-
-    # ── Step 1: obtain IShellItemImageFactory for the file ───────────────────
-    shell32.SHCreateItemFromParsingName.argtypes = [
-        ctypes.c_wchar_p,
-        ctypes.c_void_p,
-        ctypes.POINTER(GUID),
-        ctypes.POINTER(ctypes.c_void_p),
-    ]
-    shell32.SHCreateItemFromParsingName.restype = ctypes.HRESULT
-
-    pFactory = ctypes.c_void_p(0)
-    hr = shell32.SHCreateItemFromParsingName(
-        filepath, None, ctypes.byref(IID_ISIIF), ctypes.byref(pFactory),
-    )
-    if hr != 0 or not pFactory:
-        return None
-
-    try:
-        # ── Step 2: IShellItemImageFactory::GetImage (vtable slot 3) ─────────
-        # HRESULT GetImage(SIZE size, SIIGBF flags, HBITMAP *phbm)
-        # SIIGBF_BIGGERSIZEOK = 0x01 → return a cached larger size if available
-        hbm = ctypes.c_void_p(0)
-        hr  = _vtcall(
-            pFactory.value, 3,
-            ctypes.HRESULT,
-            [_SIZE, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)],
-            [_SIZE(size, size), 0x01, ctypes.byref(hbm)],
-        )
-        if hr != 0 or not hbm:
-            return None
-
-        try:
-            # ── Step 3: HBITMAP → BMP bytes ──────────────────────────────────
-            bm = _BITMAP()
-            if not gdi32.GetObjectW(hbm, ctypes.sizeof(_BITMAP), ctypes.byref(bm)):
-                return None
-            w, h = bm.bmWidth, bm.bmHeight
-            if w <= 0 or h <= 0:
-                return None
-
-            bih = _BITMAPINFOHEADER()
-            bih.biSize        = ctypes.sizeof(_BITMAPINFOHEADER)
-            bih.biWidth       = w
-            bih.biHeight      = -h  # negative → top-down DIB
-            bih.biPlanes      = 1
-            bih.biBitCount    = 32
-            bih.biCompression = 0   # BI_RGB
-            bih.biSizeImage   = w * h * 4
-
-            buf = ctypes.create_string_buffer(w * h * 4)
-            hdc = user32.GetDC(None)
-            if not hdc:
-                return None
-            try:
-                if not gdi32.GetDIBits(hdc, hbm, 0, h, buf,
-                                        ctypes.byref(bih), 0):  # DIB_RGB_COLORS
-                    return None
-            finally:
-                user32.ReleaseDC(None, hdc)
-
-            dib = bytes(bih) + bytes(buf)
-            return (b"BM"
-                    + struct.pack("<IHHI", 14 + len(dib), 0, 0,
-                                  14 + ctypes.sizeof(_BITMAPINFOHEADER))
-                    + dib)
-        finally:
-            gdi32.DeleteObject(hbm)
-    finally:
-        # IUnknown::Release (vtable slot 2)
-        _vtcall(pFactory.value, 2, ctypes.c_ulong, [], [])
-
-
-def _read_catia_thumbnail(filepath: str) -> bytes | None:
-    """Try to extract the embedded thumbnail from a CATIA V5 file.
-
-    On Windows the Shell ``IShellItemImageFactory`` API is tried first — the
-    same mechanism as Windows Explorer, using the registered CATIA thumbnail
-    handler and the system thumbnail cache.
-
-    When the Shell API is unavailable or returns nothing, the function falls
-    back to reading the ``\\x05SummaryInformation`` OLE stream (classic CATIA
-    V5 OLE2 files) and finally to a raw JPEG scan for newer non-OLE2 CATIA
-    V5-6R files.
-
-    Returns raw image bytes (JPEG or BMP) or *None* when unavailable.
-    """
-    import sys
-
-    # Primary path on Windows: Shell thumbnail API (fast, cached, handles all
-    # CATIA file formats as long as the CATIA shell extension is installed).
-    if sys.platform == "win32":
-        result = _read_thumbnail_via_windows_shell(filepath)
-        if result:
-            return result
-
-    # Fallback 1: OLE2 SummaryInformation stream (classic CATIA V5 files).
-    try:
-        import olefile
-    except ImportError:
-        pass
-    else:
-        try:
-            if olefile.isOleFile(filepath):
-                with olefile.OleFileIO(filepath) as ole:
-                    stream_name = "\x05SummaryInformation"
-                    if ole.exists(stream_name):
-                        raw = ole.openstream(stream_name).read()
-                        result = _parse_pidsi_thumbnail(raw)
-                        if result:
-                            return result
-        except Exception:
-            pass
-
-    # Fallback 2: raw binary JPEG scan (newer CATIA V5-6R non-OLE2 files).
-    return _scan_for_jpeg_in_file(filepath)
 
 
 class _BomTreeDelegate(QStyledItemDelegate):
@@ -1766,7 +1442,7 @@ class BomEditDialog(QDialog):
         #   • not_found: CATIA couldn't resolve the file
         #   • file doesn't exist on disk (unsaved or missing)
         if fp and not is_component and not not_found and fp_path is not None and fp_path.exists():
-            img_bytes = _read_catia_thumbnail(fp)
+            img_bytes = read_catia_thumbnail(fp)
             if img_bytes:
                 pixmap = QPixmap()
                 loaded = pixmap.loadFromData(img_bytes)
@@ -1818,9 +1494,10 @@ class BomEditDialog(QDialog):
         p = Path(fp).resolve()
         try:
             if p.exists():
-                subprocess.Popen(["explorer", f"/select,{p}"])
+                # Quote the path so Explorer handles spaces in directory names.
+                subprocess.Popen(f'explorer /select,"{p}"', shell=True)
             elif p.parent.exists():
-                subprocess.Popen(["explorer", str(p.parent)])
+                subprocess.Popen(f'explorer "{p.parent}"', shell=True)
         except Exception as exc:
             logger.warning(f"Failed to open path in Explorer: {exc}")
 
