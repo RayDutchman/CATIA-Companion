@@ -1494,17 +1494,13 @@ class BomEditDialog(QDialog):
         act_open_path.setEnabled(path_available)
 
         # ── 在CATIA中打开 ─────────────────────────────────────────────────────
-        # Allow CATPart and CATProduct.  Exclude 部件 because their _filepath
-        # points to the parent product's file, so "opening" it would silently
-        # open the wrong (parent) document instead of the component itself.
-        # Also enable for not_found rows (file not yet saved to disk) when a
-        # Part Number is available – the already-open document can be located
-        # by its Part Number and activated in CATIA.
-        is_catia_doc = bool(fp) and fp.lower().endswith((".catpart", ".catproduct"))
+        # Locate by Part Number only.  Exclude:
+        #   • 部件 – their Part Number identifies the parent product
+        #   • not_found (断链接, light-red rows) – CATIA couldn't resolve the
+        #     reference; such rows may not have a valid Part Number in CATIA's
+        #     session and "opening" them is meaningless
         act_open_catia = menu.addAction("在CATIA中打开")
-        act_open_catia.setEnabled(
-            not is_component and (is_catia_doc or (not_found and bool(pn)))
-        )
+        act_open_catia.setEnabled(not is_component and not not_found and bool(pn))
 
         menu.addSeparator()
 
@@ -1520,7 +1516,7 @@ class BomEditDialog(QDialog):
         if action == act_open_path:
             self._open_path(fp)
         elif action == act_open_catia:
-            self._open_in_catia(fp, pn)
+            self._open_in_catia(pn)
         elif action == act_edit_path:
             self._rename_selected_file()
 
@@ -1536,14 +1532,11 @@ class BomEditDialog(QDialog):
         except Exception as exc:
             logger.warning(f"Failed to open path in Explorer: {exc}")
 
-    def _open_in_catia(self, fp: str, pn: str = "") -> None:
-        """Open a CATPart or CATProduct in CATIA and activate its window.
+    def _open_in_catia(self, pn: str) -> None:
+        """Activate the already-open CATIA document whose Part Number is *pn*.
 
-        Strategy:
-        • If *fp* points to an existing file on disk: open by path (or reuse
-          the already-open document) then activate the window.
-        • If *fp* is empty or the file is not yet saved to disk: look up the
-          already-open document by Part Number *pn* and activate its window.
+        Looks up the document by Part Number only.  The caller must ensure that
+        broken-link (not_found) rows are excluded from triggering this method.
         """
         try:
             from pycatia import catia as _pycatia
@@ -1551,27 +1544,13 @@ class BomEditDialog(QDialog):
             application = caa.application
             application.visible = True
             documents   = application.documents
-            doc         = None
 
-            if fp:
-                src = Path(fp).resolve()
-                doc = _find_catia_doc_by_path(documents, src)
-                if doc is None:
-                    if src.exists():
-                        documents.open(str(src))
-                        doc = _find_catia_doc_by_path(documents, src)
-                    elif pn:
-                        # File not on disk yet – surface by Part Number.
-                        doc = _find_catia_doc_by_part_number(documents, pn)
-            elif pn:
-                doc = _find_catia_doc_by_part_number(documents, pn)
+            doc = _find_catia_doc_by_part_number(documents, pn)
 
             if doc is None:
-                label = pn or fp
                 QMessageBox.warning(
                     self, "在CATIA中打开失败",
-                    f"无法在CATIA中找到对应文档。\n"
-                    f"零件编号：{label}\n\n"
+                    f"无法在CATIA中找到零件编号为 \"{pn}\" 的文档。\n\n"
                     f"请确认该零件已在CATIA中打开。",
                 )
                 return
