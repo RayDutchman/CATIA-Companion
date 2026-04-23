@@ -1,9 +1,8 @@
 """
-Find-dependencies dialog.
+查找依赖项对话框。
 
-Provides:
-- FindDependenciesDialog – opens a CATIA file via COM and lists all documents
-                           it depends on.
+提供：
+- FindDependenciesDialog – 通过 COM 打开 CATIA 文件并列出它依赖的所有文档。
 """
 
 import logging
@@ -21,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class FindDependenciesDialog(QDialog):
-    """Dialog for discovering all files a CATIA document depends on."""
+    """发现 CATIA 文档依赖的所有文件的对话框。"""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

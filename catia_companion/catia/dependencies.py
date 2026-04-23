@@ -1,8 +1,8 @@
 """
-CATIA dependency finder.
+CATIA 依赖项查找器。
 
-Provides:
-- find_dependencies() – collect all documents that a target CATIA file depends on
+提供：
+- find_dependencies() – 收集目标 CATIA 文件依赖的所有文档
 """
 
 import logging
@@ -16,19 +16,17 @@ def find_dependencies(
     target_path: str,
     progress_callback: Callable[[str], None] | None = None,
 ) -> list[str]:
-    """Return the full paths of every file that *target_path* depends on.
+    """返回 *target_path* 依赖的所有文件的完整路径。
 
-    Opens the target file in a running CATIA instance; CATIA automatically
-    loads all referenced documents.  The function collects the paths of every
-    newly-opened document, then closes all of them before returning.
+    在运行中的 CATIA 实例中打开目标文件；CATIA 会自动加载所有引用的文档。
+    该函数收集每个新打开文档的路径，然后在返回前关闭所有这些文档。
 
-    Parameters
+    参数
     ----------
     target_path:
-        Absolute path to a ``.CATPart``, ``.CATProduct``, or ``.CATDrawing``.
+        ``.CATPart``、``.CATProduct`` 或 ``.CATDrawing`` 的绝对路径。
     progress_callback:
-        Optional ``callable(str)`` invoked with a status message while the
-        search is running.
+        可选的 ``callable(str)``，在搜索运行时使用状态消息调用。
     """
     from pycatia import catia
 
@@ -38,7 +36,7 @@ def find_dependencies(
     application.visible = True
     documents   = application.documents
 
-    # Snapshot of documents already open before we do anything
+    # 在我们执行任何操作之前，已打开文档的快照
     already_open: set[Path] = set()
     for i in range(1, documents.count + 1):
         try:
@@ -67,7 +65,7 @@ def find_dependencies(
         except Exception as e:
             logger.debug(f"  Could not read document {i}: {e}")
 
-    # Close all documents we opened (target last)
+    # 关闭我们打开的所有文档（目标文件最后关闭）
     for i in range(documents.count, 0, -1):
         try:
             doc      = documents.item(i)

@@ -1,9 +1,8 @@
 """
-BOM export dialog.
+BOM 导出对话框。
 
-Provides:
-- ExportBomDialog – dialog for selecting a CATProduct, choosing columns, and
-                    exporting the BOM to Excel.
+提供：
+- ExportBomDialog – 用于选择 CATProduct、选择列并将 BOM 导出到 Excel 的对话框。
 """
 
 import logging
@@ -29,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 class ExportBomDialog(QDialog):
-    """Dialog to export a CATProduct's BOM to an Excel file."""
+    """将 CATProduct 的 BOM 导出到 Excel 文件的对话框。"""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
