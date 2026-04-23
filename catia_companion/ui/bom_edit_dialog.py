@@ -192,37 +192,198 @@ def _scan_for_jpeg_in_file(filepath: str) -> bytes | None:
         pos = start + 1
 
 
+def _read_thumbnail_via_windows_shell(filepath: str, size: int = 256) -> bytes | None:
+    """Use the Windows Shell ``IShellItemImageFactory`` API to get the thumbnail
+    that Windows Explorer shows for *filepath*.
+
+    This is the same mechanism as Windows Explorer and benefits from the system
+    thumbnail cache, making repeated calls for the same file very fast.  It
+    works for any file type with a registered shell thumbnail handler —
+    including CATIA V5 ``.CATPart`` / ``.CATProduct`` files when CATIA is
+    installed.
+
+    Returns raw BMP bytes suitable for ``QPixmap.loadFromData``, or *None* on
+    any failure.  Only available on Windows (``sys.platform == 'win32'``).
+    """
+    import sys
+    if sys.platform != "win32":
+        return None
+
+    import ctypes
+    import ctypes.wintypes as wt
+
+    shell32 = ctypes.windll.shell32
+    gdi32   = ctypes.windll.gdi32
+    user32  = ctypes.windll.user32
+
+    # ── COM / GDI structure definitions ─────────────────────────────────────
+
+    class GUID(ctypes.Structure):
+        _fields_ = [
+            ("Data1", wt.DWORD),
+            ("Data2", wt.WORD),
+            ("Data3", wt.WORD),
+            ("Data4", ctypes.c_ubyte * 8),
+        ]
+
+    # IID_IShellItemImageFactory  {BCC18B79-BA16-442F-80C4-8A59C30C463B}
+    IID_ISIIF = GUID(
+        0xBCC18B79, 0xBA16, 0x442F,
+        (ctypes.c_ubyte * 8)(0x80, 0xC4, 0x8A, 0x59, 0xC3, 0x0C, 0x46, 0x3B),
+    )
+
+    class _SIZE(ctypes.Structure):
+        _fields_ = [("cx", ctypes.c_long), ("cy", ctypes.c_long)]
+
+    class _BITMAP(ctypes.Structure):
+        _fields_ = [
+            ("bmType",       ctypes.c_long),
+            ("bmWidth",      ctypes.c_long),
+            ("bmHeight",     ctypes.c_long),
+            ("bmWidthBytes", ctypes.c_long),
+            ("bmPlanes",     ctypes.c_ushort),
+            ("bmBitsPixel",  ctypes.c_ushort),
+            ("bmBits",       ctypes.c_void_p),
+        ]
+
+    class _BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [
+            ("biSize",          wt.DWORD),
+            ("biWidth",         ctypes.c_long),
+            ("biHeight",        ctypes.c_long),
+            ("biPlanes",        wt.WORD),
+            ("biBitCount",      wt.WORD),
+            ("biCompression",   wt.DWORD),
+            ("biSizeImage",     wt.DWORD),
+            ("biXPelsPerMeter", ctypes.c_long),
+            ("biYPelsPerMeter", ctypes.c_long),
+            ("biClrUsed",       wt.DWORD),
+            ("biClrImportant",  wt.DWORD),
+        ]
+
+    # ── Helper: invoke COM vtable method at slot *idx* ───────────────────────
+    _PSZ = ctypes.sizeof(ctypes.c_void_p)
+
+    def _vtcall(this: int, idx: int, restype, argtypes: list, args: list):
+        vtbl = ctypes.cast(this, ctypes.POINTER(ctypes.c_void_p))[0]
+        fptr = ctypes.cast(vtbl + idx * _PSZ, ctypes.POINTER(ctypes.c_void_p))[0]
+        fn   = ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(fptr)
+        return fn(this, *args)
+
+    # ── Step 1: obtain IShellItemImageFactory for the file ───────────────────
+    shell32.SHCreateItemFromParsingName.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.c_void_p,
+        ctypes.POINTER(GUID),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    shell32.SHCreateItemFromParsingName.restype = ctypes.HRESULT
+
+    pFactory = ctypes.c_void_p(0)
+    hr = shell32.SHCreateItemFromParsingName(
+        filepath, None, ctypes.byref(IID_ISIIF), ctypes.byref(pFactory),
+    )
+    if hr != 0 or not pFactory:
+        return None
+
+    try:
+        # ── Step 2: IShellItemImageFactory::GetImage (vtable slot 3) ─────────
+        # HRESULT GetImage(SIZE size, SIIGBF flags, HBITMAP *phbm)
+        # SIIGBF_BIGGERSIZEOK = 0x01 → return a cached larger size if available
+        hbm = ctypes.c_void_p(0)
+        hr  = _vtcall(
+            pFactory.value, 3,
+            ctypes.HRESULT,
+            [_SIZE, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)],
+            [_SIZE(size, size), 0x01, ctypes.byref(hbm)],
+        )
+        if hr != 0 or not hbm:
+            return None
+
+        try:
+            # ── Step 3: HBITMAP → BMP bytes ──────────────────────────────────
+            bm = _BITMAP()
+            if not gdi32.GetObjectW(hbm, ctypes.sizeof(_BITMAP), ctypes.byref(bm)):
+                return None
+            w, h = bm.bmWidth, bm.bmHeight
+            if w <= 0 or h <= 0:
+                return None
+
+            bih = _BITMAPINFOHEADER()
+            bih.biSize        = ctypes.sizeof(_BITMAPINFOHEADER)
+            bih.biWidth       = w
+            bih.biHeight      = -h  # negative → top-down DIB
+            bih.biPlanes      = 1
+            bih.biBitCount    = 32
+            bih.biCompression = 0   # BI_RGB
+            bih.biSizeImage   = w * h * 4
+
+            buf = ctypes.create_string_buffer(w * h * 4)
+            hdc = user32.GetDC(None)
+            if not hdc:
+                return None
+            try:
+                if not gdi32.GetDIBits(hdc, hbm, 0, h, buf,
+                                        ctypes.byref(bih), 0):  # DIB_RGB_COLORS
+                    return None
+            finally:
+                user32.ReleaseDC(None, hdc)
+
+            dib = bytes(bih) + bytes(buf)
+            return (b"BM"
+                    + struct.pack("<IHHI", 14 + len(dib), 0, 0,
+                                  14 + ctypes.sizeof(_BITMAPINFOHEADER))
+                    + dib)
+        finally:
+            gdi32.DeleteObject(hbm)
+    finally:
+        # IUnknown::Release (vtable slot 2)
+        _vtcall(pFactory.value, 2, ctypes.c_ulong, [], [])
+
+
 def _read_catia_thumbnail(filepath: str) -> bytes | None:
     """Try to extract the embedded thumbnail from a CATIA V5 file.
 
-    CATIA V5 files are OLE2 Compound Documents.  The thumbnail is stored in
-    the ``\\x05SummaryInformation`` stream as property 17 (PIDSI_THUMBNAIL).
-    Newer CATIA V5-6R files are **not** OLE2; for those a raw binary scan for
-    an embedded JPEG is used as a fallback.
+    On Windows the Shell ``IShellItemImageFactory`` API is tried first — the
+    same mechanism as Windows Explorer, using the registered CATIA thumbnail
+    handler and the system thumbnail cache.
+
+    When the Shell API is unavailable or returns nothing, the function falls
+    back to reading the ``\\x05SummaryInformation`` OLE stream (classic CATIA
+    V5 OLE2 files) and finally to a raw JPEG scan for newer non-OLE2 CATIA
+    V5-6R files.
 
     Returns raw image bytes (JPEG or BMP) or *None* when unavailable.
     """
+    import sys
+
+    # Primary path on Windows: Shell thumbnail API (fast, cached, handles all
+    # CATIA file formats as long as the CATIA shell extension is installed).
+    if sys.platform == "win32":
+        result = _read_thumbnail_via_windows_shell(filepath)
+        if result:
+            return result
+
+    # Fallback 1: OLE2 SummaryInformation stream (classic CATIA V5 files).
     try:
         import olefile
     except ImportError:
-        return None
-    try:
-        is_ole = olefile.isOleFile(filepath)
-        if not is_ole:
-            # Newer CATIA V5-6R files use a non-OLE2 container but still embed
-            # a JPEG thumbnail in the raw binary data.
-            return _scan_for_jpeg_in_file(filepath)
-        with olefile.OleFileIO(filepath) as ole:
-            stream_name = "\x05SummaryInformation"
-            if not ole.exists(stream_name):
-                return None
-            raw = ole.openstream(stream_name).read()
-    except Exception:
-        return None
-    try:
-        return _parse_pidsi_thumbnail(raw)
-    except Exception:
-        return None
+        pass
+    else:
+        try:
+            if olefile.isOleFile(filepath):
+                with olefile.OleFileIO(filepath) as ole:
+                    stream_name = "\x05SummaryInformation"
+                    if ole.exists(stream_name):
+                        raw = ole.openstream(stream_name).read()
+                        result = _parse_pidsi_thumbnail(raw)
+                        if result:
+                            return result
+        except Exception:
+            pass
+
+    # Fallback 2: raw binary JPEG scan (newer CATIA V5-6R non-OLE2 files).
+    return _scan_for_jpeg_in_file(filepath)
 
 
 class _BomTreeDelegate(QStyledItemDelegate):
