@@ -179,11 +179,52 @@ def _parse_pidsi_thumbnail(data: bytes) -> bytes | None:
     return None
 
 
+# Maximum bytes to read from a non-OLE file when scanning for an embedded JPEG.
+_CATIA_THUMB_SCAN_LIMIT = 4 * 1024 * 1024  # 4 MB
+
+
+def _scan_for_jpeg_in_file(filepath: str) -> bytes | None:
+    """Scan the first :data:`_CATIA_THUMB_SCAN_LIMIT` bytes of *filepath* for an
+    embedded JPEG thumbnail.
+
+    Newer CATIA V5-6R files are not stored as OLE2 Compound Documents but still
+    embed a JPEG preview in the raw binary.  This function locates the first
+    plausible JPEG (magic ``FF D8 FF`` … end-of-image ``FF D9``) that is at
+    least 100 bytes long.
+
+    Returns the JPEG bytes or *None* when nothing is found.
+    """
+    logger.warning(f"[缩略图DEBUG] _scan_for_jpeg_in_file: 扫描JPEG嵌入 {filepath!r}")
+    try:
+        with open(filepath, "rb") as fh:
+            data = fh.read(_CATIA_THUMB_SCAN_LIMIT)
+    except OSError as exc:
+        logger.warning(f"[缩略图DEBUG] 文件读取失败: {exc}")
+        return None
+    pos = 0
+    while True:
+        start = data.find(b"\xff\xd8\xff", pos)
+        if start == -1:
+            logger.warning("[缩略图DEBUG] 未找到JPEG magic bytes, 返回None")
+            return None
+        end = data.find(b"\xff\xd9", start + 2)
+        if end == -1:
+            logger.warning("[缩略图DEBUG] 找到JPEG起始但未找到结束标记, 返回None")
+            return None
+        jpeg = data[start : end + 2]
+        if len(jpeg) >= 100:
+            logger.warning(f"[缩略图DEBUG] 扫描找到JPEG: 偏移={start}, 长度={len(jpeg)}")
+            return jpeg
+        pos = start + 1
+
+
 def _read_catia_thumbnail(filepath: str) -> bytes | None:
     """Try to extract the embedded thumbnail from a CATIA V5 file.
 
     CATIA V5 files are OLE2 Compound Documents.  The thumbnail is stored in
     the ``\\x05SummaryInformation`` stream as property 17 (PIDSI_THUMBNAIL).
+    Newer CATIA V5-6R files are **not** OLE2; for those a raw binary scan for
+    an embedded JPEG is used as a fallback.
 
     Returns raw image bytes (JPEG or BMP) or *None* when unavailable.
     """
@@ -197,7 +238,9 @@ def _read_catia_thumbnail(filepath: str) -> bytes | None:
         is_ole = olefile.isOleFile(filepath)
         logger.warning(f"[缩略图DEBUG] isOleFile={is_ole}")
         if not is_ole:
-            return None
+            # Newer CATIA V5-6R files use a non-OLE2 container but still embed
+            # a JPEG thumbnail in the raw binary data.
+            return _scan_for_jpeg_in_file(filepath)
         with olefile.OleFileIO(filepath) as ole:
             stream_name = "\x05SummaryInformation"
             exists = ole.exists(stream_name)
