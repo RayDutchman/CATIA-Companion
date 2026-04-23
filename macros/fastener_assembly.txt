@@ -425,11 +425,6 @@ Public Sub PlaceFastenerAtHole()
     Dim products As Object
     Set products = targetProduct.products
 
-    ' BeginURConcatenation / EndURConcatenation 将 AddComponent + SetComponents
-    ' 合并为一个原子撤销单元，防止 ESC 退出 SelectElement2 时 CATIA 内部回滚
-    ' 最后一个"未提交"操作（即仅回滚 SetComponents 而保留 AddComponent 导致的孤立实例）。
-    CATIA.BeginURConcatenation
-
     products.AddComponent g_fastenerDoc.Product
 
     ' 最后添加的实例即为新组件
@@ -477,8 +472,6 @@ Public Sub PlaceFastenerAtHole()
     '       但对已有非零位置的组件，Move.Apply 会产生叠加，因此本宏统一使用
     '       Position.SetComponents 避免累加误差。
     newComp.Position.SetComponents moveMatrix
-
-    CATIA.EndURConcatenation   ' 提交：AddComponent + SetComponents 作为一个撤销步骤
 
     ' ── 记录最近装配件信息（供翻转重装使用） ─────────────────────────────
     Set g_lastProducts = products
@@ -673,13 +666,7 @@ End Function
 '
 ' ---- 将以下代码粘贴到 FlipForm 的代码模块中（不是本模块）----
 '
-'  ' 使用 MouseUp 而非 Click：
-'  ' VBA UserForm 中若按钮被设为 Cancel 按钮（Cancel=True），或 ESC 键被 VBA
-'  ' 消息泵截获并分发为点击事件，Click 会在 ESC 退出 SelectElement2 期间意外触发。
-'  ' MouseUp 仅在鼠标按键实际松开时触发，键盘 ESC 不会产生 MouseUp，从根本上
-'  ' 避免 ESC 退出循环后误翻转上一个紧固件的问题。
-'  Private Sub btnFlip_MouseUp(ByVal Button As Integer, ByVal Shift As Integer, _
-'                              ByVal X As Single, ByVal Y As Single)
+'  Private Sub btnFlip_Click()
 '      If Not g_loopActive Then Exit Sub
 '      g_flipDir = Not g_flipDir
 '      btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
