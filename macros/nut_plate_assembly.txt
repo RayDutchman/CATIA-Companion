@@ -318,7 +318,7 @@ Public Sub ContinueSelectProduct()
 
         Set hole1Ref = sel.Item(1).Reference
         bHoleGeomOK = False
-        If TryGetMeasurableInContext(spaAssembly, hole1Ref, targetProduct, hole1Meas) Then
+        If TryGetMeasurableInContext(spaAssembly, hole1Ref, rootProduct.Product, hole1Meas) Then
             bHoleGeomOK = TryGetCenter(hole1Meas, holeCenter1)
         End If
 
@@ -344,7 +344,7 @@ Public Sub ContinueSelectProduct()
 
             Set hole2Ref = sel.Item(1).Reference
             bHoleGeomOK = False
-            If TryGetMeasurableInContext(spaAssembly, hole2Ref, targetProduct, hole2Meas) Then
+            If TryGetMeasurableInContext(spaAssembly, hole2Ref, rootProduct.Product, hole2Meas) Then
                 bHoleGeomOK = TryGetCenter(hole2Meas, holeCenter2)
             End If
 
@@ -354,7 +354,7 @@ Public Sub ContinueSelectProduct()
                        vbExclamation, "快速装配托板螺母"
                 sel.Clear
             Else
-                ' ── 6b. 计算安装孔的几何（targetProduct 局部坐标系）───────────────────────
+                ' ── 6b. 计算安装孔的几何（根产品坐标系）───────────────────────
                 ' 锚点 = 两个圆心的中点
                 Dim holePt(2) As Double
                 holePt(0) = (holeCenter1(0) + holeCenter2(0)) / 2
@@ -412,6 +412,33 @@ Public Sub ContinueSelectProduct()
                         MsgBox "无法获取安装孔的轴线方向。", vbExclamation, "快速装配托板螺母"
                         sel.Clear
                     Else
+                        ' ── 将孔几何从根产品坐标系变换到 targetProduct 局部坐标系 ────────
+                        Dim tpMatrix(11)
+                        targetProduct.Position.GetComponents tpMatrix
+
+                        ' 变换锚点
+                        Dim holePtOffset(2) As Double
+                        holePtOffset(0) = holePt(0) - tpMatrix(9)
+                        holePtOffset(1) = holePt(1) - tpMatrix(10)
+                        holePtOffset(2) = holePt(2) - tpMatrix(11)
+                        holePt(0) = tpMatrix(0)*holePtOffset(0) + tpMatrix(1)*holePtOffset(1) + tpMatrix(2)*holePtOffset(2)
+                        holePt(1) = tpMatrix(3)*holePtOffset(0) + tpMatrix(4)*holePtOffset(1) + tpMatrix(5)*holePtOffset(2)
+                        holePt(2) = tpMatrix(6)*holePtOffset(0) + tpMatrix(7)*holePtOffset(1) + tpMatrix(8)*holePtOffset(2)
+
+                        ' 变换第一轴线
+                        Dim holeAxis1World(2) As Double
+                        holeAxis1World(0) = holeAxis1(0): holeAxis1World(1) = holeAxis1(1): holeAxis1World(2) = holeAxis1(2)
+                        holeAxis1(0) = tpMatrix(0)*holeAxis1World(0) + tpMatrix(1)*holeAxis1World(1) + tpMatrix(2)*holeAxis1World(2)
+                        holeAxis1(1) = tpMatrix(3)*holeAxis1World(0) + tpMatrix(4)*holeAxis1World(1) + tpMatrix(5)*holeAxis1World(2)
+                        holeAxis1(2) = tpMatrix(6)*holeAxis1World(0) + tpMatrix(7)*holeAxis1World(1) + tpMatrix(8)*holeAxis1World(2)
+
+                        ' 变换第二轴线
+                        Dim holeAxis2World(2) As Double
+                        holeAxis2World(0) = holeAxis2(0): holeAxis2World(1) = holeAxis2(1): holeAxis2World(2) = holeAxis2(2)
+                        holeAxis2(0) = tpMatrix(0)*holeAxis2World(0) + tpMatrix(1)*holeAxis2World(1) + tpMatrix(2)*holeAxis2World(2)
+                        holeAxis2(1) = tpMatrix(3)*holeAxis2World(0) + tpMatrix(4)*holeAxis2World(1) + tpMatrix(5)*holeAxis2World(2)
+                        holeAxis2(2) = tpMatrix(6)*holeAxis2World(0) + tpMatrix(7)*holeAxis2World(1) + tpMatrix(8)*holeAxis2World(2)
+
                         sel.Clear
 
                         ' 写入模块级变量供 PlaceNutPlateAtHole 使用
@@ -421,7 +448,7 @@ Public Sub ContinueSelectProduct()
 
                         ' ── 调试：孔的几何 ──────────────────────────────────────────
                         If DEBUG_MODE Then
-                            MsgBox "[DEBUG] 安装孔几何（targetProduct 局部坐标系）" & Chr(10) & _
+                            MsgBox "[DEBUG] 安装孔几何（已变换到 targetProduct 局部坐标系）" & Chr(10) & _
                                    "锚点     = (" & Round(holePt(0), 4) & ", " & Round(holePt(1), 4) & ", " & Round(holePt(2), 4) & ")" & Chr(10) & _
                                    "第一轴线 = (" & Round(holeAxis1(0), 4) & ", " & Round(holeAxis1(1), 4) & ", " & Round(holeAxis1(2), 4) & ")" & Chr(10) & _
                                    "第二轴线 = (" & Round(holeAxis2(0), 4) & ", " & Round(holeAxis2(1), 4) & ", " & Round(holeAxis2(2), 4) & ")", _
