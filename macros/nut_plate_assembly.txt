@@ -68,7 +68,8 @@ Public g_hasLastComp  As Boolean
 Public g_lastProducts As Object
 Public g_lastCompIdx  As Long
 
-' 装配循环活动标志
+' 装配循环活动标志：ContinueSelectProduct 进入 Do 循环时设为 True，ESC/循环结束时设为 False。
+' FlipForm.btnFlip_Click 检查此标志，防止循环结束后残留的 Click 事件切换 g_flipDir。
 Public g_loopActive   As Boolean
 
 ' 最近一次对 g_lastComp 执行的操作是否为翻转（MoveLastNutPlate）。
@@ -771,11 +772,12 @@ End Function
 '
 ' ---- 将以下代码粘贴到 FlipForm 的代码模块中（不是本模块）----
 '
-'  Private Sub btnFlip_MouseUp(ByVal Button As Integer, ByVal Shift As Integer, _
-'                              ByVal X As Single, ByVal Y As Single)
+'  Private Sub btnFlip_Click()
 '      If Not g_loopActive Then Exit Sub
 '      g_flipDir = Not g_flipDir
 '      btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
+'      ' 如果当前可翻转重装（装配后尚未选下一孔），
+'      ' 则直接将已有托板螺母移动到翻转后的位置（不删除重建）。
 '      If g_hasLastComp Then
 '          Call MoveLastNutPlate()
 '          g_lastOpWasFlip = True    ' 记录翻转已执行，供 ESC 后重新应用
