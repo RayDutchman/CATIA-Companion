@@ -8,6 +8,7 @@ BOM 编辑对话框模块。
 import copy
 import os
 import logging
+import struct
 import subprocess
 from pathlib import Path
 
@@ -16,9 +17,9 @@ from PySide6.QtWidgets import (
     QPushButton, QTreeWidget, QTreeWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QCheckBox, QGroupBox, QMessageBox, QApplication,
     QFileDialog, QProgressDialog, QRadioButton, QButtonGroup, QStyledItemDelegate,
-    QMenu,
+    QMenu, QWidgetAction,
 )
-from PySide6.QtGui import QColor, QPen, QPainter
+from PySide6.QtGui import QColor, QPen, QPainter, QPixmap
 from PySide6.QtCore import Qt, QSettings
 
 from catia_companion.constants import (
@@ -58,6 +59,134 @@ def _find_catia_doc_by_path(docs, path: Path) -> object | None:
         except Exception:
             pass
     return None
+
+
+# ---------------------------------------------------------------------------
+# CATIA V5 embedded-thumbnail helpers
+# ---------------------------------------------------------------------------
+
+def _dib_to_bmp(dib: bytes) -> bytes | None:
+    """Prepend a BITMAPFILEHEADER to a raw DIB blob to form a valid BMP byte string.
+
+    Returns *None* if the DIB header is too short or obviously malformed.
+    """
+    if len(dib) < 4:
+        return None
+    header_size: int = struct.unpack_from("<I", dib, 0)[0]
+    if header_size < 12 or header_size > len(dib):
+        return None
+    # Compute the color-table size so we can set bfOffBits correctly.
+    if header_size == 12:
+        # BITMAPCOREHEADER (OS/2 v1): color entries are RGBTRIPLE (3 bytes)
+        if len(dib) < 12:
+            return None
+        bit_count: int = struct.unpack_from("<H", dib, 10)[0]
+        colors = 0 if bit_count > 8 else (1 << bit_count)
+        color_table_bytes = colors * 3
+    else:
+        # BITMAPINFOHEADER (40 bytes) and later variants
+        if len(dib) < 24:
+            return None
+        bit_count = struct.unpack_from("<H", dib, 14)[0]
+        compression = struct.unpack_from("<I", dib, 16)[0]
+        colors_used = struct.unpack_from("<I", dib, 32)[0]
+        if bit_count in (1, 4, 8):
+            colors = colors_used if colors_used else (1 << bit_count)
+            color_table_bytes = colors * 4  # RGBQUAD
+        elif compression == 3:          # BI_BITFIELDS: three DWORD color masks
+            color_table_bytes = 12
+        else:
+            color_table_bytes = 0
+    pixel_offset = 14 + header_size + color_table_bytes
+    file_size    = 14 + len(dib)
+    bmp_header   = b"BM" + struct.pack("<IHHI", file_size, 0, 0, pixel_offset)
+    return bmp_header + dib
+
+
+def _parse_pidsi_thumbnail(data: bytes) -> bytes | None:
+    """Parse an OLE *\\x05SummaryInformation* property stream and return the
+    raw thumbnail bytes (JPEG or reconstructed BMP), or *None* if absent.
+
+    The thumbnail is property ID 17 (``PIDSI_THUMBNAIL``), of type ``VT_CF``
+    (0x47).  The ``CLIPDATA`` payload is returned as-is when it looks like a
+    JPEG (magic ``FF D8``), or wrapped in a ``BITMAPFILEHEADER`` when the
+    clipboard format indicates ``CF_DIB`` (8).
+    """
+    if len(data) < 48:
+        return None
+    byte_order: int = struct.unpack_from("<H", data, 0)[0]
+    if byte_order != 0xFFFE:
+        return None
+    num_sets: int = struct.unpack_from("<I", data, 24)[0]
+    if num_sets < 1:
+        return None
+    # Section 0: FMTID at offset 28 (16 bytes), section-stream-offset at 44
+    sec_offset: int = struct.unpack_from("<I", data, 44)[0]
+    if sec_offset + 8 > len(data):
+        return None
+    prop_count: int = struct.unpack_from("<I", data, sec_offset + 4)[0]
+    id_base = sec_offset + 8
+    for i in range(prop_count):
+        entry = id_base + i * 8
+        if entry + 8 > len(data):
+            break
+        prop_id, prop_off = struct.unpack_from("<II", data, entry)
+        if prop_id != 17:               # PIDSI_THUMBNAIL
+            continue
+        abs_off = sec_offset + prop_off
+        if abs_off + 12 > len(data):
+            break
+        vt_type: int = struct.unpack_from("<I", data, abs_off)[0]
+        if vt_type != 0x0047:           # VT_CF
+            break
+        # CLIPDATA: cbSize (4 bytes, includes ulClipFmt), ulClipFmt (4 bytes), data
+        cb_size  = struct.unpack_from("<I", data, abs_off + 4)[0]
+        clip_fmt = struct.unpack_from("<i", data, abs_off + 8)[0]   # signed int
+        if cb_size < 4:
+            break
+        img_bytes = data[abs_off + 12: abs_off + 4 + cb_size]
+        if not img_bytes:
+            break
+        # JPEG: starts with FF D8
+        if img_bytes[:2] == b"\xff\xd8":
+            return img_bytes
+        # CF_DIB (8): raw DIB without file header – reconstruct BMP
+        if clip_fmt == 8:
+            return _dib_to_bmp(img_bytes)
+        # Unknown format: return raw and let Qt try
+        return img_bytes
+    return None
+
+
+def _read_catia_thumbnail(filepath: str) -> bytes | None:
+    """Try to extract the embedded thumbnail from a CATIA V5 file.
+
+    CATIA V5 files are OLE2 Compound Documents.  The thumbnail is stored in
+    the ``\\x05SummaryInformation`` stream as property 17 (PIDSI_THUMBNAIL).
+
+    Returns raw image bytes (JPEG or BMP) or *None* when unavailable.
+    """
+    try:
+        import olefile
+    except ImportError:
+        logger.debug("olefile not installed; thumbnail extraction unavailable")
+        return None
+    try:
+        if not olefile.isOleFile(filepath):
+            return None
+        with olefile.OleFileIO(filepath) as ole:
+            stream_name = "\x05SummaryInformation"
+            if not ole.exists(stream_name):
+                return None
+            raw = ole.openstream(stream_name).read()
+    except Exception as exc:
+        logger.debug(f"OLE read failed for {filepath}: {exc}")
+        return None
+    try:
+        return _parse_pidsi_thumbnail(raw)
+    except Exception as exc:
+        logger.debug(f"Thumbnail parse failed for {filepath}: {exc}")
+        return None
 
 
 class _BomTreeDelegate(QStyledItemDelegate):
@@ -1408,7 +1537,11 @@ class BomEditDialog(QDialog):
     # ── Right-click context menu ──────────────────────────────────────────────
 
     def _on_tree_context_menu(self, pos) -> None:
-        """Show a context menu for the right-clicked BOM row."""
+        """Show a context menu for the right-clicked BOM row.
+
+        If a thumbnail is embedded in the backing file it is shown at the top
+        of the menu as a non-interactive image widget.
+        """
         item = self._table.itemAt(pos)
         if item is None:
             return
@@ -1416,9 +1549,11 @@ class BomEditDialog(QDialog):
         if row_idx is None:
             return
 
-        row_data = self._rows[row_idx]
-        fp       = str(row_data.get("_filepath", ""))
-        fp_path  = Path(fp) if fp else None
+        row_data    = self._rows[row_idx]
+        fp          = str(row_data.get("_filepath", ""))
+        fp_path     = Path(fp) if fp else None
+        is_component = row_data.get("Type") == "部件"
+        not_found    = bool(row_data.get("_not_found"))
 
         # Ensure the right-clicked row is selected so that the downstream
         # helpers (_rename_selected_file etc.) can find it.
@@ -1428,28 +1563,53 @@ class BomEditDialog(QDialog):
 
         menu = QMenu(self)
 
+        # ── Embedded thumbnail (shown inline at the top when available) ───────
+        # Conditions where we skip thumbnail extraction:
+        #   • 部件: filepath belongs to the parent product, not this component
+        #   • not_found: CATIA couldn't resolve the file
+        #   • file doesn't exist on disk (unsaved or missing)
+        if fp and not is_component and not not_found and fp_path is not None and fp_path.exists():
+            img_bytes = _read_catia_thumbnail(fp)
+            if img_bytes:
+                pixmap = QPixmap()
+                if pixmap.loadFromData(img_bytes) and not pixmap.isNull():
+                    scaled = pixmap.scaled(
+                        200, 200,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    thumb_label = QLabel()
+                    thumb_label.setPixmap(scaled)
+                    thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    thumb_label.setContentsMargins(6, 4, 6, 4)
+                    thumb_action = QWidgetAction(menu)
+                    thumb_action.setDefaultWidget(thumb_label)
+                    menu.addAction(thumb_action)
+                    menu.addSeparator()
+
         # ── 打开路径 ──────────────────────────────────────────────────────────
         act_open_path = menu.addAction("打开路径")
-        path_available = bool(fp) and (fp_path.exists() or fp_path.parent.exists())
+        path_available = bool(fp) and fp_path is not None and (
+            fp_path.exists() or fp_path.parent.exists()
+        )
         act_open_path.setEnabled(path_available)
 
         # ── 在CATIA中打开 ─────────────────────────────────────────────────────
-        # Only allow for CATPart files to avoid opening assemblies / products.
-        is_part_file = bool(fp) and fp.lower().endswith(".catpart")
+        # Allow CATPart and CATProduct.  Exclude 部件 because their _filepath
+        # points to the parent product's file, so "opening" it would silently
+        # open the wrong (parent) document instead of the component itself.
+        is_catia_doc = bool(fp) and fp.lower().endswith((".catpart", ".catproduct"))
         act_open_catia = menu.addAction("在CATIA中打开")
-        act_open_catia.setEnabled(is_part_file and not bool(row_data.get("_not_found")))
+        act_open_catia.setEnabled(is_catia_doc and not is_component and not not_found)
 
         menu.addSeparator()
 
         # ── 编辑文件名/路径 ───────────────────────────────────────────────────
         act_edit_path = menu.addAction("编辑文件名/路径")
         act_edit_path.setEnabled(
-            bool(fp) and not bool(row_data.get("_not_found"))
+            bool(fp) and not not_found
             and fp_path is not None and fp_path.exists()
         )
-
-        # ── 删除 ─────────────────────────────────────────────────────────────
-        act_delete = menu.addAction("删除")
 
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
 
@@ -1459,19 +1619,20 @@ class BomEditDialog(QDialog):
             self._open_in_catia(fp)
         elif action == act_edit_path:
             self._rename_selected_file()
-        elif action == act_delete:
-            self._delete_row(row_idx)
 
     def _open_path(self, fp: str) -> None:
         """Open the folder containing *fp* in Windows Explorer, highlighting the file."""
         p = Path(fp).resolve()
-        if p.exists():
-            subprocess.Popen(["explorer", f"/select,{p}"])
-        elif p.parent.exists():
-            subprocess.Popen(["explorer", str(p.parent)])
+        try:
+            if p.exists():
+                subprocess.Popen(["explorer", f"/select,{p}"])
+            elif p.parent.exists():
+                subprocess.Popen(["explorer", str(p.parent)])
+        except Exception as exc:
+            logger.warning(f"Failed to open path in Explorer: {exc}")
 
     def _open_in_catia(self, fp: str) -> None:
-        """Open a CATPart file in CATIA (if not already open)."""
+        """Open a CATPart or CATProduct file in CATIA (if not already open)."""
         try:
             from pycatia import catia as _pycatia
             caa         = _pycatia()
@@ -1483,38 +1644,3 @@ class BomEditDialog(QDialog):
                 documents.open(str(src))
         except Exception as e:
             QMessageBox.warning(self, "在CATIA中打开失败", f"无法在CATIA中打开文件：\n{e}")
-
-    def _delete_row(self, row_idx: int) -> None:
-        """Remove a BOM row (and its children in hierarchical mode) from the display."""
-        if row_idx < 0 or row_idx >= len(self._rows):
-            return
-
-        row_data = self._rows[row_idx]
-        level    = int(row_data.get("Level", 0)) if not self._summarize else 0
-
-        # Collect the index of this row plus all immediate children (hierarchical mode).
-        indices_to_remove: set[int] = {row_idx}
-        if not self._summarize:
-            i = row_idx + 1
-            while i < len(self._rows):
-                if int(self._rows[i].get("Level", 0)) <= level:
-                    break
-                indices_to_remove.add(i)
-                i += 1
-
-        # Collect part numbers that are being removed.
-        removed_pns = {str(self._rows[i].get("Part Number", "")) for i in indices_to_remove}
-
-        # Delete rows in reverse order so that lower indices stay valid.
-        for idx in sorted(indices_to_remove, reverse=True):
-            del self._rows[idx]
-
-        # Clean up canonical / snapshot / modified data for PNs no longer in view.
-        remaining_pns = {str(r.get("Part Number", "")) for r in self._rows}
-        for pn in removed_pns:
-            if pn and pn not in remaining_pns:
-                self._canonical_data.pop(pn, None)
-                self._snapshot_data.pop(pn, None)
-                self._modified_keys.pop(pn, None)
-
-        self._populate_table()
