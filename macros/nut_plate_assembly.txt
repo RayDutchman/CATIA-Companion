@@ -16,7 +16,7 @@ Public Const DEBUG_MODE As Boolean = False
 '   3. 插入名为 "SwitchToPartForm" 的 UserForm（等待切换到托板螺母文档面板）：
 '      - Insert > UserForm，(Name) = "SwitchToPartForm"，Caption = "选择托板螺母文档"。
 '      - 添加一个 Label：(Name) = "lblMsg"，
-'        Caption = "请切换到 托板螺母（CATPart）文档窗口，再点击""继续""。"
+'        Caption = "请切换到托板螺母（CATPart）文档窗口，再点击""继续""。"
 '      - 添加两个 CommandButton：
 '          btnContinue：Caption = "继续"，Width ≈ 80，Height ≈ 28
 '          btnCancel  ：Caption = "取消"，Width ≈ 80，Height ≈ 28
@@ -33,7 +33,7 @@ Public Const DEBUG_MODE As Boolean = False
 '
 ' 操作流程：
 '   1. CATMain 显示非模态浮动面板 SwitchToPartForm，然后返回。
-'      用户可自由切换到 托板螺母（CATPart）文档窗口，切换完成后点击面板上的"继续"
+'      用户可自由切换到托板螺母（CATPart）文档窗口，切换完成后点击面板上的"继续"
 '      按钮，由 ContinueSelectNutPlate() 确认当前活动文档为 PartDocument 并继续。
 '   2. 用户选择托板螺母上的两个圆形边（铆钉孔），
 '      - 两个圆心的中点作为托板螺母的 Anchor Point
@@ -45,7 +45,7 @@ Public Const DEBUG_MODE As Boolean = False
 '      SelectElement2，让用户在产品结构树中选择目标产品/部件（targetProduct）。
 '   4. 装配循环：选择安装孔的两个圆形边 -> 添加托板螺母实例并定位。
 '      装配完成后可点击浮动面板上的"翻转方向"按钮撤销并重装（方向相反）。
-'      翻转按钮在每次装配后始终有效（包括正在选下一孔时），影响最近一次装配的 托板螺母。
+'      翻转按钮在每次装配后始终有效（包括正在选下一孔时），影响最近一次装配的托板螺母。
 '      按 ESC 结束循环。
 '
 ' ----------------------------------------------------------------------------
@@ -84,8 +84,8 @@ Public g_targetPN      As String
 Public g_count         As Long
 
 Public Sub CATMain()
-    ' ── 1. 提示用户切换到 托板螺母（CATPart）文档（非模态浮动面板）──────────
-    CATIA.StatusBar = "请切换到 托板螺母（CATPart）文档窗口，然后点击浮动面板上的""继续""按钮。"
+    ' ── 1. 提示用户切换到托板螺母（CATPart）文档（非模态浮动面板）──────────
+    CATIA.StatusBar = "请切换到托板螺母（CATPart）文档窗口，然后点击浮动面板上的""继续""按钮。"
     SwitchToPartForm.Show vbModeless
 End Sub
 
@@ -100,7 +100,7 @@ Public Sub ContinueSelectNutPlate()
     If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then
         MsgBox "当前活动文档不是 CATPart。" & Chr(10) & _
                "请先切换到托板螺母文档窗口，然后再点击""继续""。", _
-               vbExclamation, "快速装配 托板螺母"
+               vbExclamation, "快速装配托板螺母"
         Exit Sub
     End If
 
@@ -141,7 +141,7 @@ Public Sub ContinueSelectNutPlate()
         If Not bGeomOK Then
             MsgBox "无法从所选元素获取轴向和圆心。" & Chr(10) & _
                    "请选择一个圆或一段圆弧（而非直线或曲线）。", _
-                   vbExclamation, "快速装配 托板螺母"
+                   vbExclamation, "快速装配托板螺母"
             sel.Clear
         End If
     Loop While Not bGeomOK
@@ -159,7 +159,7 @@ Public Sub ContinueSelectNutPlate()
         If Not bGeomOK Then
             MsgBox "无法从所选元素获取圆心。" & Chr(10) & _
                    "请选择一个圆或一段圆弧（而非直线或曲线）。", _
-                   vbExclamation, "快速装配 托板螺母"
+                   vbExclamation, "快速装配托板螺母"
             sel.Clear
         End If
     Loop While Not bGeomOK
@@ -182,7 +182,7 @@ Public Sub ContinueSelectNutPlate()
     Dim axis1Len As Double
     axis1Len = Sqr(bnAxis1(0)*bnAxis1(0) + bnAxis1(1)*bnAxis1(1) + bnAxis1(2)*bnAxis1(2))
     If axis1Len < 0.000000000001 Then
-        MsgBox "两个铆钉孔的圆心重合，无法确定第一轴线。", vbExclamation, "快速装配 托板螺母"
+        MsgBox "两个铆钉孔的圆心重合，无法确定第一轴线。", vbExclamation, "快速装配托板螺母"
         Exit Sub
     End If
     bnAxis1(0) = bnAxis1(0) / axis1Len
@@ -212,7 +212,7 @@ Public Sub ContinueSelectNutPlate()
     axis2Len = Sqr(bnAxis2(0)*bnAxis2(0) + bnAxis2(1)*bnAxis2(1) + bnAxis2(2)*bnAxis2(2))
     If axis2Len < 0.000000000001 Then
         ' 如果第一个圆的轴线与第一轴线平行，则第二轴线无法确定，选择一个垂直方向
-        MsgBox "第一个铆钉孔的轴线与两圆心连线平行，无法确定第二轴线。", vbExclamation, "快速装配 托板螺母"
+        MsgBox "第一个铆钉孔的轴线与两圆心连线平行，无法确定第二轴线。", vbExclamation, "快速装配托板螺母"
         Exit Sub
     End If
     bnAxis2(0) = bnAxis2(0) / axis2Len
@@ -249,7 +249,7 @@ Public Sub ContinueSelectProduct()
     If TypeName(CATIA.ActiveDocument) <> "ProductDocument" Then
         MsgBox "当前活动文档不是 CATProduct。" & Chr(10) & _
                "请先切换到目标产品文档窗口，然后再点击""继续""。", _
-               vbExclamation, "快速装配 托板螺母"
+               vbExclamation, "快速装配托板螺母"
         Exit Sub
     End If
 
@@ -268,7 +268,7 @@ Public Sub ContinueSelectProduct()
     status = sel.SelectElement2(prodFilter, _
         "在产品结构树中选择托板螺母要装入的产品/部件", False)
     If status <> "Normal" Then
-        MsgBox "已取消选择。", vbInformation, "快速装配 托板螺母"
+        MsgBox "已取消选择。", vbInformation, "快速装配托板螺母"
         Exit Sub
     End If
 
@@ -325,7 +325,7 @@ Public Sub ContinueSelectProduct()
         If Not bHoleGeomOK Then
             MsgBox "无法获取第一个安装孔的圆心。" & Chr(10) & _
                    "请选择孔的圆或圆弧（而非直线或曲线）。", _
-                   vbExclamation, "快速装配 托板螺母"
+                   vbExclamation, "快速装配托板螺母"
             sel.Clear
             ' 继续循环，重新选择
         Else
@@ -351,7 +351,7 @@ Public Sub ContinueSelectProduct()
             If Not bHoleGeomOK Then
                 MsgBox "无法获取第二个安装孔的圆心。" & Chr(10) & _
                        "请选择孔的圆或圆弧（而非直线或曲线）。", _
-                       vbExclamation, "快速装配 托板螺母"
+                       vbExclamation, "快速装配托板螺母"
                 sel.Clear
             Else
                 ' ── 6b. 计算安装孔的几何（根产品坐标系）───────────────────────
@@ -369,7 +369,7 @@ Public Sub ContinueSelectProduct()
                 Dim holeAxis1Len As Double
                 holeAxis1Len = Sqr(holeAxis1(0)*holeAxis1(0) + holeAxis1(1)*holeAxis1(1) + holeAxis1(2)*holeAxis1(2))
                 If holeAxis1Len < 0.000000000001 Then
-                    MsgBox "两个安装孔的圆心重合，无法确定第一轴线。", vbExclamation, "快速装配 托板螺母"
+                    MsgBox "两个安装孔的圆心重合，无法确定第一轴线。", vbExclamation, "快速装配托板螺母"
                     sel.Clear
                 Else
                     holeAxis1(0) = holeAxis1(0) / holeAxis1Len
@@ -409,7 +409,7 @@ Public Sub ContinueSelectProduct()
                     End If
 
                     If Not bHoleGeomOK Then
-                        MsgBox "无法获取安装孔的轴线方向。", vbExclamation, "快速装配 托板螺母"
+                        MsgBox "无法获取安装孔的轴线方向。", vbExclamation, "快速装配托板螺母"
                         sel.Clear
                     Else
                         ' ── 将孔几何从根产品坐标系变换到 targetProduct 局部坐标系 ────────
@@ -455,7 +455,7 @@ Public Sub ContinueSelectProduct()
                                    vbInformation, "快速装配托板螺母[DEBUG]"
                         End If
 
-                        ' 6c. 装配并定位 托板螺母
+                        ' 6c. 装配并定位托板螺母
                         Call PlaceNutPlateAtHole()
 
                         ' 装配完成后允许翻转重装
@@ -477,7 +477,7 @@ Public Sub ContinueSelectProduct()
     CATIA.StatusBar = "装配完成！共装配 " & g_count & " 个 " & g_nutPlatePN
     MsgBox "装配完成！" & Chr(10) & _
            "共装配 " & g_count & " 个 " & g_nutPlatePN & " 到 " & g_targetPN & "。", _
-           vbInformation, "快速装配 托板螺母"
+           vbInformation, "快速装配托板螺母"
 
 End Sub
 
@@ -797,7 +797,7 @@ End Function
 '   - 将窗体 (Name) 设为 "SwitchToPartForm"，Caption 设为 "选择托板螺母文档"。
 '   - 添加一个 Label：
 '       (Name)    = "lblMsg"
-'       Caption   = "请切换到 托板螺母（CATPart）文档窗口，" & Chr(10) &
+'       Caption   = "请切换到托板螺母（CATPart）文档窗口，" & Chr(10) &
 '                   "切换完成后点击""继续""按钮。"
 '   - 添加两个 CommandButton（横向排列）：
 '       btnContinue：Caption = "继续"，Width ≈ 80，Height ≈ 28

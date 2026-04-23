@@ -51,3 +51,4 @@ macros/catia_companion.catvba
 drawing_templates/EHANG_A3_V1.CATDrawing
 macros/test.catvbs
 macros/fastener_assembly.catvba
+macros/nut_plate_assembly.catvba
