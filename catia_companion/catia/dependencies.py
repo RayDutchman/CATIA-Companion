@@ -6,6 +6,7 @@ Provides:
 """
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 def find_dependencies(
     target_path: str,
-    progress_callback=None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> list[str]:
     """Return the full paths of every file that *target_path* depends on.
 

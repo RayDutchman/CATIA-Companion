@@ -1,9 +1,8 @@
 """
-BOM write-back to CATIA.
+BOM 写回 CATIA 模块。
 
-Provides:
-- write_bom_to_catia() – traverse the product tree and write edited properties
-                         back via COM
+提供：
+- write_bom_to_catia() – 遍历产品树并通过 COM 将编辑后的属性写回
 """
 
 import logging
@@ -24,24 +23,17 @@ def write_bom_to_catia(
     custom_columns: list[str],
     progress_callback: Callable[[int], None] | None = None,
 ) -> None:
-    """Write edited BOM properties back to CATIA via COM.
+    """通过 COM 将编辑后的 BOM 属性写回 CATIA。
 
-    Parameters
-    ----------
-    file_path:
-        Path to the ``.CATProduct`` file that was edited, or ``None`` to use
-        the currently active CATIA document without opening or saving anything.
-    pn_data:
-        Mapping from original Part Number → ``{column_name: new_value}``.
-        Only changed fields need to be included.
-    custom_columns:
-        Column names that are user-defined properties (written via
-        ``UserRefProperties``).
-    progress_callback:
-        Optional callable invoked with the current node count after each node
-        is visited during the traversal.  May raise an exception to abort.
-        The traversal is post-order (children before parents), so deeper
-        levels are written to CATIA before their parent levels.
+    参数：
+        file_path: 已编辑的 ``.CATProduct`` 文件路径，或 ``None`` 使用当前活动的 CATIA
+                  文档（不打开或保存任何文件）
+        pn_data: 从原始零件编号到 ``{列名: 新值}`` 的映射。
+                仅需包含更改的字段。
+        custom_columns: 用户自定义属性的列名（通过 ``UserRefProperties`` 写入）
+        progress_callback: 可选的回调函数，在遍历期间访问每个节点后调用，传入当前节点计数。
+                          可抛出异常以中止。遍历顺序为后序（子节点在父节点之前），
+                          因此较深层级在父级之前写入 CATIA。
     """
     from pycatia import catia, CatWorkModeType
     from pycatia.product_structure_interfaces.product_document import ProductDocument
@@ -97,7 +89,7 @@ def write_bom_to_catia(
             except Exception:
                 continue
 
-    _total_count: list[int] = [0]
+    _total_count: int = 0
 
     # Track backing filepaths that have already been written so that repeated
     # instances of the same physical document (e.g. the same fastener used
@@ -114,6 +106,7 @@ def write_bom_to_catia(
     remaining_pns: set[str] = set(pn_data.keys())
 
     def _traverse_write(product, parent_filepath: str = "") -> None:
+        nonlocal _total_count
         # Early exit: nothing left to write.
         if not remaining_pns:
             return
@@ -185,9 +178,9 @@ def write_bom_to_catia(
                     _set_user_prop(product, col, value)
             remaining_pns.discard(pn)
 
-        _total_count[0] += 1
+        _total_count += 1
         if progress_callback is not None:
-            progress_callback(_total_count[0])
+            progress_callback(_total_count)
 
         # Mark this filepath as done after its sub-tree has been fully
         # traversed so that future identical references are skipped entirely.

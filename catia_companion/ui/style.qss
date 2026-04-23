@@ -83,3 +83,4 @@ QComboBox {
 QStatusBar {
     color: #555;
 }
+

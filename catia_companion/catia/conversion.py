@@ -1,9 +1,9 @@
 """
-CATIA file-conversion helpers.
+CATIA 文件转换辅助模块。
 
-Provides:
-- convert_drawing_to_pdf()  – export CATDrawing files to PDF
-- convert_part_to_step()    – export CATPart/CATProduct files to STEP (.stp)
+提供：
+- convert_drawing_to_pdf()  – 将 CATDrawing 文件导出为 PDF
+- convert_part_to_step()    – 将 CATPart/CATProduct 文件导出为 STEP (.stp)
 """
 
 import logging
@@ -16,10 +16,16 @@ logger = logging.getLogger(__name__)
 
 
 def _prompt_overwrite(dest: Path) -> str:
-    """Show an overwrite-conflict dialog for *dest*.
+    """显示 *dest* 的覆盖冲突对话框。
 
-    Returns one of: ``"skip"``, ``"skip_all"``, ``"overwrite"``,
-    ``"overwrite_all"``, or ``"cancel"``.
+    返回以下之一：``"skip"``、``"skip_all"``、``"overwrite"``、
+    ``"overwrite_all"`` 或 ``"cancel"``。
+
+    参数：
+        dest: 目标文件路径
+
+    返回：
+        用户选择的操作
     """
     msg = QMessageBox()
     msg.setWindowTitle("文件已存在")
@@ -44,23 +50,63 @@ def _prompt_overwrite(dest: Path) -> str:
     return "overwrite"
 
 
+def _resolve_overwrite(
+    dest: Path,
+    bulk_action: str | None,
+) -> tuple[str, str | None]:
+    """Decide what to do when *dest* already exists in a batch conversion loop.
+
+    Returns ``(result, new_bulk_action)`` where *result* is one of:
+
+    * ``"proceed"``  – the caller may write the destination file (old file deleted).
+    * ``"skip"``     – skip this file and move to the next one.
+    * ``"cancel"``   – abort the entire batch.
+    """
+    if bulk_action == "skip_all":
+        logger.info(f"  Skipped (skip all): {dest}")
+        return "skip", bulk_action
+    if bulk_action == "overwrite_all":
+        dest.unlink()
+        return "proceed", bulk_action
+    action = _prompt_overwrite(dest)
+    if action == "cancel":
+        return "cancel", "cancel"
+    if action == "skip_all":
+        logger.info(f"  Skipped (skip all): {dest}")
+        return "skip", "skip_all"
+    if action == "skip":
+        logger.info(f"  Skipped: {dest}")
+        return "skip", bulk_action
+    if action == "overwrite_all":
+        bulk_action = "overwrite_all"
+    dest.unlink()
+    return "proceed", bulk_action
+
+
 def convert_drawing_to_pdf(
     file_paths: list[str],
     output_folder: str | None = None,
     prefix: str = "DR_",
     suffix: str = "",
     progress_callback: Callable[[int, int], None] | None = None,
+    update_before_export: bool = False,
 ) -> int:
-    """Convert CATDrawing files to PDF using pyCATIA.
+    """使用 pyCATIA 将 CATDrawing 文件转换为 PDF。
 
-    If *prefix* is non-empty it is prepended to the output filename unless the
-    stem already starts with it.  If *suffix* is non-empty it is appended
-    unless the stem already ends with it.
+    如果 *prefix* 非空，则在输出文件名前添加前缀（除非文件名已包含该前缀）。
+    如果 *suffix* 非空，则在文件名后添加后缀（除非文件名已包含该后缀）。
 
-    *progress_callback*, if provided, is called as ``progress_callback(i, total)``
-    before processing each file (0-based index).
+    参数：
+        file_paths: CATDrawing 文件路径列表
+        output_folder: 输出文件夹路径，默认为源文件所在目录
+        prefix: 输出文件名前缀，默认 "DR_"
+        suffix: 输出文件名后缀，默认为空
+        progress_callback: 进度回调函数，在处理每个文件前调用 ``progress_callback(i, total)``
+                          （0 基索引）
+        update_before_export: 为 ``True`` 时，在导出 PDF 前更新图纸文档（刷新所有视图）
 
-    Returns the number of files successfully exported.
+    返回：
+        成功导出的文件数量
     """
     from pycatia import catia
     from pycatia.drafting_interfaces.drawing_document import DrawingDocument
@@ -95,31 +141,21 @@ def convert_drawing_to_pdf(
         logger.info(f"Opening: {src}")
 
         if dest.exists():
-            if bulk_action == "skip_all":
-                logger.info(f"  Skipped (skip all): {dest}")
+            result, bulk_action = _resolve_overwrite(dest, bulk_action)
+            if result == "cancel":
+                break
+            if result == "skip":
                 continue
-            if bulk_action == "overwrite_all":
-                dest.unlink()
-            else:
-                action = _prompt_overwrite(dest)
-                if action == "cancel":
-                    bulk_action = "cancel"
-                    break
-                if action == "skip_all":
-                    bulk_action = "skip_all"
-                    logger.info(f"  Skipped (skip all): {dest}")
-                    continue
-                if action == "skip":
-                    logger.info(f"  Skipped: {dest}")
-                    continue
-                if action == "overwrite_all":
-                    bulk_action = "overwrite_all"
-                dest.unlink()
 
         try:
             documents.open(str(src))
             drawing_doc = DrawingDocument(application.active_document.com_object)
             sheet_count = drawing_doc.drawing_root.sheets.count
+
+            if update_before_export:
+                logger.info(f"  Updating drawing ({sheet_count} sheet(s))…")
+                drawing_doc.com_object.Update()
+
             drawing_doc.export_data(str(dest), "pdf")
 
             if not dest.exists():
@@ -144,16 +180,21 @@ def convert_part_to_step(
     suffix: str = "",
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> int:
-    """Convert CATPart/CATProduct files to STEP (.stp) using pyCATIA.
+    """使用 pyCATIA 将 CATPart/CATProduct 文件转换为 STEP (.stp)。
 
-    If *prefix* is non-empty it is prepended to the output filename unless the
-    stem already starts with it.  If *suffix* is non-empty it is appended
-    unless the stem already ends with it.
+    如果 *prefix* 非空，则在输出文件名前添加前缀（除非文件名已包含该前缀）。
+    如果 *suffix* 非空，则在文件名后添加后缀（除非文件名已包含该后缀）。
 
-    *progress_callback*, if provided, is called as ``progress_callback(i, total)``
-    before processing each file (0-based index).
+    参数：
+        file_paths: CATPart/CATProduct 文件路径列表
+        output_folder: 输出文件夹路径，默认为源文件所在目录
+        prefix: 输出文件名前缀，默认 "MD_"
+        suffix: 输出文件名后缀，默认为空
+        progress_callback: 进度回调函数，在处理每个文件前调用 ``progress_callback(i, total)``
+                          （0 基索引）
 
-    Returns the number of files successfully exported.
+    返回：
+        成功导出的文件数量
     """
     from pycatia import catia
 
@@ -187,26 +228,11 @@ def convert_part_to_step(
         logger.info(f"Opening: {src}")
 
         if dest.exists():
-            if bulk_action == "skip_all":
-                logger.info(f"  Skipped (skip all): {dest}")
+            result, bulk_action = _resolve_overwrite(dest, bulk_action)
+            if result == "cancel":
+                break
+            if result == "skip":
                 continue
-            if bulk_action == "overwrite_all":
-                dest.unlink()
-            else:
-                action = _prompt_overwrite(dest)
-                if action == "cancel":
-                    bulk_action = "cancel"
-                    break
-                if action == "skip_all":
-                    bulk_action = "skip_all"
-                    logger.info(f"  Skipped (skip all): {dest}")
-                    continue
-                if action == "skip":
-                    logger.info(f"  Skipped: {dest}")
-                    continue
-                if action == "overwrite_all":
-                    bulk_action = "overwrite_all"
-                dest.unlink()
 
         try:
             documents.open(str(src))

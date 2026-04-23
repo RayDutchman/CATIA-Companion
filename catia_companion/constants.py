@@ -12,8 +12,8 @@ import re
 # ---------------------------------------------------------------------------
 
 APP_NAME    = "CATIA Companion"
-APP_VERSION = "1.1.0"
-APP_DATE    = "2026-04-10"
+APP_VERSION = "1.3.0"
+APP_DATE    = "2026-04-22"
 APP_AUTHOR  = "CHEN Weibo"
 APP_CONTACT = "thucwb@gmail.com"
 
@@ -29,6 +29,7 @@ ABOUT_TEXT = f"""{APP_NAME} v{APP_VERSION}
   • 新建图纸（从模板生成 CATDrawing）
   • 刷新图纸（同步零件属性到图纸参数）
   • CATIA 宏脚本快捷运行
+  • 紧固件快速装配（VBA 宏批量装配）
   • 零件模板刷写（添加标准用户自定义属性）
   • 字体文件 / ISO.xml 标准文件一键部署
 
@@ -66,7 +67,7 @@ APP_ICON_PATH     = "resources/icon.ico"
 
 PRESET_USER_REF_PROPERTIES: list[str] = [
     "物料编码", "物料名称", "规格型号",
-    "物料来源", "数据状态", "存货类别", "质量", "备注",
+    "物料来源", "数据状态", "存货类别", "重量", "备注",
 ]
 
 # ---------------------------------------------------------------------------

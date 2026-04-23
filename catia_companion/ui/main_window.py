@@ -1,8 +1,8 @@
 """
-Main application window.
+主应用程序窗口模块。
 
-Provides:
-- MainWindow – the primary QMainWindow with a grouped-button UI and menu bar.
+提供：
+- MainWindow – 带有分组按钮 UI 和菜单栏的主 QMainWindow。
 """
 
 import sys
@@ -43,10 +43,10 @@ logger = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
-    """Primary application window."""
+    """主应用程序窗口。"""
 
-    # 快速运行宏仅支持 CATScript 文件（.catvbs / .catscript），不支持 .catvba
-    _MACRO_EXTENSIONS: frozenset[str] = frozenset({".catvbs", ".catscript"})
+    # 快速运行宏支持 CATScript（.catvbs / .catscript）和 VBA（.catvba）文件。
+    _MACRO_EXTENSIONS: frozenset[str] = frozenset({".catvbs", ".catscript", ".catvba"})
 
     def __init__(self) -> None:
         super().__init__()
@@ -60,22 +60,23 @@ class MainWindow(QMainWindow):
         self._build_central_widget()
         self.statusBar().showMessage("就绪")
 
-    # ── Central widget ─────────────────────────────────────────────────────
+    # ── 中央控件区域 ──────────────────────────────────────────────────────
 
     def _build_central_widget(self) -> None:
+        """构建主窗口的中央控件区域。"""
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(16, 12, 16, 16)
         layout.setSpacing(12)
 
-        # Welcome label
+        # 欢迎标签
         welcome = QLabel(f"欢迎使用 {APP_NAME}")
         welcome.setAlignment(Qt.AlignmentFlag.AlignCenter)
         welcome.setStyleSheet("font-size: 11pt; font-weight: bold; color: #333;")
         layout.addWidget(welcome)
 
-        # ── Export group ─────────────────────────────────────────────────
+        # ── 导出功能组 ────────────────────────────────────────────────────
         export_group  = QGroupBox("导出")
         export_layout = QVBoxLayout(export_group)
         export_layout.setSpacing(6)
@@ -88,24 +89,31 @@ class MainWindow(QMainWindow):
         btn_part.setToolTip("将 CATPart 或 CATProduct 文件批量导出为 STEP")
         btn_part.clicked.connect(self._open_convert_part_dialog)
 
-        btn_bom_export = QPushButton("从 CATProduct 导出 BOM")
-        btn_bom_export.setToolTip("从 CATProduct 导出 BOM 到 Excel 文件")
-        btn_bom_export.clicked.connect(self._open_export_bom_dialog)
-
-        for btn in (btn_drawing, btn_part, btn_bom_export):
+        for btn in (btn_drawing, btn_part):
             export_layout.addWidget(btn)
         layout.addWidget(export_group)
 
-        # ── Edit group ───────────────────────────────────────────────────
-        edit_group  = QGroupBox("编辑")
-        edit_layout = QVBoxLayout(edit_group)
-        edit_layout.setSpacing(6)
+        # ── BOM 功能组 ────────────────────────────────────────────────────
+        bom_group  = QGroupBox("BOM")
+        bom_layout = QVBoxLayout(bom_group)
+        bom_layout.setSpacing(6)
+
+        btn_bom_export = QPushButton("从 CATProduct 导出 BOM")
+        btn_bom_export.setToolTip("从 CATProduct 导出 BOM 到 Excel 文件")
+        btn_bom_export.clicked.connect(self._open_export_bom_dialog)
 
         btn_bom_edit = QPushButton("BOM 属性补全")
         btn_bom_edit.setToolTip("在表格中编辑 BOM 属性并写回 CATIA")
         btn_bom_edit.clicked.connect(self._open_bom_edit_dialog)
 
-        edit_layout.addWidget(btn_bom_edit)
+        for btn in (btn_bom_export, btn_bom_edit):
+            bom_layout.addWidget(btn)
+        layout.addWidget(bom_group)
+
+        # ── 图纸功能组 ────────────────────────────────────────────────────
+        drawing_group  = QGroupBox("图纸")
+        drawing_layout = QVBoxLayout(drawing_group)
+        drawing_layout.setSpacing(6)
 
         drawing_row = QHBoxLayout()
         drawing_row.setSpacing(6)
@@ -120,11 +128,10 @@ class MainWindow(QMainWindow):
 
         drawing_row.addWidget(btn_new_drawing)
         drawing_row.addWidget(btn_refresh_drawing)
-        edit_layout.addLayout(drawing_row)
+        drawing_layout.addLayout(drawing_row)
+        layout.addWidget(drawing_group)
 
-        layout.addWidget(edit_group)
-
-        # ── Tools group ──────────────────────────────────────────────────
+        # ── 工具功能组 ────────────────────────────────────────────────────
         tools_group  = QGroupBox("工具")
         tools_layout = QVBoxLayout(tools_group)
         tools_layout.setSpacing(6)
@@ -149,27 +156,35 @@ class MainWindow(QMainWindow):
         btn_deps.setToolTip("通过 CATIA COM 查找文件的所有引用文档")
         btn_deps.clicked.connect(self._open_find_dependencies_dialog)
 
-        for btn in (btn_font, btn_iso, btn_crack, btn_stamp, btn_deps):
+        btn_fastener = QPushButton("快速装配紧固件")
+        btn_fastener.setToolTip("在装配体中连续放置紧固件实例")
+        btn_fastener.clicked.connect(self._open_fastener_assembly_dialog)
+
+        for btn in (btn_font, btn_iso, btn_crack, btn_stamp, btn_deps, btn_fastener):
             tools_layout.addWidget(btn)
         layout.addWidget(tools_group)
 
         layout.addStretch()
 
-    # ── Menu bar ───────────────────────────────────────────────────────────
+    # ── 菜单栏 ────────────────────────────────────────────────────────────
+
+    def _show_not_implemented(self) -> None:
+        """显示"功能尚未实现"提示对话框。"""
+        QMessageBox.information(self, "提示", "功能尚未实现")
 
     def _build_menu_bar(self) -> None:
+        """构建应用程序菜单栏。"""
         bar = self.menuBar()
 
-        # File
+        # 文件菜单
         file_menu  = bar.addMenu("文件")
-        _not_implemented = lambda: QMessageBox.information(self, "提示", "功能尚未实现")
-        for label, slot in (("新建", _not_implemented), ("打开...", _not_implemented),
-                             ("保存", _not_implemented), ("另存为...", _not_implemented)):
+        for label, slot in (("新建", self._show_not_implemented), ("打开...", self._show_not_implemented),
+                             ("保存", self._show_not_implemented), ("另存为...", self._show_not_implemented)):
             file_menu.addAction(QAction(label, self, triggered=slot))
         file_menu.addSeparator()
         file_menu.addAction(QAction("退出", self, triggered=self.close))
 
-        # Export
+        # 导出菜单
         export_menu = bar.addMenu("导出")
         export_menu.addAction(QAction(
             "从CATDrawing导出pdf", self,
@@ -179,18 +194,18 @@ class MainWindow(QMainWindow):
             "从CATPart/CATProduct导出stp", self,
             triggered=self._open_convert_part_dialog,
         ))
-        export_menu.addAction(QAction(
+
+        # BOM 菜单
+        bom_menu = bar.addMenu("BOM")
+        bom_menu.addAction(QAction(
             "从CATProduct导出BOM", self,
             triggered=self._open_export_bom_dialog,
         ))
-
-        # Edit
-        edit_menu = bar.addMenu("编辑")
-        edit_menu.addAction(QAction(
+        bom_menu.addAction(QAction(
             "BOM属性补全", self, triggered=self._open_bom_edit_dialog
         ))
 
-        # Drawing
+        # 图纸菜单
         drawing_menu = bar.addMenu("图纸")
         drawing_menu.addAction(QAction(
             "从CATPart/CATProduct生成图纸", self,
@@ -201,11 +216,11 @@ class MainWindow(QMainWindow):
             triggered=self._open_refresh_drawing_dialog,
         ))
 
-        # Macro
+        # 宏菜单
         self._macro_menu = bar.addMenu("宏")
         self._rebuild_macro_menu()
 
-        # Tools
+        # 工具菜单
         tools_menu = bar.addMenu("工具")
         for label, slot in (
             ("复制字体文件到CATIA目录",  self._copy_font_to_catia),
@@ -213,18 +228,19 @@ class MainWindow(QMainWindow):
             ("Crack",                     self._crack),
             ("刷写零件模板",              self._open_stamp_part_template_dialog),
             ("查找所有依赖项（未实现）",     self._open_find_dependencies_dialog),
+            ("快速装配紧固件",              self._open_fastener_assembly_dialog),
         ):
             tools_menu.addAction(QAction(label, self, triggered=slot))
 
-        # View
+        # 视图菜单
         view_menu = bar.addMenu("视图")
         view_menu.addAction(QAction(
             "放大", self,
-            triggered=lambda: QMessageBox.information(self, "提示", "功能尚未实现"),
+            triggered=self._show_not_implemented,
         ))
         view_menu.addAction(QAction(
             "缩小", self,
-            triggered=lambda: QMessageBox.information(self, "提示", "功能尚未实现"),
+            triggered=self._show_not_implemented,
         ))
         view_menu.addAction(QAction(
             "重置缩放", self,
@@ -236,7 +252,7 @@ class MainWindow(QMainWindow):
         self._show_log_action.toggled.connect(self._toggle_log_window)
         view_menu.addAction(self._show_log_action)
 
-        # Help
+        # 帮助菜单
         help_menu = bar.addMenu("帮助")
         help_menu.addAction(QAction(
             "文档", self,
@@ -247,9 +263,10 @@ class MainWindow(QMainWindow):
             triggered=self._show_about,
         ))
 
-    # ── Log window ─────────────────────────────────────────────────────────
+    # ── 日志窗口 ──────────────────────────────────────────────────────────
 
     def _toggle_log_window(self, checked: bool) -> None:
+        """切换日志窗口的显示/隐藏状态。"""
         if checked:
             self._log_window.show()
             self._log_window.raise_()
@@ -257,17 +274,21 @@ class MainWindow(QMainWindow):
             self._log_window.hide()
 
     def _show_about(self) -> None:
+        """显示关于对话框。"""
         QMessageBox.about(self, f"About {APP_NAME}", ABOUT_TEXT)
 
     def _show_help(self) -> None:
+        """显示帮助文档对话框。"""
         HelpDialog(self).exec()
 
-    # ── Macro menu helpers ─────────────────────────────────────────────────
+    # ── 宏菜单辅助方法 ────────────────────────────────────────────────────
 
     def _macros_dir(self) -> Path:
+        """返回宏文件夹路径。"""
         return resource_path("macros")
 
     def _rebuild_macro_menu(self) -> None:
+        """重建宏菜单，扫描 macros 文件夹并添加菜单项。"""
         self._macro_menu.clear()
         macros_dir   = self._macros_dir()
         macro_files: list[Path] = []
@@ -322,8 +343,11 @@ class MainWindow(QMainWindow):
             from pycatia import catia as _catia
             caa = _catia()
             app = caa.application
-            # 不传递额外参数，直接运行宏入口函数 CATMain
-            self._execute_catscript(app, macro_path, "CATMain", [])
+            if macro_path.suffix.lower() == ".catvba":
+                self._execute_catvba(app, macro_path, "CATMain", [])
+            else:
+                # .catvbs / .catscript — CATScript 目录模式
+                self._execute_catscript(app, macro_path, "CATMain", [])
             logger.info(f"宏执行成功：{macro_path.name}")
         except Exception as e:
             logger.error(f"宏执行失败 {macro_path.name}: {e}")
@@ -359,6 +383,7 @@ class MainWindow(QMainWindow):
             settings_key="CATDrawing",
             show_prefix_option=True,
             prefix="DR_",
+            show_update_option=True,
             note=(
                 "如果用于导出的CATDrawing有多页，请将CATIA设置为"
                 "\u201c将多页文档保存在单向量文件中\u201d"
@@ -381,10 +406,25 @@ class MainWindow(QMainWindow):
             no_files_msg="请至少选择一个CATPart文件。",
             conversion_fn=apply_part_template,
             settings_key="StampPartTemplate",
+            show_active_doc_option=True,
         ).exec()
 
     def _open_find_dependencies_dialog(self) -> None:
         FindDependenciesDialog(self).exec()
+
+    def _open_fastener_assembly_dialog(self) -> None:
+        """直接运行 macros 文件夹中的 fastener_assembly.catvba VBA 宏。"""
+        catvba_path = self._macros_dir() / "fastener_assembly.catvba"
+        if not catvba_path.exists():
+            QMessageBox.warning(
+                self, "宏文件未找到",
+                f"未找到 VBA 宏文件：\n{catvba_path}\n\n"
+                "请在 CATIA VBA 编辑器中按照 macros/fastener_assembly.txt 创建宏，\n"
+                "将 VBA 项目导出为 fastener_assembly.catvba，\n"
+                "并放入 macros 文件夹后重试。",
+            )
+            return
+        self._run_macro(catvba_path)
 
     # ── Drawing generation ─────────────────────────────────────────────────
 
@@ -463,6 +503,26 @@ class MainWindow(QMainWindow):
         lib_dir = str(macro_path.parent)
         app.com_object.SystemService.ExecuteScript(
             lib_dir, 1, macro_path.name, func_name, params
+        )
+
+    def _execute_catvba(
+        self,
+        app,
+        macro_path: Path,
+        func_name: str,
+        params: list,
+    ) -> None:
+        """调用 CATIA SystemService.ExecuteScript 执行 VBA 宏（.catvba）。
+
+        此处使用 iLibraryType=2（VBA 项目文件模式）：
+          - iLibraryName：.catvba 文件完整路径
+          - iProgramName：VBA 模块名（catvba 默认模块名为 "模块1"，英文环境为 "Module1"）
+          - iFunctionName：要调用的函数/子程序名（通常为 "CATMain"）
+          - iParameters：传递给宏的参数列表
+        """
+        module_name = "模块1"
+        app.com_object.SystemService.ExecuteScript(
+            str(macro_path), 2, module_name, func_name, params
         )
 
     def _run_template_macro(
