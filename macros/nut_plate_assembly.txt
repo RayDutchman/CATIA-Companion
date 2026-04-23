@@ -316,10 +316,22 @@ Public Sub ContinueSelectProduct()
             Exit Do
         End If
 
+        Dim hole1LeafProd As Object
+        Set hole1LeafProd = sel.Item(1).LeafProduct
         Set hole1Ref = sel.Item(1).Reference
+        Dim lp1Matrix(11)   ' 不能加 As Double
+        hole1LeafProd.Position.GetComponents lp1Matrix
         bHoleGeomOK = False
-        If TryGetMeasurableInContext(spaAssembly, hole1Ref, rootProduct.Product, hole1Meas) Then
+        If TryGetMeasurableInContext(spaAssembly, hole1Ref, hole1LeafProd, hole1Meas) Then
             bHoleGeomOK = TryGetCenter(hole1Meas, holeCenter1)
+            If bHoleGeomOK Then
+                ' 将 holeCenter1 从 hole1LeafProd 局部坐标系正变换到根产品坐标系
+                Dim h1c0 As Double, h1c1 As Double, h1c2 As Double
+                h1c0 = lp1Matrix(0)*holeCenter1(0) + lp1Matrix(3)*holeCenter1(1) + lp1Matrix(6)*holeCenter1(2) + lp1Matrix(9)
+                h1c1 = lp1Matrix(1)*holeCenter1(0) + lp1Matrix(4)*holeCenter1(1) + lp1Matrix(7)*holeCenter1(2) + lp1Matrix(10)
+                h1c2 = lp1Matrix(2)*holeCenter1(0) + lp1Matrix(5)*holeCenter1(1) + lp1Matrix(8)*holeCenter1(2) + lp1Matrix(11)
+                holeCenter1(0) = h1c0: holeCenter1(1) = h1c1: holeCenter1(2) = h1c2
+            End If
         End If
 
         If Not bHoleGeomOK Then
@@ -342,10 +354,22 @@ Public Sub ContinueSelectProduct()
                 Exit Do
             End If
 
+            Dim hole2LeafProd As Object
+            Set hole2LeafProd = sel.Item(1).LeafProduct
             Set hole2Ref = sel.Item(1).Reference
+            Dim lp2Matrix(11)   ' 不能加 As Double
+            hole2LeafProd.Position.GetComponents lp2Matrix
             bHoleGeomOK = False
-            If TryGetMeasurableInContext(spaAssembly, hole2Ref, rootProduct.Product, hole2Meas) Then
+            If TryGetMeasurableInContext(spaAssembly, hole2Ref, hole2LeafProd, hole2Meas) Then
                 bHoleGeomOK = TryGetCenter(hole2Meas, holeCenter2)
+                If bHoleGeomOK Then
+                    ' 将 holeCenter2 从 hole2LeafProd 局部坐标系正变换到根产品坐标系
+                    Dim h2c0 As Double, h2c1 As Double, h2c2 As Double
+                    h2c0 = lp2Matrix(0)*holeCenter2(0) + lp2Matrix(3)*holeCenter2(1) + lp2Matrix(6)*holeCenter2(2) + lp2Matrix(9)
+                    h2c1 = lp2Matrix(1)*holeCenter2(0) + lp2Matrix(4)*holeCenter2(1) + lp2Matrix(7)*holeCenter2(2) + lp2Matrix(10)
+                    h2c2 = lp2Matrix(2)*holeCenter2(0) + lp2Matrix(5)*holeCenter2(1) + lp2Matrix(8)*holeCenter2(2) + lp2Matrix(11)
+                    holeCenter2(0) = h2c0: holeCenter2(1) = h2c1: holeCenter2(2) = h2c2
+                End If
             End If
 
             If Not bHoleGeomOK Then
@@ -391,6 +415,13 @@ Public Sub ContinueSelectProduct()
                             holeAxis1Raw(1) = holeAxis1Raw(1) / holeCircleAxisLen
                             holeAxis1Raw(2) = holeAxis1Raw(2) / holeCircleAxisLen
 
+                            ' 将 holeAxis1Raw 从 hole1LeafProd 局部坐标系正变换到根产品坐标系
+                            Dim ha1r0 As Double, ha1r1 As Double, ha1r2 As Double
+                            ha1r0 = lp1Matrix(0)*holeAxis1Raw(0) + lp1Matrix(3)*holeAxis1Raw(1) + lp1Matrix(6)*holeAxis1Raw(2)
+                            ha1r1 = lp1Matrix(1)*holeAxis1Raw(0) + lp1Matrix(4)*holeAxis1Raw(1) + lp1Matrix(7)*holeAxis1Raw(2)
+                            ha1r2 = lp1Matrix(2)*holeAxis1Raw(0) + lp1Matrix(5)*holeAxis1Raw(1) + lp1Matrix(8)*holeAxis1Raw(2)
+                            holeAxis1Raw(0) = ha1r0: holeAxis1Raw(1) = ha1r1: holeAxis1Raw(2) = ha1r2
+
                             ' 在第一轴线和第一个孔轴线决定的平面内，调整第二轴线使其与第一轴线垂直
                             Dim holeDotProduct As Double
                             holeDotProduct = holeAxis1Raw(0)*holeAxis1(0) + holeAxis1Raw(1)*holeAxis1(1) + holeAxis1Raw(2)*holeAxis1(2)
@@ -412,7 +443,9 @@ Public Sub ContinueSelectProduct()
                         MsgBox "无法获取安装孔的轴线方向。", vbExclamation, "快速装配托板螺母"
                         sel.Clear
                     Else
-                        ' ── 将孔几何从根产品坐标系变换到 targetProduct 局部坐标系 ────────
+                        ' ── 将孔几何从根产品坐标系逆变换到 targetProduct 局部坐标系 ────────
+                        ' holeCenter1/2 及 holeAxis1Raw 已在上方完成 LeafProduct局部→根产品坐标系 的正变换，
+                        ' 此处再做根产品→targetProduct 逆变换：local_tp = R_tp^T * (world - T_tp)。
                         Dim tpMatrix(11)
                         targetProduct.Position.GetComponents tpMatrix
 

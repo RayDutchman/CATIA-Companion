@@ -271,10 +271,13 @@ Public Sub ContinueSelectProduct()
         Set spaAssembly = CATIA.ActiveDocument.GetWorkbench("SPAWorkbench")
         Dim holeRef As Object
         Set holeRef = sel.Item(1).Reference
-        ' GetMeasurableInContext(reference, contextProduct)：
-        ' 使用根产品（rootProduct.Product）作为上下文，SPA 始终在根产品坐标系中返回测量值。
-        ' 随后通过 targetProduct.Position 的逆变换将结果转到 targetProduct 局部坐标系，
-        ' 与 Move.Apply 所需坐标系一致。
+        ' LeafProduct：用户实际点击的那个具体实例（如 Plate.2），而非同名零件的其他实例。
+        ' 将 LeafProduct 作为 GetMeasurableInContext 的上下文，可确保 SPA 始终测量
+        ' 用户所选的那个实例，避免根产品中存在多个相同零件实例时发生测量错位。
+        ' SPA 返回的坐标在 LeafProduct 局部坐标系中；随后先正变换到根产品坐标系，
+        ' 再通过 targetProduct.Position 的逆变换转到 targetProduct 局部坐标系。
+        Dim leafProd As Object
+        Set leafProd = sel.Item(1).LeafProduct
         Dim holeMeas As Object
         Dim holeAxis(2)
         Dim holePt(2)
@@ -283,7 +286,7 @@ Public Sub ContinueSelectProduct()
         ' 使用独立函数隔离错误域，避免某些 CATIA 版本中 On Error Resume Next 在调用层失效。
         Dim bHoleGeomOK As Boolean
         bHoleGeomOK = False
-        If TryGetMeasurableInContext(spaAssembly, holeRef, rootProduct.Product, holeMeas) Then
+        If TryGetMeasurableInContext(spaAssembly, holeRef, leafProd, holeMeas) Then
             bHoleGeomOK = TryGetAxis(holeMeas, holeAxis) And TryGetCenter(holeMeas, holePt)
         End If
 
@@ -303,24 +306,31 @@ Public Sub ContinueSelectProduct()
             holeAxis(2) = holeAxis(2)/holeAxisLen
         End If
 
-        ' ── 将孔几何从根产品坐标系变换到 targetProduct 局部坐标系 ────────
-        ' SPA GetMeasurableInContext(ref, rootProduct.Product) 始终返回根产品坐标系中的值。
-        ' Move.Apply 在 targetProduct 局部坐标系中解释变换矩阵，因此需做逆变换：
-        '   local = R^T * (world - T)
-        ' 其中 R 的列向量 = targetProduct.Position.GetComponents 返回的 tpMatrix(0..8)（X/Y/Z 轴），
-        ' T = tpMatrix(9..11)（原点偏移）。
+        ' ── 坐标变换：LeafProduct 局部 → 根产品坐标系 → targetProduct 局部坐标系 ──────
+        ' 步骤1：LeafProduct 局部 → 根产品坐标系（正变换）：world = R_lp * local + T_lp
+        ' R_lp 的列向量 = lpMatrix(0..8)（X/Y/Z 轴），T_lp = lpMatrix(9..11)（原点偏移）。
+        Dim lpMatrix(11)   ' 不能加 As Double
+        leafProd.Position.GetComponents lpMatrix
+        Dim holePtWorld(2) As Double
+        holePtWorld(0) = lpMatrix(0)*holePt(0) + lpMatrix(3)*holePt(1) + lpMatrix(6)*holePt(2) + lpMatrix(9)
+        holePtWorld(1) = lpMatrix(1)*holePt(0) + lpMatrix(4)*holePt(1) + lpMatrix(7)*holePt(2) + lpMatrix(10)
+        holePtWorld(2) = lpMatrix(2)*holePt(0) + lpMatrix(5)*holePt(1) + lpMatrix(8)*holePt(2) + lpMatrix(11)
+        Dim holeAxisWorld(2) As Double
+        holeAxisWorld(0) = lpMatrix(0)*holeAxis(0) + lpMatrix(3)*holeAxis(1) + lpMatrix(6)*holeAxis(2)
+        holeAxisWorld(1) = lpMatrix(1)*holeAxis(0) + lpMatrix(4)*holeAxis(1) + lpMatrix(7)*holeAxis(2)
+        holeAxisWorld(2) = lpMatrix(2)*holeAxis(0) + lpMatrix(5)*holeAxis(1) + lpMatrix(8)*holeAxis(2)
+        ' 步骤2：根产品坐标系 → targetProduct 局部坐标系（逆变换）：local_tp = R_tp^T * (world - T_tp)
+        ' R_tp 的列向量 = tpMatrix(0..8)（X/Y/Z 轴），T_tp = tpMatrix(9..11)（原点偏移）。
         ' 若 targetProduct 与根坐标系重合（Position 为单位矩阵），则变换为恒等变换，结果不变。
         Dim tpMatrix(11)   ' 不能加 As Double
         targetProduct.Position.GetComponents tpMatrix
         Dim holePtOffset(2) As Double
-        holePtOffset(0) = holePt(0) - tpMatrix(9)
-        holePtOffset(1) = holePt(1) - tpMatrix(10)
-        holePtOffset(2) = holePt(2) - tpMatrix(11)
+        holePtOffset(0) = holePtWorld(0) - tpMatrix(9)
+        holePtOffset(1) = holePtWorld(1) - tpMatrix(10)
+        holePtOffset(2) = holePtWorld(2) - tpMatrix(11)
         holePt(0) = tpMatrix(0)*holePtOffset(0) + tpMatrix(1)*holePtOffset(1) + tpMatrix(2)*holePtOffset(2)
         holePt(1) = tpMatrix(3)*holePtOffset(0) + tpMatrix(4)*holePtOffset(1) + tpMatrix(5)*holePtOffset(2)
         holePt(2) = tpMatrix(6)*holePtOffset(0) + tpMatrix(7)*holePtOffset(1) + tpMatrix(8)*holePtOffset(2)
-        Dim holeAxisWorld(2) As Double
-        holeAxisWorld(0) = holeAxis(0): holeAxisWorld(1) = holeAxis(1): holeAxisWorld(2) = holeAxis(2)
         holeAxis(0) = tpMatrix(0)*holeAxisWorld(0) + tpMatrix(1)*holeAxisWorld(1) + tpMatrix(2)*holeAxisWorld(2)
         holeAxis(1) = tpMatrix(3)*holeAxisWorld(0) + tpMatrix(4)*holeAxisWorld(1) + tpMatrix(5)*holeAxisWorld(2)
         holeAxis(2) = tpMatrix(6)*holeAxisWorld(0) + tpMatrix(7)*holeAxisWorld(1) + tpMatrix(8)*holeAxisWorld(2)
@@ -333,7 +343,7 @@ Public Sub ContinueSelectProduct()
 
         ' ── 调试：孔的几何（根产品坐标系 -> targetProduct 局部坐标系） ──
         If DEBUG_MODE Then
-            MsgBox "[DEBUG] 孔的几何（已变换到 targetProduct 局部坐标系）" & Chr(10) & _
+            MsgBox "[DEBUG] 孔的几何（LeafProduct 局部 → 根产品坐标系 → targetProduct 局部坐标系）" & Chr(10) & _
                    "holeAxis = (" & Round(holeAxis(0), 4) & ", " & Round(holeAxis(1), 4) & ", " & Round(holeAxis(2), 4) & ")" & Chr(10) & _
                    "holePt   = (" & Round(holePt(0), 4) & ", " & Round(holePt(1), 4) & ", " & Round(holePt(2), 4) & ")", _
                    vbInformation, "快速装配紧固件 [DEBUG]"
