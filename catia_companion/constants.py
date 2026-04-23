@@ -77,12 +77,12 @@ PRESET_USER_REF_PROPERTIES: list[str] = [
 
 BOM_ALL_COLUMNS: list[str] = [
     "Level", "Type", "Part Number", "Nomenclature",
-    "Definition", "Revision", "Source", "Quantity",
+    "Definition", "Revision", "Description", "Source", "Quantity",
 ]
 
 BOM_DEFAULT_COLUMNS: list[str] = [
     "Level", "Type", "Part Number", "Nomenclature",
-    "Definition", "Revision", "Source", "Quantity",
+    "Definition", "Revision", "Description", "Source", "Quantity",
 ]
 
 # ---------------------------------------------------------------------------
@@ -99,7 +99,7 @@ BOM_READONLY_COLUMNS: frozenset[str] = frozenset({"Level", "Type", "Filename", "
 # Column order used in the BOM edit dialog (internal names)
 BOM_EDIT_COLUMN_ORDER: list[str] = [
     "Level", "Type", "Filename", "Part Number", "Quantity",
-    "Nomenclature", "Revision", "Definition", "Source",
+    "Nomenclature", "Revision", "Definition", "Description", "Source",
 ]
 
 # Internal column name → Chinese display name
@@ -112,6 +112,7 @@ BOM_COLUMN_DISPLAY_NAMES: dict[str, str] = {
     "Nomenclature": "术语（中文名称）",
     "Definition":   "定义",
     "Revision":     "版本",
+    "Description":  "描述",
     "Source":       "源",
     "Quantity":     "数量",
 }
@@ -125,6 +126,7 @@ BOM_COLUMN_MIN_WIDTHS: dict[str, int] = {
     "Nomenclature": 20,
     "Definition":   20,
     "Revision":     10,
+    "Description":  30,
     "Source":       8,
     "Quantity":     8,
 }

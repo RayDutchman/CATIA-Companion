@@ -42,6 +42,7 @@ def write_bom_to_catia(
         "Nomenclature": "nomenclature",
         "Revision":     "revision",
         "Definition":   "definition",
+        "Description":  "descr_ref",
         "Source":       "source",
     }
 
