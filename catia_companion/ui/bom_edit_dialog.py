@@ -112,49 +112,70 @@ def _parse_pidsi_thumbnail(data: bytes) -> bytes | None:
     JPEG (magic ``FF D8``), or wrapped in a ``BITMAPFILEHEADER`` when the
     clipboard format indicates ``CF_DIB`` (8).
     """
+    logger.warning(f"[缩略图DEBUG] _parse_pidsi_thumbnail: stream长度={len(data)}字节")
     if len(data) < 48:
+        logger.warning(f"[缩略图DEBUG] stream太短 ({len(data)} < 48), 跳过")
         return None
     byte_order: int = struct.unpack_from("<H", data, 0)[0]
     if byte_order != 0xFFFE:
+        logger.warning(f"[缩略图DEBUG] 字节序标记不是0xFFFE (实际={hex(byte_order)}), 跳过")
         return None
     num_sets: int = struct.unpack_from("<I", data, 24)[0]
+    logger.warning(f"[缩略图DEBUG] 属性集数量={num_sets}")
     if num_sets < 1:
         return None
     # Section 0: FMTID at offset 28 (16 bytes), section-stream-offset at 44
     sec_offset: int = struct.unpack_from("<I", data, 44)[0]
+    logger.warning(f"[缩略图DEBUG] 第0节偏移量={sec_offset}")
     if sec_offset + 8 > len(data):
+        logger.warning(f"[缩略图DEBUG] 节偏移量越界, 跳过")
         return None
     prop_count: int = struct.unpack_from("<I", data, sec_offset + 4)[0]
+    logger.warning(f"[缩略图DEBUG] 属性数量={prop_count}")
     id_base = sec_offset + 8
     for i in range(prop_count):
         entry = id_base + i * 8
         if entry + 8 > len(data):
             break
         prop_id, prop_off = struct.unpack_from("<II", data, entry)
+        logger.warning(f"[缩略图DEBUG]   属性[{i}]: id={prop_id}, 偏移={prop_off}")
         if prop_id != 17:               # PIDSI_THUMBNAIL
             continue
+        logger.warning(f"[缩略图DEBUG] 找到PIDSI_THUMBNAIL(17), 属性偏移={prop_off}")
         abs_off = sec_offset + prop_off
         if abs_off + 12 > len(data):
+            logger.warning(f"[缩略图DEBUG] 属性数据偏移越界 abs_off={abs_off}, 跳过")
             break
         vt_type: int = struct.unpack_from("<I", data, abs_off)[0]
+        logger.warning(f"[缩略图DEBUG] VT类型={hex(vt_type)} (期望VT_CF=0x47)")
         if vt_type != 0x0047:           # VT_CF
+            logger.warning(f"[缩略图DEBUG] VT类型不是VT_CF, 跳过")
             break
         # CLIPDATA: cbSize (4 bytes, includes ulClipFmt), ulClipFmt (4 bytes), data
         cb_size  = struct.unpack_from("<I", data, abs_off + 4)[0]
         clip_fmt = struct.unpack_from("<i", data, abs_off + 8)[0]   # signed int
+        logger.warning(f"[缩略图DEBUG] CLIPDATA: cb_size={cb_size}, clip_fmt={clip_fmt}")
         if cb_size < 4:
+            logger.warning(f"[缩略图DEBUG] cb_size太小, 跳过")
             break
         img_bytes = data[abs_off + 12: abs_off + 4 + cb_size]
+        logger.warning(f"[缩略图DEBUG] 图像数据长度={len(img_bytes)}, 前4字节={img_bytes[:4].hex() if img_bytes else '空'}")
         if not img_bytes:
+            logger.warning(f"[缩略图DEBUG] 图像数据为空, 跳过")
             break
         # JPEG: starts with FF D8
         if img_bytes[:2] == b"\xff\xd8":
+            logger.warning(f"[缩略图DEBUG] 识别为JPEG, 返回 {len(img_bytes)} 字节")
             return img_bytes
         # CF_DIB (8): raw DIB without file header – reconstruct BMP
         if clip_fmt == 8:
-            return _dib_to_bmp(img_bytes)
+            result = _dib_to_bmp(img_bytes)
+            logger.warning(f"[缩略图DEBUG] CF_DIB→BMP: {'成功' if result else '失败'}")
+            return result
         # Unknown format: return raw and let Qt try
+        logger.warning(f"[缩略图DEBUG] 未知格式(clip_fmt={clip_fmt}), 直接返回原始数据")
         return img_bytes
+    logger.warning(f"[缩略图DEBUG] 未找到PIDSI_THUMBNAIL属性(id=17), 返回None")
     return None
 
 
@@ -166,26 +187,34 @@ def _read_catia_thumbnail(filepath: str) -> bytes | None:
 
     Returns raw image bytes (JPEG or BMP) or *None* when unavailable.
     """
+    logger.warning(f"[缩略图DEBUG] _read_catia_thumbnail: 文件={filepath!r}")
     try:
         import olefile
     except ImportError:
-        logger.debug("olefile not installed; thumbnail extraction unavailable")
+        logger.warning("[缩略图DEBUG] olefile未安装, 无法提取缩略图")
         return None
     try:
-        if not olefile.isOleFile(filepath):
+        is_ole = olefile.isOleFile(filepath)
+        logger.warning(f"[缩略图DEBUG] isOleFile={is_ole}")
+        if not is_ole:
             return None
         with olefile.OleFileIO(filepath) as ole:
             stream_name = "\x05SummaryInformation"
-            if not ole.exists(stream_name):
+            exists = ole.exists(stream_name)
+            logger.warning(f"[缩略图DEBUG] SummaryInformation流存在={exists}")
+            if not exists:
                 return None
             raw = ole.openstream(stream_name).read()
+            logger.warning(f"[缩略图DEBUG] 读取SummaryInformation: {len(raw)} 字节")
     except Exception as exc:
-        logger.debug(f"OLE read failed for {filepath}: {exc}")
+        logger.warning(f"[缩略图DEBUG] OLE读取失败: {exc}")
         return None
     try:
-        return _parse_pidsi_thumbnail(raw)
+        result = _parse_pidsi_thumbnail(raw)
+        logger.warning(f"[缩略图DEBUG] _parse_pidsi_thumbnail返回: {'有数据' if result else 'None'}")
+        return result
     except Exception as exc:
-        logger.debug(f"Thumbnail parse failed for {filepath}: {exc}")
+        logger.warning(f"[缩略图DEBUG] 解析缩略图异常: {exc}")
         return None
 
 
@@ -1568,11 +1597,18 @@ class BomEditDialog(QDialog):
         #   • 部件: filepath belongs to the parent product, not this component
         #   • not_found: CATIA couldn't resolve the file
         #   • file doesn't exist on disk (unsaved or missing)
+        logger.warning(
+            f"[缩略图DEBUG] 右键菜单: fp={fp!r}, is_component={is_component}, "
+            f"not_found={not_found}, "
+            f"file_exists={fp_path.exists() if fp_path else False}"
+        )
         if fp and not is_component and not not_found and fp_path is not None and fp_path.exists():
             img_bytes = _read_catia_thumbnail(fp)
             if img_bytes:
                 pixmap = QPixmap()
-                if pixmap.loadFromData(img_bytes) and not pixmap.isNull():
+                loaded = pixmap.loadFromData(img_bytes)
+                logger.warning(f"[缩略图DEBUG] QPixmap.loadFromData={loaded}, isNull={pixmap.isNull()}")
+                if loaded and not pixmap.isNull():
                     scaled = pixmap.scaled(
                         200, 200,
                         Qt.AspectRatioMode.KeepAspectRatio,
@@ -1586,6 +1622,11 @@ class BomEditDialog(QDialog):
                     thumb_action.setDefaultWidget(thumb_label)
                     menu.addAction(thumb_action)
                     menu.addSeparator()
+                    logger.warning("[缩略图DEBUG] 缩略图已添加到右键菜单")
+            else:
+                logger.warning("[缩略图DEBUG] _read_catia_thumbnail返回None, 不显示缩略图")
+        else:
+            logger.warning("[缩略图DEBUG] 跳过缩略图提取 (条件不满足)")
 
         # ── 打开路径 ──────────────────────────────────────────────────────────
         act_open_path = menu.addAction("打开路径")
