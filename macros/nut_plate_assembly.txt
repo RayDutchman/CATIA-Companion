@@ -71,6 +71,10 @@ Public g_lastCompIdx  As Long
 ' 装配循环活动标志
 Public g_loopActive   As Boolean
 
+' 最近一次对 g_lastComp 执行的操作是否为翻转（MoveLastNutPlate）。
+' 用于在 ESC 后重新应用被 CATIA 回滚的翻转操作。
+Public g_lastOpWasFlip As Boolean
+
 ' 装配循环共享状态
 Public targetProduct As Object
 Public g_nutPlateDoc As Object
@@ -300,6 +304,13 @@ Public Sub ContinueSelectProduct()
             "  已装配:" & g_count & ")  [ESC终止]", False)
         If status <> "Normal" Then
             g_loopActive = False
+            ' ESC 退出 SelectElement2 时，CATIA 会回滚最后一个"未提交"的撤销记录。
+            ' 若翻转操作（MoveLastNutPlate）在本次 SelectElement2 期间执行，
+            ' 其 Position.SetComponents 将被 CATIA 撤销，导致托板螺母翻转还原。
+            ' 解决方案：在 ESC 后、循环结束前立即重新应用翻转（此时不在选择事务中，操作可持久保留）。
+            If g_hasLastComp And g_lastOpWasFlip Then
+                Call MoveLastNutPlate()
+            End If
             g_hasLastComp = False
             Exit Do
         End If
@@ -323,6 +334,9 @@ Public Sub ContinueSelectProduct()
                 "  已装配:" & g_count & ")  [ESC终止]", False)
             If status <> "Normal" Then
                 g_loopActive = False
+                If g_hasLastComp And g_lastOpWasFlip Then
+                    Call MoveLastNutPlate()
+                End If
                 g_hasLastComp = False
                 Exit Do
             End If
@@ -605,6 +619,7 @@ Public Sub PlaceNutPlateAtHole()
     ' ── 记录最近装配件信息（供翻转重装使用） ─────────────────────────────
     Set g_lastProducts = products
     g_lastCompIdx = products.Count
+    g_lastOpWasFlip = False          ' 新装配件尚未执行翻转
     g_count = g_count + 1
 
 End Sub
@@ -763,6 +778,7 @@ End Function
 '      btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
 '      If g_hasLastComp Then
 '          Call MoveLastNutPlate()
+'          g_lastOpWasFlip = True    ' 记录翻转已执行，供 ESC 后重新应用
 '          CATIA.StatusBar = "已重新定向（方向翻转）" & g_count & " 个 " & g_nutPlatePN & _
 '                            "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
 '                            "  选下一孔继续，ESC结束"
