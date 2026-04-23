@@ -106,13 +106,7 @@ End Sub
 Public Sub ContinueSelectFastener()
 
     ' 若当前文档不是 CATPart，提示后保持 SwitchToPartForm 打开，不做任何操作
-    ' 通过外部程序调用时，CATIA.ActiveDocument 在无活动文档时会抛出 E_FAIL (80004005)；
-    ' 使用 On Error Resume Next 保护，将其转换为友好提示而非运行时错误弹窗。
-    Dim docTypeName As String
-    On Error Resume Next
-    docTypeName = TypeName(CATIA.ActiveDocument)
-    On Error GoTo 0
-    If docTypeName <> "PartDocument" Then
+    If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then
         MsgBox "当前活动文档不是 CATPart。" & Chr(10) & _
                "请先切换到紧固件文档窗口，然后再点击""继续""。", _
                vbExclamation, "快速装配紧固件"
@@ -206,13 +200,7 @@ End Sub
 Public Sub ContinueSelectProduct()
 
     ' 若当前文档不是 CATProduct，提示后保持 SwitchDocForm 打开，不做任何操作
-    ' 通过外部程序调用时，CATIA.ActiveDocument 在无活动文档时会抛出 E_FAIL (80004005)；
-    ' 使用 On Error Resume Next 保护，将其转换为友好提示而非运行时错误弹窗。
-    Dim docTypeName As String
-    On Error Resume Next
-    docTypeName = TypeName(CATIA.ActiveDocument)
-    On Error GoTo 0
-    If docTypeName <> "ProductDocument" Then
+    If TypeName(CATIA.ActiveDocument) <> "ProductDocument" Then
         MsgBox "当前活动文档不是 CATProduct。" & Chr(10) & _
                "请先切换到目标产品文档窗口，然后再点击""继续""。", _
                vbExclamation, "快速装配紧固件"
@@ -678,23 +666,6 @@ End Function
 '
 ' ---- 将以下代码粘贴到 FlipForm 的代码模块中（不是本模块）----
 '
-'  ' ── 使窗体浮于 CATIA 界面之上（通过外部程序启动宏时必须）──────────────────
-'  Private Declare Function FindWindowW Lib "user32" _
-'      (ByVal lpClassName As Long, ByVal lpWindowName As String) As Long
-'  Private Declare Function SetWindowPos Lib "user32" _
-'      (ByVal hwnd As Long, ByVal hWndInsertAfter As Long, _
-'       ByVal X As Long, ByVal Y As Long, ByVal cx As Long, ByVal cy As Long, _
-'       ByVal wFlags As Long) As Long
-'  Private Const HWND_TOPMOST As Long = -1
-'  Private Const SWP_NOMOVE   As Long = &H2
-'  Private Const SWP_NOSIZE   As Long = &H1
-'
-'  Private Sub UserForm_Initialize()
-'      Dim h As Long
-'      h = FindWindowW(0&, Me.Caption)
-'      If h <> 0 Then SetWindowPos h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE Or SWP_NOSIZE
-'  End Sub
-'
 '  Private Sub btnFlip_Click()
 '      If Not g_loopActive Then Exit Sub
 '      g_flipDir = Not g_flipDir
@@ -731,23 +702,6 @@ End Function
 '
 ' ---- 将以下代码粘贴到 SwitchToPartForm 的代码模块中（不是本模块）----
 '
-'  ' ── 使窗体浮于 CATIA 界面之上（通过外部程序启动宏时必须）──────────────────
-'  Private Declare Function FindWindowW Lib "user32" _
-'      (ByVal lpClassName As Long, ByVal lpWindowName As String) As Long
-'  Private Declare Function SetWindowPos Lib "user32" _
-'      (ByVal hwnd As Long, ByVal hWndInsertAfter As Long, _
-'       ByVal X As Long, ByVal Y As Long, ByVal cx As Long, ByVal cy As Long, _
-'       ByVal wFlags As Long) As Long
-'  Private Const HWND_TOPMOST As Long = -1
-'  Private Const SWP_NOMOVE   As Long = &H2
-'  Private Const SWP_NOSIZE   As Long = &H1
-'
-'  Private Sub UserForm_Initialize()
-'      Dim h As Long
-'      h = FindWindowW(0&, Me.Caption)
-'      If h <> 0 Then SetWindowPos h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE Or SWP_NOSIZE
-'  End Sub
-'
 '  Private Sub btnContinue_Click()
 '      ' 调用主模块中的 ContinueSelectFastener。
 '      ' 若 ActiveDocument 不是 PartDocument，该 Sub 会提示用户并直接返回，
@@ -780,23 +734,6 @@ End Function
 ' ============================================================================
 '
 ' ---- 将以下代码粘贴到 SwitchDocForm 的代码模块中（不是本模块）----
-'
-'  ' ── 使窗体浮于 CATIA 界面之上（通过外部程序启动宏时必须）──────────────────
-'  Private Declare Function FindWindowW Lib "user32" _
-'      (ByVal lpClassName As Long, ByVal lpWindowName As String) As Long
-'  Private Declare Function SetWindowPos Lib "user32" _
-'      (ByVal hwnd As Long, ByVal hWndInsertAfter As Long, _
-'       ByVal X As Long, ByVal Y As Long, ByVal cx As Long, ByVal cy As Long, _
-'       ByVal wFlags As Long) As Long
-'  Private Const HWND_TOPMOST As Long = -1
-'  Private Const SWP_NOMOVE   As Long = &H2
-'  Private Const SWP_NOSIZE   As Long = &H1
-'
-'  Private Sub UserForm_Initialize()
-'      Dim h As Long
-'      h = FindWindowW(0&, Me.Caption)
-'      If h <> 0 Then SetWindowPos h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE Or SWP_NOSIZE
-'  End Sub
 '
 '  Private Sub btnContinue_Click()
 '      ' 调用主模块中的 ContinueSelectProduct。
