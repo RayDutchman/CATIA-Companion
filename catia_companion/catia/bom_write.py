@@ -157,10 +157,18 @@ def write_bom_to_catia(
             pass
 
         if pn in pn_data:
+            # Performance optimization: Check current work mode before switching
+            # to avoid unnecessary DESIGN_MODE transitions (costly COM calls)
             try:
-                product.apply_work_mode(CatWorkModeType.DESIGN_MODE)
+                current_mode = product.get_work_mode()
+                if current_mode != CatWorkModeType.DESIGN_MODE:
+                    product.apply_work_mode(CatWorkModeType.DESIGN_MODE)
             except Exception:
-                pass
+                # If get_work_mode fails, try apply_work_mode anyway
+                try:
+                    product.apply_work_mode(CatWorkModeType.DESIGN_MODE)
+                except Exception:
+                    pass
             for col, value in pn_data[pn].items():
                 if col in BOM_READONLY_COLUMNS:
                     continue

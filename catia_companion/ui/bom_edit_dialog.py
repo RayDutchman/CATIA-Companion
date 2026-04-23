@@ -126,6 +126,9 @@ class BomEditDialog(QDialog):
         # Raw (hierarchical) BOM rows as returned by collect_bom_rows(); used to
         # reconstruct the display rows when the user toggles the BOM type.
         self._raw_rows: list[dict] = []
+        # PN→Items index for fast linked updates (Performance optimization)
+        # Maps Part Number to list of QTreeWidgetItems with that PN
+        self._pn_to_items: dict[str, list[QTreeWidgetItem]] = {}
 
         # ── Layout ────────────────────────────────────────────────────────────
         layout = QVBoxLayout(self)
@@ -565,6 +568,7 @@ class BomEditDialog(QDialog):
         self._table.clear()                          # removes all items; headers persist
         self._table.setHeaderLabels(self._display_headers())
         self._item_by_row = []
+        self._pn_to_items.clear()  # Reset PN→Item index
 
         # parent_stack: list of (level, item_or_None)
         # The sentinel at position 0 represents the invisible root (level −1).
@@ -594,6 +598,10 @@ class BomEditDialog(QDialog):
             not_found  = bool(row_data.get("_not_found"))
             unreadable = bool(row_data.get("_unreadable"))
             row_locked = unreadable or not_found
+
+            # Build PN→Item index for fast linked updates
+            if pn:
+                self._pn_to_items.setdefault(pn, []).append(item)
 
             for col_idx, col_name in enumerate(self._columns):
 
@@ -710,18 +718,16 @@ class BomEditDialog(QDialog):
                 self._canonical_data[pn]["Source"] = text
                 self._modified_keys.setdefault(pn, set()).add("Source")
 
+        # Performance optimization: use PN→Item index instead of full tree traversal
         self._is_updating = True
-        for other_item in self._iter_all_items():
-            other_row_idx = other_item.data(0, Qt.ItemDataRole.UserRole)
-            if other_row_idx is None or other_row_idx == row_idx:
-                continue
-            other_pn = str(self._rows[other_row_idx].get("Part Number", ""))
-            if other_pn in pns_to_update:
-                combo = self._table.itemWidget(other_item, src_col_idx)
-                if isinstance(combo, QComboBox) and combo.currentText() != text:
-                    combo.blockSignals(True)
-                    combo.setCurrentText(text)
-                    combo.blockSignals(False)
+        for pn in pns_to_update:
+            if pn in self._pn_to_items:
+                for other_item in self._pn_to_items[pn]:
+                    combo = self._table.itemWidget(other_item, src_col_idx)
+                    if isinstance(combo, QComboBox) and combo.currentText() != text:
+                        combo.blockSignals(True)
+                        combo.setCurrentText(text)
+                        combo.blockSignals(False)
         self._is_updating = False
 
     # ── Regular cell edit ─────────────────────────────────────────────────────
@@ -818,17 +824,13 @@ class BomEditDialog(QDialog):
                     self._canonical_data[r_pn][col_name] = new_value
                     self._modified_keys.setdefault(r_pn, set()).add(col_name)
 
+        # Performance optimization: use PN→Item index instead of full tree traversal
         self._is_updating = True
-        for other_item in self._iter_all_items():
-            if other_item is item:
-                continue
-            other_row_idx = other_item.data(0, Qt.ItemDataRole.UserRole)
-            if other_row_idx is None:
-                continue
-            other_pn = str(self._rows[other_row_idx].get("Part Number", ""))
-            if other_pn in pns_to_update:
-                if other_item.text(col_idx) != new_value:
-                    other_item.setText(col_idx, new_value)
+        for pn in pns_to_update:
+            if pn in self._pn_to_items:
+                for other_item in self._pn_to_items[pn]:
+                    if other_item.text(col_idx) != new_value:
+                        other_item.setText(col_idx, new_value)
         self._is_updating = False
 
     # ── Write-back ────────────────────────────────────────────────────────────
@@ -880,6 +882,23 @@ class BomEditDialog(QDialog):
 
         renamed_count = 0
 
+        # Performance optimization: Build document cache once to avoid repeated scans
+        from pycatia import catia as _pycatia
+        caa         = _pycatia()
+        application = caa.application
+        application.visible = True
+        documents   = application.documents
+
+        # Cache: filepath → document
+        doc_cache: dict[Path, object] = {}
+        for i in range(1, documents.count + 1):
+            try:
+                doc = documents.item(i)
+                doc_path = Path(doc.full_name).resolve()
+                doc_cache[doc_path] = doc
+            except Exception:
+                pass
+
         for fp, pn in reversed(to_rename):
             if not PART_NUMBER_VALID_PATTERN.fullmatch(pn):
                 QMessageBox.warning(
@@ -898,17 +917,15 @@ class BomEditDialog(QDialog):
             target_existed_before = Path(new_fp).exists()
 
             try:
-                from pycatia import catia as _pycatia
-                caa         = _pycatia()
-                application = caa.application
-                application.visible = True
-                documents   = application.documents
-                src         = Path(fp).resolve()
+                src = Path(fp).resolve()
 
-                target_doc = _find_catia_doc_by_path(documents, src)
+                # Use cache for fast lookup
+                target_doc = doc_cache.get(src)
                 if target_doc is None:
                     documents.open(str(src))
                     target_doc = _find_catia_doc_by_path(documents, src)
+                    if target_doc:
+                        doc_cache[src] = target_doc
 
                 if target_doc is None:
                     QMessageBox.warning(
@@ -934,6 +951,12 @@ class BomEditDialog(QDialog):
                         row["_filepath"] = new_fp
                         row["Filename"]  = pn
                 renamed_count += 1
+
+                # Update cache with new path
+                if Path(new_fp).resolve() != src:
+                    doc_cache[Path(new_fp).resolve()] = target_doc
+                    if src in doc_cache:
+                        del doc_cache[src]
 
             except Exception as e:
                 # Only treat the exception as a user-initiated cancel when:
