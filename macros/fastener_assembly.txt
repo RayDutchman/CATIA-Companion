@@ -75,6 +75,10 @@ Public g_lastCompIdx  As Long      ' 最近装配件在集合中的索引（1-ba
 ' FlipForm.btnFlip_MouseUp 检查此标志，作为防御性保护（MouseUp 本身已不受 ESC 触发）。
 Public g_loopActive   As Boolean
 
+' 最近一次对 g_lastComp 执行的操作是否为翻转（MoveLastFastener）。
+' 用于在 ESC 后重新应用被 CATIA 回滚的翻转操作。
+Public g_lastOpWasFlip As Boolean
+
 ' 装配循环共享状态（供 PlaceFastenerAtHole 及状态栏更新使用）
 Public targetProduct As Object
 Public g_fastenerDoc   As Object
@@ -251,6 +255,13 @@ Public Sub ContinueSelectProduct()
             "  已装配:" & g_count & ")  [ESC终止]", False)
         If status <> "Normal" Then
             g_loopActive = False
+            ' ESC 退出 SelectElement2 时，CATIA 会回滚最后一个"未提交"的撤销记录。
+            ' 若翻转操作（MoveLastFastener）在本次 SelectElement2 期间执行，
+            ' 其 Position.SetComponents 将被 CATIA 撤销，导致紧固件翻转还原。
+            ' 解决方案：在 ESC 后、循环结束前立即重新应用翻转（此时不在选择事务中，操作可持久保留）。
+            If g_hasLastComp And g_lastOpWasFlip Then
+                Call MoveLastFastener()
+            End If
             g_hasLastComp = False
             Exit Do
         End If
@@ -465,6 +476,7 @@ Public Sub PlaceFastenerAtHole()
     ' ── 记录最近装配件信息（供翻转重装使用） ─────────────────────────────
     Set g_lastProducts = products
     g_lastCompIdx = products.Count   ' 刚添加的件始终在末尾
+    g_lastOpWasFlip = False          ' 新装配件尚未执行翻转
     g_count = g_count + 1
 
 End Sub
@@ -654,13 +666,7 @@ End Function
 '
 ' ---- 将以下代码粘贴到 FlipForm 的代码模块中（不是本模块）----
 '
-'  ' 使用 MouseUp 而非 Click：
-'  ' VBA UserForm 中若按钮被设为 Cancel 按钮（Cancel=True），或 ESC 键被 VBA
-'  ' 消息泵截获并分发为点击事件，Click 会在 ESC 退出 SelectElement2 期间意外触发。
-'  ' MouseUp 仅在鼠标按键实际松开时触发，键盘 ESC 不会产生 MouseUp，从根本上
-'  ' 避免 ESC 退出循环后误翻转上一个紧固件的问题。
-'  Private Sub btnFlip_MouseUp(ByVal Button As Integer, ByVal Shift As Integer, _
-'                              ByVal X As Single, ByVal Y As Single)
+'  Private Sub btnFlip_Click()
 '      If Not g_loopActive Then Exit Sub
 '      g_flipDir = Not g_flipDir
 '      btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
@@ -668,6 +674,7 @@ End Function
 '      ' 则直接将已有紧固件移动到翻转后的位置（不删除重建）。
 '      If g_hasLastComp Then
 '          Call MoveLastFastener()
+'          g_lastOpWasFlip = True    ' 记录翻转已执行，供 ESC 后重新应用
 '          CATIA.StatusBar = "已重新定向（方向翻转）" & g_count & " 个 " & g_fastenerPN & _
 '                            "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
 '                            "  选下一孔继续，ESC结束"
