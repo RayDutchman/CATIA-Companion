@@ -61,6 +61,35 @@ def _find_catia_doc_by_path(docs, path: Path) -> object | None:
     return None
 
 
+def _find_catia_doc_by_part_number(docs, pn: str) -> object | None:
+    """返回根产品零件编号与 *pn* 匹配的第一个已打开 CATIA 文档对象。
+
+    当零件尚未保存到磁盘时（无文件路径），可通过零件编号定位已在 CATIA
+    中打开的文档。如果零件编号不可用则回退到按文档名（不含扩展名）匹配。
+    未找到时返回 ``None``。
+
+    参数：
+        docs: CATIA 文档集合
+        pn:   要匹配的零件编号
+
+    返回：
+        匹配的 CATIA 文档对象，或 None
+    """
+    for i in range(1, docs.count + 1):
+        try:
+            d = docs.item(i)
+            try:
+                doc_pn = d.com_object.Product.PartNumber
+            except Exception:
+                # 非零件/产品类文档（如工程图）无 .Product；回退到文档名茎
+                doc_pn = Path(d.name).stem
+            if doc_pn == pn:
+                return d
+        except Exception:
+            pass
+    return None
+
+
 
 class _BomTreeDelegate(QStyledItemDelegate):
     """Per-column read-only enforcement for the BOM QTreeWidget.
@@ -1422,11 +1451,12 @@ class BomEditDialog(QDialog):
         if row_idx is None:
             return
 
-        row_data    = self._rows[row_idx]
-        fp          = str(row_data.get("_filepath", ""))
-        fp_path     = Path(fp) if fp else None
+        row_data     = self._rows[row_idx]
+        fp           = str(row_data.get("_filepath", ""))
+        fp_path      = Path(fp) if fp else None
         is_component = row_data.get("Type") == "部件"
         not_found    = bool(row_data.get("_not_found"))
+        pn           = str(row_data.get("Part Number", ""))
 
         # Ensure the right-clicked row is selected so that the downstream
         # helpers (_rename_selected_file etc.) can find it.
@@ -1467,9 +1497,14 @@ class BomEditDialog(QDialog):
         # Allow CATPart and CATProduct.  Exclude 部件 because their _filepath
         # points to the parent product's file, so "opening" it would silently
         # open the wrong (parent) document instead of the component itself.
+        # Also enable for not_found rows (file not yet saved to disk) when a
+        # Part Number is available – the already-open document can be located
+        # by its Part Number and activated in CATIA.
         is_catia_doc = bool(fp) and fp.lower().endswith((".catpart", ".catproduct"))
         act_open_catia = menu.addAction("在CATIA中打开")
-        act_open_catia.setEnabled(is_catia_doc and not is_component and not not_found)
+        act_open_catia.setEnabled(
+            not is_component and (is_catia_doc or (not_found and bool(pn)))
+        )
 
         menu.addSeparator()
 
@@ -1485,7 +1520,7 @@ class BomEditDialog(QDialog):
         if action == act_open_path:
             self._open_path(fp)
         elif action == act_open_catia:
-            self._open_in_catia(fp)
+            self._open_in_catia(fp, pn)
         elif action == act_edit_path:
             self._rename_selected_file()
 
@@ -1501,16 +1536,46 @@ class BomEditDialog(QDialog):
         except Exception as exc:
             logger.warning(f"Failed to open path in Explorer: {exc}")
 
-    def _open_in_catia(self, fp: str) -> None:
-        """Open a CATPart or CATProduct file in CATIA (if not already open)."""
+    def _open_in_catia(self, fp: str, pn: str = "") -> None:
+        """Open a CATPart or CATProduct in CATIA and activate its window.
+
+        Strategy:
+        • If *fp* points to an existing file on disk: open by path (or reuse
+          the already-open document) then activate the window.
+        • If *fp* is empty or the file is not yet saved to disk: look up the
+          already-open document by Part Number *pn* and activate its window.
+        """
         try:
             from pycatia import catia as _pycatia
             caa         = _pycatia()
             application = caa.application
             application.visible = True
-            src       = Path(fp).resolve()
-            documents = application.documents
-            if _find_catia_doc_by_path(documents, src) is None:
-                documents.open(str(src))
+            documents   = application.documents
+            doc         = None
+
+            if fp:
+                src = Path(fp).resolve()
+                doc = _find_catia_doc_by_path(documents, src)
+                if doc is None:
+                    if src.exists():
+                        documents.open(str(src))
+                        doc = _find_catia_doc_by_path(documents, src)
+                    elif pn:
+                        # File not on disk yet – surface by Part Number.
+                        doc = _find_catia_doc_by_part_number(documents, pn)
+            elif pn:
+                doc = _find_catia_doc_by_part_number(documents, pn)
+
+            if doc is None:
+                label = pn or fp
+                QMessageBox.warning(
+                    self, "在CATIA中打开失败",
+                    f"无法在CATIA中找到对应文档。\n"
+                    f"零件编号：{label}\n\n"
+                    f"请确认该零件已在CATIA中打开。",
+                )
+                return
+
+            doc.activate()
         except Exception as e:
             QMessageBox.warning(self, "在CATIA中打开失败", f"无法在CATIA中打开文件：\n{e}")
