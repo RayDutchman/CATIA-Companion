@@ -41,6 +41,21 @@ logger = logging.getLogger(__name__)
 _ITEM_LOCKED_ROLE: int = Qt.ItemDataRole.UserRole + 1
 
 
+def _is_catia_com_error(exc: Exception) -> bool:
+    """Return True if *exc* is a ``pywintypes.com_error`` from the CATIA COM layer.
+
+    This distinguishes deliberate user-cancel signals (CATIA raises a COM error
+    when the user clicks Cancel or No in its own SaveAs dialog) from genuine
+    OS-level failures such as disk-full or permission-denied, which are plain
+    Python exceptions and must always be reported to the user.
+    """
+    try:
+        import pywintypes  # noqa: PLC0415
+        return isinstance(exc, pywintypes.com_error)
+    except ImportError:
+        return False
+
+
 def _find_catia_doc_by_path(docs, path: Path) -> object | None:
     """返回解析路径与 *path* 匹配的 CATIA 文档对象，如果未找到则返回 ``None``。
 
@@ -1119,7 +1134,11 @@ class BomEditDialog(QDialog):
             if ret != QMessageBox.StandardButton.Yes:
                 return
             self._write_back(close_on_success=False)
-            return
+            # If write-back failed or was only partial, modified_keys is still
+            # non-empty – stop here so the user can fix the issue first.
+            if self._modified_keys:
+                return
+            # Write-back cleared all modifications; fall through to rename.
 
         to_rename: list[tuple[str, str]] = []
         seen_fps:  set[str] = set()
@@ -1198,16 +1217,24 @@ class BomEditDialog(QDialog):
                     if str(row.get("_filepath", "")) == fp:
                         row["_filepath"] = new_fp
                         row["Filename"]  = pn
+                for row in self._raw_rows:
+                    if str(row.get("_filepath", "")) == fp:
+                        row["_filepath"] = new_fp
+                        row["Filename"]  = pn
                 renamed_count += 1
 
             except Exception as e:
-                if Path(fp).exists() and (target_existed_before or not Path(new_fp).exists()):
-                    # The source file is still intact and either:
-                    #   (a) the target already existed before and was not overwritten
-                    #       (user clicked "No" on CATIA's overwrite prompt), or
-                    #   (b) the target was never created at all
-                    #       (user clicked "Cancel" in CATIA's SaveAs dialog).
-                    # Either way this is a user-initiated skip – move on silently.
+                # Only treat the exception as a user-initiated cancel when:
+                #   1. The exception came from the CATIA COM layer (pywintypes.com_error),
+                #      which is what CATIA raises when the user clicks Cancel or No in
+                #      its own SaveAs dialog – NOT for OS-level failures.
+                #   2. The source file is still intact.
+                #   3. The target file was either pre-existing or was never created.
+                # Any other exception (OSError, PermissionError, non-COM errors like
+                # disk full) must be surfaced to the user as a real failure.
+                if _is_catia_com_error(e) and Path(fp).exists() and (
+                    target_existed_before or not Path(new_fp).exists()
+                ):
                     logger.info(
                         f"SaveAs skipped for {Path(fp).name} "
                         "(user cancelled or declined overwrite in CATIA)"
@@ -1315,6 +1342,10 @@ class BomEditDialog(QDialog):
                 if str(row.get("_filepath", "")) == fp:
                     row["_filepath"] = new_fp
                     row["Filename"]  = new_stem
+            for row in self._raw_rows:
+                if str(row.get("_filepath", "")) == fp:
+                    row["_filepath"] = new_fp
+                    row["Filename"]  = new_stem
             self._populate_table()
             QMessageBox.information(
                 self, "操作成功",
@@ -1322,10 +1353,19 @@ class BomEditDialog(QDialog):
             )
 
         except Exception as e:
-            if Path(fp).exists() and (target_existed_before or not Path(new_fp).exists()):
-                # The source file is intact and either the target already existed
-                # before (no overwrite) or it was never created – most likely the
-                # user clicked Cancel or No in CATIA's own SaveAs prompt.
+            # Only treat the exception as a user-initiated cancel when:
+            #   1. The exception came from the CATIA COM layer (pywintypes.com_error),
+            #      which is what CATIA raises when the user clicks Cancel or No in
+            #      its own SaveAs dialog – NOT for OS-level failures.
+            #   2. The source file is still intact.
+            #   3. The target file was either pre-existing or was never created.
+            # Any other exception (OSError, PermissionError, non-COM errors like
+            # disk full) must be surfaced to the user as a real failure.
+            if _is_catia_com_error(e) and Path(fp).exists() and (
+                target_existed_before or not Path(new_fp).exists()
+            ):
+                # Most likely the user clicked Cancel or No in CATIA's own SaveAs
+                # prompt – treat this as a deliberate skip with no error dialog.
                 logger.info(
                     f"SaveAs skipped for {Path(fp).name} "
                     f"(user cancelled or declined overwrite in CATIA; exception: {e})"
