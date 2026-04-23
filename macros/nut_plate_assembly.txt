@@ -296,6 +296,7 @@ Public Sub ContinueSelectProduct()
 
         Dim hole1Ref As Object, hole2Ref As Object
         Dim hole1Meas As Object, hole2Meas As Object
+        Dim hole1LeafProd As Object, hole2LeafProd As Object
         Dim holeCenter1(2), holeCenter2(2)
         Dim bHoleGeomOK As Boolean
 
@@ -317,8 +318,11 @@ Public Sub ContinueSelectProduct()
         End If
 
         Set hole1Ref = sel.Item(1).Reference
+        ' LeafProduct 是选择器返回的具体实例 Product 对象，能唯一标识用户点击的那个实例，
+        ' 避免装配体中存在同一零件多个实例时的歧义。
+        Set hole1LeafProd = sel.Item(1).LeafProduct
         bHoleGeomOK = False
-        If TryGetMeasurableInContext(spaAssembly, hole1Ref, targetProduct, hole1Meas) Then
+        If TryGetMeasurableInContext(spaAssembly, hole1Ref, hole1LeafProd, hole1Meas) Then
             bHoleGeomOK = TryGetCenter(hole1Meas, holeCenter1)
         End If
 
@@ -343,8 +347,9 @@ Public Sub ContinueSelectProduct()
             End If
 
             Set hole2Ref = sel.Item(1).Reference
+            Set hole2LeafProd = sel.Item(1).LeafProduct
             bHoleGeomOK = False
-            If TryGetMeasurableInContext(spaAssembly, hole2Ref, targetProduct, hole2Meas) Then
+            If TryGetMeasurableInContext(spaAssembly, hole2Ref, hole2LeafProd, hole2Meas) Then
                 bHoleGeomOK = TryGetCenter(hole2Meas, holeCenter2)
             End If
 
@@ -354,8 +359,27 @@ Public Sub ContinueSelectProduct()
                        vbExclamation, "快速装配托板螺母"
                 sel.Clear
             Else
-                ' ── 6b. 计算安装孔的几何（targetProduct 局部坐标系）───────────────────────
-                ' 锚点 = 两个圆心的中点
+                ' ── 6b. 计算安装孔的几何（根产品坐标系）───────────────────────
+                ' GetMeasurableInContext(ref, hole1LeafProd/hole2LeafProd) 返回各自 LeafProduct
+                ' 局部坐标系中的圆心坐标。先用正变换将它们转到根产品坐标系，再计算中点和轴线。
+                ' 正变换：world = R * local + T
+                Dim lp1Matrix(11)
+                hole1LeafProd.Position.GetComponents lp1Matrix
+                Dim hc1World(2) As Double
+                hc1World(0) = lp1Matrix(0)*holeCenter1(0) + lp1Matrix(3)*holeCenter1(1) + lp1Matrix(6)*holeCenter1(2) + lp1Matrix(9)
+                hc1World(1) = lp1Matrix(1)*holeCenter1(0) + lp1Matrix(4)*holeCenter1(1) + lp1Matrix(7)*holeCenter1(2) + lp1Matrix(10)
+                hc1World(2) = lp1Matrix(2)*holeCenter1(0) + lp1Matrix(5)*holeCenter1(1) + lp1Matrix(8)*holeCenter1(2) + lp1Matrix(11)
+                holeCenter1(0) = hc1World(0): holeCenter1(1) = hc1World(1): holeCenter1(2) = hc1World(2)
+
+                Dim lp2Matrix(11)
+                hole2LeafProd.Position.GetComponents lp2Matrix
+                Dim hc2World(2) As Double
+                hc2World(0) = lp2Matrix(0)*holeCenter2(0) + lp2Matrix(3)*holeCenter2(1) + lp2Matrix(6)*holeCenter2(2) + lp2Matrix(9)
+                hc2World(1) = lp2Matrix(1)*holeCenter2(0) + lp2Matrix(4)*holeCenter2(1) + lp2Matrix(7)*holeCenter2(2) + lp2Matrix(10)
+                hc2World(2) = lp2Matrix(2)*holeCenter2(0) + lp2Matrix(5)*holeCenter2(1) + lp2Matrix(8)*holeCenter2(2) + lp2Matrix(11)
+                holeCenter2(0) = hc2World(0): holeCenter2(1) = hc2World(1): holeCenter2(2) = hc2World(2)
+
+                ' 锚点 = 两个圆心的中点（根产品坐标系）
                 Dim holePt(2) As Double
                 holePt(0) = (holeCenter1(0) + holeCenter2(0)) / 2
                 holePt(1) = (holeCenter1(1) + holeCenter2(1)) / 2
@@ -391,6 +415,16 @@ Public Sub ContinueSelectProduct()
                             holeAxis1Raw(1) = holeAxis1Raw(1) / holeCircleAxisLen
                             holeAxis1Raw(2) = holeAxis1Raw(2) / holeCircleAxisLen
 
+                            ' TryGetAxis 返回的是 hole1LeafProd 局部坐标系中的轴线，
+                            ' 需用 lp1Matrix 正变换（旋转部分）将其转到根产品坐标系。
+                            Dim holeAxis1RawWorld(2) As Double
+                            holeAxis1RawWorld(0) = lp1Matrix(0)*holeAxis1Raw(0) + lp1Matrix(3)*holeAxis1Raw(1) + lp1Matrix(6)*holeAxis1Raw(2)
+                            holeAxis1RawWorld(1) = lp1Matrix(1)*holeAxis1Raw(0) + lp1Matrix(4)*holeAxis1Raw(1) + lp1Matrix(7)*holeAxis1Raw(2)
+                            holeAxis1RawWorld(2) = lp1Matrix(2)*holeAxis1Raw(0) + lp1Matrix(5)*holeAxis1Raw(1) + lp1Matrix(8)*holeAxis1Raw(2)
+                            holeAxis1Raw(0) = holeAxis1RawWorld(0)
+                            holeAxis1Raw(1) = holeAxis1RawWorld(1)
+                            holeAxis1Raw(2) = holeAxis1RawWorld(2)
+
                             ' 在第一轴线和第一个孔轴线决定的平面内，调整第二轴线使其与第一轴线垂直
                             Dim holeDotProduct As Double
                             holeDotProduct = holeAxis1Raw(0)*holeAxis1(0) + holeAxis1Raw(1)*holeAxis1(1) + holeAxis1Raw(2)*holeAxis1(2)
@@ -412,6 +446,33 @@ Public Sub ContinueSelectProduct()
                         MsgBox "无法获取安装孔的轴线方向。", vbExclamation, "快速装配托板螺母"
                         sel.Clear
                     Else
+                        ' ── 将孔几何从根产品坐标系变换到 targetProduct 局部坐标系 ────────
+                        Dim tpMatrix(11)
+                        targetProduct.Position.GetComponents tpMatrix
+
+                        ' 变换锚点
+                        Dim holePtOffset(2) As Double
+                        holePtOffset(0) = holePt(0) - tpMatrix(9)
+                        holePtOffset(1) = holePt(1) - tpMatrix(10)
+                        holePtOffset(2) = holePt(2) - tpMatrix(11)
+                        holePt(0) = tpMatrix(0)*holePtOffset(0) + tpMatrix(1)*holePtOffset(1) + tpMatrix(2)*holePtOffset(2)
+                        holePt(1) = tpMatrix(3)*holePtOffset(0) + tpMatrix(4)*holePtOffset(1) + tpMatrix(5)*holePtOffset(2)
+                        holePt(2) = tpMatrix(6)*holePtOffset(0) + tpMatrix(7)*holePtOffset(1) + tpMatrix(8)*holePtOffset(2)
+
+                        ' 变换第一轴线
+                        Dim holeAxis1World(2) As Double
+                        holeAxis1World(0) = holeAxis1(0): holeAxis1World(1) = holeAxis1(1): holeAxis1World(2) = holeAxis1(2)
+                        holeAxis1(0) = tpMatrix(0)*holeAxis1World(0) + tpMatrix(1)*holeAxis1World(1) + tpMatrix(2)*holeAxis1World(2)
+                        holeAxis1(1) = tpMatrix(3)*holeAxis1World(0) + tpMatrix(4)*holeAxis1World(1) + tpMatrix(5)*holeAxis1World(2)
+                        holeAxis1(2) = tpMatrix(6)*holeAxis1World(0) + tpMatrix(7)*holeAxis1World(1) + tpMatrix(8)*holeAxis1World(2)
+
+                        ' 变换第二轴线
+                        Dim holeAxis2World(2) As Double
+                        holeAxis2World(0) = holeAxis2(0): holeAxis2World(1) = holeAxis2(1): holeAxis2World(2) = holeAxis2(2)
+                        holeAxis2(0) = tpMatrix(0)*holeAxis2World(0) + tpMatrix(1)*holeAxis2World(1) + tpMatrix(2)*holeAxis2World(2)
+                        holeAxis2(1) = tpMatrix(3)*holeAxis2World(0) + tpMatrix(4)*holeAxis2World(1) + tpMatrix(5)*holeAxis2World(2)
+                        holeAxis2(2) = tpMatrix(6)*holeAxis2World(0) + tpMatrix(7)*holeAxis2World(1) + tpMatrix(8)*holeAxis2World(2)
+
                         sel.Clear
 
                         ' 写入模块级变量供 PlaceNutPlateAtHole 使用
@@ -421,7 +482,7 @@ Public Sub ContinueSelectProduct()
 
                         ' ── 调试：孔的几何 ──────────────────────────────────────────
                         If DEBUG_MODE Then
-                            MsgBox "[DEBUG] 安装孔几何（targetProduct 局部坐标系）" & Chr(10) & _
+                            MsgBox "[DEBUG] 安装孔几何（已变换到 targetProduct 局部坐标系）" & Chr(10) & _
                                    "锚点     = (" & Round(holePt(0), 4) & ", " & Round(holePt(1), 4) & ", " & Round(holePt(2), 4) & ")" & Chr(10) & _
                                    "第一轴线 = (" & Round(holeAxis1(0), 4) & ", " & Round(holeAxis1(1), 4) & ", " & Round(holeAxis1(2), 4) & ")" & Chr(10) & _
                                    "第二轴线 = (" & Round(holeAxis2(0), 4) & ", " & Round(holeAxis2(1), 4) & ", " & Round(holeAxis2(2), 4) & ")", _
