@@ -131,7 +131,7 @@ Public Sub ContinueSelectNutPlate()
     ' ── 选择第一个圆（铆钉孔1）──────────────────────────────────────────
     Do
         status = sel.SelectElement2(edgeFilter, _
-            "请选择托板螺母的第一个铆钉孔（圆或圆弧）[ESC 退出]", False)
+            "请选择托板螺母安装面的第一个铆钉孔（圆或圆弧）[ESC 退出]", False)
         If status <> "Normal" Then Exit Sub
 
         Set edge1Ref = sel.Item(1).Reference
@@ -149,7 +149,7 @@ Public Sub ContinueSelectNutPlate()
     ' ── 选择第二个圆（铆钉孔2）──────────────────────────────────────────
     Do
         status = sel.SelectElement2(edgeFilter, _
-            "请选择托板螺母的第二个铆钉孔（圆或圆弧）[ESC 退出]", False)
+            "请选择托板螺母安装面的第二个铆钉孔（圆或圆弧）[ESC 退出]", False)
         If status <> "Normal" Then Exit Sub
 
         Set edge2Ref = sel.Item(1).Reference
