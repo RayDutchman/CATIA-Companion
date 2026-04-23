@@ -8,15 +8,17 @@ BOM 编辑对话框模块。
 import copy
 import os
 import logging
+import subprocess
 from pathlib import Path
 
 from PySide6.QtWidgets import (
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QLineEdit,
-    QPushButton, QTreeWidget, QTreeWidgetItem, QHeaderView, QAbstractItemView,
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QPushButton, QTreeWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QCheckBox, QGroupBox, QMessageBox, QApplication,
-    QFileDialog, QProgressDialog, QRadioButton, QButtonGroup, QStyledItemDelegate,
+    QFileDialog, QProgressDialog, QRadioButton, QButtonGroup,
+    QMenu, QWidgetAction,
 )
-from PySide6.QtGui import QColor, QPen, QPainter
+from PySide6.QtGui import QPixmap
 from PySide6.QtCore import Qt, QSettings
 
 from catia_companion.constants import (
@@ -31,258 +33,16 @@ from catia_companion.constants import (
 )
 from catia_companion.catia.bom_collect import collect_bom_rows, flatten_bom_to_summary
 from catia_companion.catia.bom_write import write_bom_to_catia
+from catia_companion.utils import read_catia_thumbnail
+from catia_companion.ui.bom_catia_helpers import (
+    _is_catia_com_error,
+    _find_catia_doc_by_path,
+    _find_catia_doc_by_part_number,
+)
+from catia_companion.ui.bom_widgets import _BomTreeDelegate, _BomTreeWidget, _ITEM_LOCKED_ROLE
+from catia_companion.ui.bom_file_rename_dialog import _FileRenameDialog
 
 logger = logging.getLogger(__name__)
-
-# 自定义 UserRole 用于 QTreeWidgetItem：标记行为锁定（不可读/未找到）
-_ITEM_LOCKED_ROLE: int = Qt.ItemDataRole.UserRole + 1
-
-
-def _find_catia_doc_by_path(docs, path: Path) -> object | None:
-    """返回解析路径与 *path* 匹配的 CATIA 文档对象，如果未找到则返回 ``None``。
-
-    参数：
-        docs: CATIA 文档集合
-        path: 要匹配的文件路径
-
-    返回：
-        匹配的 CATIA 文档对象，或 None
-    """
-    for i in range(1, docs.count + 1):
-        try:
-            d = docs.item(i)
-            if Path(d.full_name).resolve() == path:
-                return d
-        except Exception:
-            pass
-    return None
-
-
-class _BomTreeDelegate(QStyledItemDelegate):
-    """Per-column read-only enforcement for the BOM QTreeWidget.
-
-    QTreeWidgetItem flags are row-wide; this delegate returns ``None`` from
-    :meth:`createEditor` for any column whose internal name belongs to
-    :data:`~catia_companion.constants.BOM_READONLY_COLUMNS`, and also for
-    any row that has been marked locked (file not found / unreadable).
-    """
-
-    def __init__(self, cols_fn, tree: QTreeWidget) -> None:
-        super().__init__(tree)
-        self._cols_fn = cols_fn  # callable: () -> list[str]
-
-    def createEditor(self, parent, option, index):
-        tree = self.parent()
-        item = tree.itemFromIndex(index)
-        if item is not None and item.data(0, _ITEM_LOCKED_ROLE):
-            return None
-        col_name = self._cols_fn()[index.column()]
-        if col_name in BOM_READONLY_COLUMNS:
-            return None
-        return super().createEditor(parent, option, index)
-
-
-class _BomTreeWidget(QTreeWidget):
-    """QTreeWidget that draws Windows-Regedit-style dotted connector lines.
-
-    Qt's default Windows/Fusion styles omit the vertical guide lines that
-    connect parent and child nodes.  This subclass overrides
-    :meth:`drawBranches` to paint 1-pixel-on / 1-pixel-off dotted lines
-    (keyed on absolute viewport coordinates so vertical guides remain
-    phase-consistent across consecutive rows).
-    """
-
-    _LINE_COLOR = QColor("#a0aab4")
-
-    def drawBranches(self, painter: QPainter, rect, index) -> None:
-        # 首先调用父类的 drawBranches，让 Qt 绘制默认的展开/折叠箭头指示器。
-        super().drawBranches(painter, rect, index)
-
-        indent = self.indentation()  # 获取每一层级的缩进宽度（像素）。
-        model  = self.model()        # 获取当前树控件关联的数据模型。
-
-        # 从当前节点向上遍历到根节点，依次记录每一层的祖先节点是否还有下一个兄弟节点
-        # （即：在同一层级中，该节点下方是否还有其他节点）。
-        has_next: list[bool] = []  # 存储各层级"是否有下一个兄弟"的布尔值列表。
-        tmp = index                # 从当前节点的索引开始向上遍历。
-        while True:
-            par = tmp.parent()  # 获取当前节点的父节点索引。
-            # 如果父节点有效（即不是根节点），则获取父节点下的子节点总数；
-            # 否则（当前节点本身就是顶层节点）获取顶层节点总数。
-            cnt = model.rowCount(par) if par.isValid() else model.rowCount()
-            # 如果当前节点的行号小于兄弟节点总数减一，说明它后面还有兄弟节点。
-            has_next.append(tmp.row() < cnt - 1)
-            if not par.isValid():  # 已到达顶层节点，停止向上遍历。
-                break
-            tmp = par  # 继续向上，处理父节点。
-        # 翻转列表：使 has_next[0] 对应最顶层祖先，has_next[-1] 对应当前节点自身。
-        has_next.reverse()
-
-        depth = len(has_next) - 1  # 当前节点的深度：顶层节点为 0，其子节点为 1，以此类推。
-
-        # 顶层节点（depth == 0）不需要绘制任何连接线，直接返回。
-        if depth == 0:
-            return
-
-        # 计算当前行在垂直方向上的中点 y 坐标，用于绘制水平横线和连接角。
-        mid_y = (rect.top() + rect.bottom()) // 2
-
-        pen = QPen(self._LINE_COLOR, 1, Qt.PenStyle.SolidLine)  # 创建 1 像素宽的实线画笔，颜色为类属性中定义的连接线颜色。
-        pen.setDashPattern([1.0, 1.0])  # 将画笔设为点状虚线：1 像素绘制、1 像素间隔交替。
-        # 根据当前行顶部的绝对 y 坐标对虚线相位进行对齐，
-        # 确保相邻行之间的竖向连接线点阵在视觉上连续、不错位。
-        pen.setDashOffset(rect.top() % 2)
-
-        painter.save()  # 保存当前画笔状态，避免影响其他控件的绘制。
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)  # 关闭抗锯齿，保持像素级对齐，使点状虚线清晰。
-        painter.setPen(pen)  # 应用上面配置好的点状虚线画笔。
-
-        # 遍历当前节点的所有祖先层（除最近一级直接父层外），
-        # 如果该层的祖先节点下方还有兄弟节点（has_next[d] 为 True），
-        # 则在该层对应的 x 列绘制一条贯穿整行高度的竖线（表示该分支尚未结束）。
-        for d in range(depth - 1):
-            if has_next[d + 1]:  # 该祖先层仍有后续兄弟节点，需要绘制连续竖线。
-                x = rect.left() + d * indent + indent // 2  # 计算该祖先层连接线的 x 坐标（列中心）。
-                painter.drawLine(x, rect.top(), x, rect.bottom())  # 绘制贯通整行的竖线。
-
-        # 处理当前节点的直接父层（最近一级）连接线，分两种情况：
-        #   T 型连接符（├─）：当前节点后面还有兄弟节点 → 绘制贯通整行的竖线 + 水平横线。
-        #   L 型连接符（└─）：当前节点是最后一个子节点 → 仅绘制上半段竖线（转角）+ 水平横线。
-        x     = rect.left() + (depth - 1) * indent + indent // 2  # 直接父层连接线的 x 坐标（列中心）。
-        x_end = rect.left() + depth * indent                       # 水平横线的终点 x 坐标（当前节点内容列的左边缘）。
-        if has_next[-1]:  # T 型：当前节点后面还有兄弟节点。
-            painter.drawLine(x, rect.top(), x, rect.bottom())  # 绘制贯通整行高度的竖线（T 型竖边）。
-        else:             # L 型：当前节点是最后一个子节点。
-            painter.drawLine(x, rect.top(), x, mid_y)          # 仅绘制从行顶到行中点的上半段竖线（L 型转角）。
-        painter.drawLine(x, mid_y, x_end, mid_y)               # 绘制从竖线底部延伸到内容区左边缘的水平横线。
-
-        painter.restore()  # 恢复之前保存的画笔状态，避免影响后续其他控件的绘制。
-
-
-class _FileRenameDialog(QDialog):
-    """Dialog for renaming or moving a single CATIA file via CATIA SaveAs.
-
-    Lets the user change the file stem (name without extension) and/or the
-    target directory independently.  Validates the new stem with
-    :data:`~catia_companion.constants.PART_NUMBER_VALID_PATTERN` and creates
-    the target directory on demand.
-    """
-
-    def __init__(self, current_fp: str, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("修改文件名/路径")
-        self.setMinimumWidth(540)
-        self._current_fp = current_fp
-        self._p          = Path(current_fp)
-
-        layout = QFormLayout(self)
-        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        layout.setSpacing(8)
-
-        # Current path (read-only)
-        cur_label = QLabel(current_fp)
-        cur_label.setWordWrap(True)
-        cur_label.setStyleSheet("color: #555;")
-        layout.addRow("当前路径：", cur_label)
-
-        # New filename (stem only; extension is preserved automatically)
-        self._name_edit = QLineEdit(self._p.stem)
-        layout.addRow(f"新文件名（不含扩展名 {self._p.suffix}）：", self._name_edit)
-
-        # New directory (with browse button)
-        dir_widget = QWidget()
-        dir_layout = QHBoxLayout(dir_widget)
-        dir_layout.setContentsMargins(0, 0, 0, 0)
-        self._dir_edit = QLineEdit(str(self._p.parent))
-        dir_btn        = QPushButton("浏览…")
-        dir_btn.setFixedWidth(64)
-        dir_btn.clicked.connect(self._browse_dir)
-        dir_layout.addWidget(self._dir_edit)
-        dir_layout.addWidget(dir_btn)
-        layout.addRow("新目录：", dir_widget)
-
-        # Path preview
-        self._preview_label = QLabel()
-        self._preview_label.setWordWrap(True)
-        self._preview_label.setStyleSheet("color: #333; font-style: italic;")
-        layout.addRow("新路径预览：", self._preview_label)
-
-        self._name_edit.textChanged.connect(self._update_preview)
-        self._dir_edit.textChanged.connect(self._update_preview)
-        self._update_preview()
-
-        # Buttons
-        btn_widget = QWidget()
-        btn_row    = QHBoxLayout(btn_widget)
-        btn_row.setContentsMargins(0, 0, 0, 0)
-        btn_row.addStretch()
-        ok_btn     = QPushButton("确认")
-        ok_btn.setDefault(True)
-        ok_btn.clicked.connect(self._validate_and_accept)
-        cancel_btn = QPushButton("取消")
-        cancel_btn.clicked.connect(self.reject)
-        btn_row.addWidget(ok_btn)
-        btn_row.addWidget(cancel_btn)
-        layout.addRow(btn_widget)
-
-    # ── Properties ─────────────────────────────────────────────────────────
-
-    @property
-    def new_stem(self) -> str:
-        return self._name_edit.text().strip()
-
-    @property
-    def new_dir(self) -> str:
-        return self._dir_edit.text().strip()
-
-    @property
-    def new_path(self) -> str:
-        stem      = self.new_stem or self._p.stem
-        directory = self.new_dir  or str(self._p.parent)
-        return str(Path(directory) / (stem + self._p.suffix))
-
-    # ── Slots ───────────────────────────────────────────────────────────────
-
-    def _update_preview(self) -> None:
-        self._preview_label.setText(self.new_path)
-
-    def _browse_dir(self) -> None:
-        d = QFileDialog.getExistingDirectory(
-            self, "选择目标目录",
-            self._dir_edit.text() or str(self._p.parent),
-        )
-        if d:
-            self._dir_edit.setText(d)
-
-    def _validate_and_accept(self) -> None:
-        stem = self.new_stem or self._p.stem
-        if stem != self._p.stem and not PART_NUMBER_VALID_PATTERN.fullmatch(stem):
-            QMessageBox.warning(
-                self, "文件名含非法字符",
-                f"文件名 「{stem}」 含有非法字符。\n"
-                "不允许：控制字符、非ASCII字符，以及Windows文件名禁用字符"
-                "（\\ / : * ? \" < > |）。",
-            )
-            return
-        new_p = Path(self.new_path)
-        if new_p.resolve() == self._p.resolve():
-            QMessageBox.warning(self, "路径未改变", "新路径与当前路径相同，无需操作。")
-            return
-        dest_dir = new_p.parent
-        if not dest_dir.exists():
-            ret = QMessageBox.question(
-                self, "目录不存在",
-                f"目标目录不存在：\n{dest_dir}\n\n是否创建该目录？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-            if ret != QMessageBox.StandardButton.Yes:
-                return
-            try:
-                dest_dir.mkdir(parents=True, exist_ok=True)
-            except Exception as exc:
-                QMessageBox.critical(self, "创建目录失败", f"无法创建目录：\n{exc}")
-                return
-        self.accept()
 
 
 class BomEditDialog(QDialog):
@@ -499,6 +259,8 @@ class BomEditDialog(QDialog):
         self._table.itemChanged.connect(self._on_item_changed)
         _delegate = _BomTreeDelegate(lambda: self._columns, self._table)
         self._table.setItemDelegate(_delegate)
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._on_tree_context_menu)
         layout.addWidget(self._table, 1)
 
         # Bottom buttons
@@ -524,7 +286,7 @@ class BomEditDialog(QDialog):
         self._rename_btn.clicked.connect(self._rename_by_part_number)
         btn_row.addWidget(self._rename_btn)
 
-        self._rename_file_btn = QPushButton("修改选中文件名/路径")
+        self._rename_file_btn = QPushButton("编辑选中文件名/路径")
         self._rename_file_btn.setToolTip("为选中行的文件执行重命名或移动（通过CATIA另存为）")
         self._rename_file_btn.setEnabled(False)
         self._rename_file_btn.clicked.connect(self._rename_selected_file)
@@ -1084,7 +846,11 @@ class BomEditDialog(QDialog):
             if ret != QMessageBox.StandardButton.Yes:
                 return
             self._write_back(close_on_success=False)
-            return
+            # If write-back failed or was only partial, modified_keys is still
+            # non-empty – stop here so the user can fix the issue first.
+            if self._modified_keys:
+                return
+            # Write-back cleared all modifications; fall through to rename.
 
         to_rename: list[tuple[str, str]] = []
         seen_fps:  set[str] = set()
@@ -1163,16 +929,24 @@ class BomEditDialog(QDialog):
                     if str(row.get("_filepath", "")) == fp:
                         row["_filepath"] = new_fp
                         row["Filename"]  = pn
+                for row in self._raw_rows:
+                    if str(row.get("_filepath", "")) == fp:
+                        row["_filepath"] = new_fp
+                        row["Filename"]  = pn
                 renamed_count += 1
 
             except Exception as e:
-                if Path(fp).exists() and (target_existed_before or not Path(new_fp).exists()):
-                    # The source file is still intact and either:
-                    #   (a) the target already existed before and was not overwritten
-                    #       (user clicked "No" on CATIA's overwrite prompt), or
-                    #   (b) the target was never created at all
-                    #       (user clicked "Cancel" in CATIA's SaveAs dialog).
-                    # Either way this is a user-initiated skip – move on silently.
+                # Only treat the exception as a user-initiated cancel when:
+                #   1. The exception came from the CATIA COM layer (pywintypes.com_error),
+                #      which is what CATIA raises when the user clicks Cancel or No in
+                #      its own SaveAs dialog – NOT for OS-level failures.
+                #   2. The source file is still intact.
+                #   3. The target file was either pre-existing or was never created.
+                # Any other exception (OSError, PermissionError, non-COM errors like
+                # disk full) must be surfaced to the user as a real failure.
+                if _is_catia_com_error(e) and Path(fp).exists() and (
+                    target_existed_before or not Path(new_fp).exists()
+                ):
                     logger.info(
                         f"SaveAs skipped for {Path(fp).name} "
                         "(user cancelled or declined overwrite in CATIA)"
@@ -1280,6 +1054,10 @@ class BomEditDialog(QDialog):
                 if str(row.get("_filepath", "")) == fp:
                     row["_filepath"] = new_fp
                     row["Filename"]  = new_stem
+            for row in self._raw_rows:
+                if str(row.get("_filepath", "")) == fp:
+                    row["_filepath"] = new_fp
+                    row["Filename"]  = new_stem
             self._populate_table()
             QMessageBox.information(
                 self, "操作成功",
@@ -1287,10 +1065,19 @@ class BomEditDialog(QDialog):
             )
 
         except Exception as e:
-            if Path(fp).exists() and (target_existed_before or not Path(new_fp).exists()):
-                # The source file is intact and either the target already existed
-                # before (no overwrite) or it was never created – most likely the
-                # user clicked Cancel or No in CATIA's own SaveAs prompt.
+            # Only treat the exception as a user-initiated cancel when:
+            #   1. The exception came from the CATIA COM layer (pywintypes.com_error),
+            #      which is what CATIA raises when the user clicks Cancel or No in
+            #      its own SaveAs dialog – NOT for OS-level failures.
+            #   2. The source file is still intact.
+            #   3. The target file was either pre-existing or was never created.
+            # Any other exception (OSError, PermissionError, non-COM errors like
+            # disk full) must be surfaced to the user as a real failure.
+            if _is_catia_com_error(e) and Path(fp).exists() and (
+                target_existed_before or not Path(new_fp).exists()
+            ):
+                # Most likely the user clicked Cancel or No in CATIA's own SaveAs
+                # prompt – treat this as a deliberate skip with no error dialog.
                 logger.info(
                     f"SaveAs skipped for {Path(fp).name} "
                     f"(user cancelled or declined overwrite in CATIA; exception: {e})"
@@ -1400,3 +1187,153 @@ class BomEditDialog(QDialog):
     def _finish_and_close(self) -> None:
         """Write changes back to CATIA and close the dialog."""
         self._write_back(close_on_success=True)
+
+    # ── Right-click context menu ──────────────────────────────────────────────
+
+    def _on_tree_context_menu(self, pos) -> None:
+        """Show a context menu for the right-clicked BOM row.
+
+        If a thumbnail is embedded in the backing file it is shown at the top
+        of the menu as a non-interactive image widget.
+        """
+        item = self._table.itemAt(pos)
+        if item is None:
+            return
+        row_idx = item.data(0, Qt.ItemDataRole.UserRole)
+        if row_idx is None:
+            return
+
+        row_data     = self._rows[row_idx]
+        fp           = str(row_data.get("_filepath", ""))
+        fp_path      = Path(fp) if fp else None
+        is_component = row_data.get("Type") == "部件"
+        not_found    = bool(row_data.get("_not_found"))
+        pn           = str(row_data.get("Part Number", ""))
+
+        # Ensure the right-clicked row is selected so that the downstream
+        # helpers (_rename_selected_file etc.) can find it.
+        if not item.isSelected():
+            self._table.clearSelection()
+            item.setSelected(True)
+
+        menu = QMenu(self)
+
+        # ── Embedded thumbnail (shown inline at the top when available) ───────
+        # Conditions where we skip thumbnail extraction:
+        #   • 部件: filepath belongs to the parent product, not this component
+        #   • not_found: CATIA couldn't resolve the file
+        #   • file doesn't exist on disk (unsaved or missing)
+        if fp and not is_component and not not_found and fp_path is not None and fp_path.exists():
+            img_bytes = read_catia_thumbnail(fp)
+            if img_bytes:
+                pixmap = QPixmap()
+                loaded = pixmap.loadFromData(img_bytes)
+                if loaded and not pixmap.isNull():
+                    thumb_label = QLabel()
+                    thumb_label.setPixmap(pixmap)
+                    thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    thumb_label.setContentsMargins(6, 4, 6, 4)
+                    thumb_action = QWidgetAction(menu)
+                    thumb_action.setDefaultWidget(thumb_label)
+                    menu.addAction(thumb_action)
+                    menu.addSeparator()
+
+        # ── 打开路径 ──────────────────────────────────────────────────────────
+        act_open_path = menu.addAction("打开路径")
+        path_available = bool(fp) and fp_path is not None and (
+            fp_path.exists() or fp_path.parent.exists()
+        )
+        act_open_path.setEnabled(path_available)
+
+        # ── 在CATIA中打开 ─────────────────────────────────────────────────────
+        # Locate by Part Number only.  Exclude:
+        #   • 部件 – their Part Number identifies the parent product
+        #   • not_found (断链接, light-red rows) – CATIA couldn't resolve the
+        #     reference; such rows may not have a valid Part Number in CATIA's
+        #     session and "opening" them is meaningless
+        act_open_catia = menu.addAction("在CATIA中打开")
+        act_open_catia.setEnabled(not is_component and not not_found and bool(pn))
+
+        menu.addSeparator()
+
+        # ── 编辑文件名/路径 ───────────────────────────────────────────────────
+        act_edit_path = menu.addAction("编辑文件名/路径")
+        act_edit_path.setEnabled(
+            bool(fp) and not not_found
+            and fp_path is not None and fp_path.exists()
+        )
+
+        action = menu.exec(self._table.viewport().mapToGlobal(pos))
+
+        if action == act_open_path:
+            self._open_path(fp)
+        elif action == act_open_catia:
+            self._open_in_catia(pn, fp)
+        elif action == act_edit_path:
+            self._rename_selected_file()
+
+    def _open_path(self, fp: str) -> None:
+        """Open the folder containing *fp* in Windows Explorer, highlighting the file."""
+        p = Path(fp).resolve()
+        try:
+            if p.exists():
+                # Quote the path so Explorer handles spaces in directory names.
+                subprocess.Popen(f'explorer /select,"{p}"', shell=True)
+            elif p.parent.exists():
+                subprocess.Popen(f'explorer "{p.parent}"', shell=True)
+        except Exception as exc:
+            logger.warning(f"Failed to open path in Explorer: {exc}")
+
+    def _open_in_catia(self, orig_pn: str, fp: str = "") -> None:
+        """Activate the already-open CATIA document for the row identified by
+        *orig_pn* (the Part Number as loaded from CATIA, used as the key into
+        ``_snapshot_data``) and optionally *fp* (the backing file path).
+
+        Lookup strategy (dual-track):
+        1. If *fp* resolves to an existing file, try to match by full path first.
+           This is immune to Part Number edits that have not yet been written back.
+        2. Fall back to matching by Part Number, using the value from
+           ``_snapshot_data`` – which is updated on every write-back and therefore
+           always reflects the PN that CATIA currently holds, even after a rename.
+
+        The caller must ensure that broken-link (not_found) rows are excluded
+        from triggering this method.
+        """
+        try:
+            from pycatia import catia as _pycatia
+            caa         = _pycatia()
+            application = caa.application
+            application.visible = True
+            documents   = application.documents
+
+            doc: object | None = None
+
+            # ── 1st track: match by file path (not affected by PN edits) ─────
+            if fp:
+                fp_path = Path(fp)
+                if fp_path.exists():
+                    doc = _find_catia_doc_by_path(documents, fp_path.resolve())
+
+            # ── 2nd track: match by snapshot PN (reflects last write-back) ───
+            snapshot_pn = self._snapshot_data.get(orig_pn, {}).get(
+                "Part Number", orig_pn
+            )
+            if snapshot_pn != orig_pn:
+                logger.debug(
+                    "_open_in_catia: falling back to snapshot PN %r (orig %r)",
+                    snapshot_pn, orig_pn,
+                )
+            if doc is None:
+                doc = _find_catia_doc_by_part_number(documents, snapshot_pn)
+
+            if doc is None:
+                QMessageBox.warning(
+                    self, "在CATIA中打开失败",
+                    f"无法在CATIA中找到零件编号为 \"{snapshot_pn}\" 的文档。\n\n"
+                    f"请确认该零件已在CATIA中打开。",
+                )
+                return
+
+            doc.activate()
+        except Exception as e:
+            QMessageBox.warning(self, "在CATIA中打开失败", f"无法在CATIA中打开文件：\n{e}")

@@ -100,8 +100,8 @@ def collect_bom_rows(
                 value = prop.value
                 if value is not None and str(value).strip():
                     return str(value)
-            except Exception as e:
-                logger.debug(f"无法从 {target} 获取用户属性 {name}: {e}")
+            except Exception: # as e:
+                pass # logger.debug(f"无法从 {target} 获取用户属性 {name}: {e}")
         return ""
 
     _total_count: int = 0
