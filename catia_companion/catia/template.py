@@ -1,8 +1,8 @@
 """
-CATPart template stamping.
+CATPart 模板刷写。
 
-Provides:
-- apply_part_template() – add standard user-defined properties to CATPart files
+提供：
+- apply_part_template() – 向 CATPart 文件添加标准用户自定义属性
 """
 
 import logging
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def _find_open_document(application, resolved_path: Path):
-    """Return the CATIA document object if *resolved_path* is already open, else ``None``."""
+    """如果 *resolved_path* 已打开则返回 CATIA 文档对象，否则返回 ``None``。"""
     try:
         docs = application.documents
         for i in range(1, docs.count + 1):
@@ -37,31 +37,28 @@ def apply_part_template(
     progress_callback=None,
     keep_open: bool = False,
 ) -> tuple[int, list[str]]:
-    """Add the standard user-defined properties to each CATPart if they are absent.
+    """如果缺少标准用户自定义属性，则向每个 CATPart 添加这些属性。
 
-    Properties are added as empty strings and the file is saved automatically
-    after stamping.  *output_folder* is accepted for API compatibility with the
-    generic :class:`~catia_companion.ui.convert_dialog.FileConvertDialog` but
-    is otherwise unused (parts are saved in place).
+    属性以空字符串添加，并在刷写后自动保存文件。*output_folder* 为与通用
+    :class:`~catia_companion.ui.convert_dialog.FileConvertDialog` 的 API
+    兼容性而接受，但实际不使用（零件就地保存）。
 
-    Parameters
+    参数
     ----------
     progress_callback:
-        Optional ``(index, total)`` callback invoked after each file is
-        processed, compatible with
-        :class:`~catia_companion.ui.convert_dialog.FileConvertDialog`.
+        可选的 ``(index, total)`` 回调，在处理每个文件后调用，与
+        :class:`~catia_companion.ui.convert_dialog.FileConvertDialog` 兼容。
     keep_open:
-        When ``True`` the document is **not** closed after stamping.  Use
-        this when operating on a document that is already open in CATIA (e.g.
-        the current active document selected via "使用当前活动文档").  When
-        ``False`` (the default), each file is opened if not already open and
-        closed afterwards only if it was not already open before stamping.
+        当为 ``True`` 时，刷写后**不**关闭文档。在操作已在 CATIA 中打开的
+        文档时使用此选项（例如通过"使用当前活动文档"选择的当前活动文档）。
+        当为 ``False``（默认值）时，如果文件尚未打开则打开，并且仅在刷写前
+        未打开时才在之后关闭。
 
-    Returns
+    返回
     -------
     tuple[int, list[str]]
-        ``(success_count, failed_messages)`` where *failed_messages* contains
-        one human-readable string per file that could not be stamped.
+        ``(success_count, failed_messages)``，其中 *failed_messages* 包含
+        每个无法刷写的文件的一个人类可读字符串。
     """
     from pycatia import catia
     from pycatia.mec_mod_interfaces.part_document import PartDocument

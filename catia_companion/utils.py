@@ -108,123 +108,18 @@ def estimate_column_width(text: str) -> int:
 # CATIA V5 embedded-thumbnail helpers
 # ---------------------------------------------------------------------------
 
-def _dib_to_bmp(dib: bytes) -> bytes | None:
-    """Prepend a BITMAPFILEHEADER to a raw DIB blob to form a valid BMP byte string.
-
-    Returns *None* if the DIB header is too short or obviously malformed.
-    """
-    if len(dib) < 4:
-        return None
-    header_size: int = struct.unpack_from("<I", dib, 0)[0]
-    if header_size < 12 or header_size > len(dib):
-        return None
-    if header_size == 12:
-        # BITMAPCOREHEADER (OS/2 v1): color entries are RGBTRIPLE (3 bytes)
-        if len(dib) < 12:
-            return None
-        bit_count: int = struct.unpack_from("<H", dib, 10)[0]
-        colors = 0 if bit_count > 8 else (1 << bit_count)
-        color_table_bytes = colors * 3
-    else:
-        # BITMAPINFOHEADER (40 bytes) and later variants
-        if len(dib) < 24:
-            return None
-        bit_count = struct.unpack_from("<H", dib, 14)[0]
-        compression = struct.unpack_from("<I", dib, 16)[0]
-        colors_used = struct.unpack_from("<I", dib, 32)[0]
-        if bit_count in (1, 4, 8):
-            colors = colors_used if colors_used else (1 << bit_count)
-            color_table_bytes = colors * 4  # RGBQUAD
-        elif compression == 3:          # BI_BITFIELDS: three DWORD color masks
-            color_table_bytes = 12
-        else:
-            color_table_bytes = 0
-    pixel_offset = 14 + header_size + color_table_bytes
-    file_size    = 14 + len(dib)
-    bmp_header   = b"BM" + struct.pack("<IHHI", file_size, 0, 0, pixel_offset)
-    return bmp_header + dib
-
-
-def _parse_pidsi_thumbnail(data: bytes) -> bytes | None:
-    """Parse an OLE ``\\x05SummaryInformation`` property stream and return the
-    raw thumbnail bytes (JPEG or reconstructed BMP), or *None* if absent.
-
-    The thumbnail is property ID 17 (``PIDSI_THUMBNAIL``), of type ``VT_CF``
-    (0x47).  The ``CLIPDATA`` payload is returned as-is when it looks like a
-    JPEG (magic ``FF D8``), or wrapped in a ``BITMAPFILEHEADER`` when the
-    clipboard format indicates ``CF_DIB`` (8).
-    """
-    if len(data) < 48:
-        return None
-    if struct.unpack_from("<H", data, 0)[0] != 0xFFFE:
-        return None
-    if struct.unpack_from("<I", data, 24)[0] < 1:
-        return None
-    sec_offset: int = struct.unpack_from("<I", data, 44)[0]
-    if sec_offset + 8 > len(data):
-        return None
-    prop_count: int = struct.unpack_from("<I", data, sec_offset + 4)[0]
-    id_base = sec_offset + 8
-    for i in range(prop_count):
-        entry = id_base + i * 8
-        if entry + 8 > len(data):
-            break
-        prop_id, prop_off = struct.unpack_from("<II", data, entry)
-        if prop_id != 17:               # PIDSI_THUMBNAIL
-            continue
-        abs_off = sec_offset + prop_off
-        if abs_off + 12 > len(data):
-            break
-        if struct.unpack_from("<I", data, abs_off)[0] != 0x0047:   # VT_CF
-            break
-        cb_size  = struct.unpack_from("<I", data, abs_off + 4)[0]
-        clip_fmt = struct.unpack_from("<i", data, abs_off + 8)[0]
-        if cb_size < 4:
-            break
-        img_bytes = data[abs_off + 12: abs_off + 4 + cb_size]
-        if not img_bytes:
-            break
-        if img_bytes[:2] == b"\xff\xd8":        # JPEG
-            return img_bytes
-        if clip_fmt == 8:                        # CF_DIB → reconstruct BMP
-            return _dib_to_bmp(img_bytes)
-        return img_bytes                         # unknown – let Qt try
-    return None
-
-
 def read_catia_thumbnail(filepath: str) -> bytes | None:
     """Extract the thumbnail from a CATIA V5 file and return raw image bytes.
 
-    On Windows, ``IShellItemImageFactory`` (the same API used by Windows
-    Explorer) is tried first.  It reads from the system thumbnail cache, so
-    repeated calls for the same file are nearly instant and no file parsing is
-    needed.
+    Uses ``IShellItemImageFactory`` (the same API used by Windows Explorer)
+    to read thumbnails from the system thumbnail cache. Repeated calls for
+    the same file are nearly instant and no file parsing is needed.
 
-    When the Shell API fails, the function falls back to reading the
-    ``\\x05SummaryInformation`` OLE stream embedded in classic CATIA V5
-    OLE2-format files.
-
-    Returns raw image bytes (BMP or JPEG) suitable for
-    ``QPixmap.loadFromData``, or *None* when no thumbnail is available.
+    Returns raw image bytes (BMP) suitable for ``QPixmap.loadFromData``,
+    or *None* when no thumbnail is available.
     """
     if sys.platform == "win32":
-        result = _read_thumbnail_via_windows_shell(filepath)
-        if result:
-            return result
-
-    # Fallback: OLE2 SummaryInformation stream (classic CATIA V5 files).
-    try:
-        import olefile
-    except ImportError:
-        return None
-    try:
-        if olefile.isOleFile(filepath):
-            with olefile.OleFileIO(filepath) as ole:
-                stream_name = "\x05SummaryInformation"
-                if ole.exists(stream_name):
-                    return _parse_pidsi_thumbnail(ole.openstream(stream_name).read())
-    except Exception:
-        pass
+        return _read_thumbnail_via_windows_shell(filepath)
     return None
 
 

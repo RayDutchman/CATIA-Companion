@@ -1,12 +1,11 @@
 """
-Generic file-conversion dialog.
+通用文件转换对话框。
 
-Provides:
-- FileConvertDialog – a reusable dialog for "pick files → run conversion function"
-  workflows.  Used for drawing-to-PDF, part-to-STEP, and template stamping.
+提供：
+- FileConvertDialog – 可复用的"选择文件 → 执行转换函数"工作流对话框。
+  用于工程图转PDF、零件转STEP以及模板刷写。
 
-Supports drag & drop of files onto the file list and shows a QProgressBar
-during conversion.
+支持将文件拖放到文件列表，并在转换期间显示 QProgressBar。
 """
 
 import logging
@@ -24,30 +23,30 @@ logger = logging.getLogger(__name__)
 
 
 class FileConvertDialog(QDialog):
-    """Dialog for selecting files and running a batch conversion function.
+    """用于选择文件并运行批量转换函数的对话框。
 
-    Parameters
+    参数
     ----------
     title:
-        Window title.
+        窗口标题。
     file_label:
-        Label shown above the file list.
+        文件列表上方显示的标签。
     file_filter:
-        File filter string for the open-file dialog (Qt format).
+        打开文件对话框的文件筛选字符串（Qt 格式）。
     no_files_msg:
-        Warning shown when the user confirms without selecting any files.
+        用户未选择任何文件就确认时显示的警告。
     conversion_fn:
-        Callable invoked as ``conversion_fn(files, output_folder)`` or
+        转换函数，调用为 ``conversion_fn(files, output_folder)`` 或
         ``conversion_fn(files, output_folder, prefix=..., suffix=...)``
-        when *show_prefix_option* is ``True``.
+        （当 *show_prefix_option* 为 ``True`` 时）。
     settings_key:
-        Key suffix used to persist settings in QSettings.
+        用于在 QSettings 中持久化设置的键后缀。
     show_prefix_option:
-        Whether to show the prefix / suffix input rows.
+        是否显示前缀/后缀输入行。
     prefix:
-        Default prefix value.
+        默认前缀值。
     note:
-        Optional grey hint text displayed below the controls.
+        在控件下方显示的可选灰色提示文本。
     """
 
     def __init__(

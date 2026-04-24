@@ -11,12 +11,12 @@ _ITEM_LOCKED_ROLE: int = Qt.ItemDataRole.UserRole + 1
 
 
 class _BomTreeDelegate(QStyledItemDelegate):
-    """Per-column read-only enforcement for the BOM QTreeWidget.
+    """BOM QTreeWidget 的逐列只读强制委托。
 
-    QTreeWidgetItem flags are row-wide; this delegate returns ``None`` from
-    :meth:`createEditor` for any column whose internal name belongs to
-    :data:`~catia_companion.constants.BOM_READONLY_COLUMNS`, and also for
-    any row that has been marked locked (file not found / unreadable).
+    QTreeWidgetItem 的 flags 是按行设置的；此委托对内部名称属于
+    :data:`~catia_companion.constants.BOM_READONLY_COLUMNS` 的列，
+    以及被标记为锁定的行（文件未找到/不可读）从 :meth:`createEditor`
+    返回 ``None``，从而阻止编辑。
     """
 
     def __init__(self, cols_fn, tree: QTreeWidget) -> None:
@@ -35,13 +35,11 @@ class _BomTreeDelegate(QStyledItemDelegate):
 
 
 class _BomTreeWidget(QTreeWidget):
-    """QTreeWidget that draws Windows-Regedit-style dotted connector lines.
+    """绘制 Windows 注册表编辑器风格点状连接线的 QTreeWidget。
 
-    Qt's default Windows/Fusion styles omit the vertical guide lines that
-    connect parent and child nodes.  This subclass overrides
-    :meth:`drawBranches` to paint 1-pixel-on / 1-pixel-off dotted lines
-    (keyed on absolute viewport coordinates so vertical guides remain
-    phase-consistent across consecutive rows).
+    Qt 的默认 Windows/Fusion 样式省略了连接父节点和子节点的垂直导向线。
+    此子类重写 :meth:`drawBranches` 以绘制 1像素实线/1像素空白的点状虚线
+    （基于绝对视口坐标，以确保垂直导向线在连续行之间保持相位一致）。
     """
 
     _LINE_COLOR = QColor("#a0aab4")

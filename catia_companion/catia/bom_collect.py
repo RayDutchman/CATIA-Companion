@@ -137,10 +137,18 @@ def collect_bom_rows(
         is_readable = True
 
         if not cached:
+            # Performance optimization: Check current work mode before switching
+            # to avoid unnecessary DESIGN_MODE transitions (costly COM calls)
             try:
-                product.apply_work_mode(CatWorkModeType.DESIGN_MODE)
+                current_mode = product.get_work_mode()
+                if current_mode != CatWorkModeType.DESIGN_MODE:
+                    product.apply_work_mode(CatWorkModeType.DESIGN_MODE)
             except Exception:
-                is_readable = False
+                # If get_work_mode fails, try apply_work_mode anyway
+                try:
+                    product.apply_work_mode(CatWorkModeType.DESIGN_MODE)
+                except Exception:
+                    is_readable = False
 
             props: dict = {}
             for col in columns:

@@ -16,9 +16,9 @@ from PySide6.QtWidgets import (
     QPushButton, QTreeWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QCheckBox, QGroupBox, QMessageBox, QApplication,
     QFileDialog, QProgressDialog, QRadioButton, QButtonGroup,
-    QMenu, QWidgetAction,
+    QMenu, QWidgetAction, QLineEdit, QGridLayout
 )
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QColor
 from PySide6.QtCore import Qt, QSettings
 
 from catia_companion.constants import (
@@ -26,6 +26,7 @@ from catia_companion.constants import (
     BOM_EDIT_COLUMN_ORDER,
     BOM_COLUMN_DISPLAY_NAMES,
     BOM_READONLY_COLUMNS,
+    BOM_HIDEABLE_COLUMNS,
     SOURCE_TO_DISPLAY,
     SOURCE_OPTIONS,
     PART_NUMBER_VALID_PATTERN,
@@ -85,6 +86,14 @@ class BomEditDialog(QDialog):
             c for c in saved_visible if c in PRESET_USER_REF_PROPERTIES
         ]
 
+        # Visible hideable standard columns (Nomenclature, Revision, Definition, Source)
+        saved_hideable = self._edit_settings.value("visible_hideable_columns", BOM_HIDEABLE_COLUMNS)
+        if isinstance(saved_hideable, str):
+            saved_hideable = [saved_hideable]
+        self._visible_hideable_cols: list[str] = [
+            c for c in saved_hideable if c in BOM_HIDEABLE_COLUMNS
+        ]
+
         self._summarize: bool = self._edit_settings.value("summarize", False, type=bool)
         self._summary_include_assemblies: bool = self._edit_settings.value(
             "summary_include_assemblies", False, type=bool
@@ -126,6 +135,9 @@ class BomEditDialog(QDialog):
         # Raw (hierarchical) BOM rows as returned by collect_bom_rows(); used to
         # reconstruct the display rows when the user toggles the BOM type.
         self._raw_rows: list[dict] = []
+        # PN→Items index for fast linked updates (Performance optimization)
+        # Maps Part Number to list of QTreeWidgetItems with that PN
+        self._pn_to_items: dict[str, list[QTreeWidgetItem]] = {}
 
         # ── Layout ────────────────────────────────────────────────────────────
         layout = QVBoxLayout(self)
@@ -152,6 +164,7 @@ class BomEditDialog(QDialog):
 
         # ── BOM type + display options (single compact group) ────────────────
         display_group  = QGroupBox("BOM类型与显示选项")
+        display_group.setMinimumHeight(60)  # Prevent height jumping when switching BOM types
         display_layout = QVBoxLayout(display_group)
         display_layout.setSpacing(4)
         display_layout.setContentsMargins(8, 6, 8, 6)
@@ -216,29 +229,58 @@ class BomEditDialog(QDialog):
         hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(hint)
 
-        # Preset column visibility checkboxes
-        preset_group  = QGroupBox("自定义属性列（勾选以显示）")
-        preset_layout = QHBoxLayout(preset_group)
-        preset_layout.setSpacing(12)
+        # Preset column visibility checkboxes (2 rows layout with grid for alignment)
+        preset_group  = QGroupBox("属性列（勾选以显示）")
+        preset_main_layout = QVBoxLayout(preset_group)
+        preset_main_layout.setSpacing(8)
+        preset_main_layout.setContentsMargins(8, 6, 8, 6)
+
+        # Use QGridLayout for proper alignment and even distribution
+        grid_layout = QGridLayout()
+        grid_layout.setSpacing(12)
+        grid_layout.setColumnStretch(100, 1)  # Add stretch at the end
+
         self._preset_checkboxes: dict[str, QCheckBox] = {}
+
+        # Row 0: Filename checkbox + 显示完整路径 + hideable standard columns
+        col = 0
+
         # "Filename" is a built-in column but can be toggled like a preset
         fn_cb = QCheckBox(BOM_COLUMN_DISPLAY_NAMES.get("Filename", "Filename"))
         fn_cb.setChecked(self._show_filename_col)
         fn_cb.toggled.connect(self._on_preset_col_toggled)
-        preset_layout.addWidget(fn_cb)
+        grid_layout.addWidget(fn_cb, 0, col)
         self._preset_checkboxes["Filename"] = fn_cb
+        col += 1
+
         # "显示完整路径" follows immediately after the Filename checkbox
         self._filepath_chk = QCheckBox("显示完整路径")
         self._filepath_chk.setToolTip("勾选后文件名列将显示文件完整路径（含目录），而非仅文件名")
         self._filepath_chk.setChecked(self._show_filepath_col)
         self._filepath_chk.toggled.connect(self._on_show_filepath_toggled)
-        preset_layout.addWidget(self._filepath_chk)
+        grid_layout.addWidget(self._filepath_chk, 0, col)
+        col += 1
+
+        # Hideable standard columns (Nomenclature, Revision, Definition, Source)
+        for col_name in BOM_HIDEABLE_COLUMNS:
+            cb = QCheckBox(BOM_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
+            cb.setChecked(col_name in self._visible_hideable_cols)
+            cb.toggled.connect(self._on_hideable_col_toggled)
+            grid_layout.addWidget(cb, 0, col)
+            self._preset_checkboxes[col_name] = cb
+            col += 1
+
+        # Row 1: Preset user-defined properties (物料编码, 物料名称, etc.)
+        col = 0
         for col_name in PRESET_USER_REF_PROPERTIES:
             cb = QCheckBox(col_name)
             cb.setChecked(col_name in self._visible_preset_cols)
             cb.toggled.connect(self._on_preset_col_toggled)
-            preset_layout.addWidget(cb)
+            grid_layout.addWidget(cb, 1, col)
             self._preset_checkboxes[col_name] = cb
+            col += 1
+
+        preset_main_layout.addLayout(grid_layout)
         layout.addWidget(preset_group)
 
         # BOM tree widget (replaces QTableWidget; tree handles expand/collapse natively)
@@ -399,8 +441,11 @@ class BomEditDialog(QDialog):
 
     def _build_visible_columns(self) -> list[str]:
         base = list(BOM_EDIT_COLUMN_ORDER)
+        # Filter out hidden columns (Filename and hideable columns)
         if not self._show_filename_col:
             base = [c for c in base if c != "Filename"]
+        # Filter out hidden hideable columns
+        base = [c for c in base if c not in BOM_HIDEABLE_COLUMNS or c in self._visible_hideable_cols]
         if self._summarize:
             # In summary mode Level has no meaning; also hide Type unless assemblies shown
             cols_to_hide = {"Level"}
@@ -425,9 +470,18 @@ class BomEditDialog(QDialog):
                 self._edit_settings.setValue("show_filename_column", self._show_filename_col)
         self._visible_preset_cols = [
             name for name, cb in self._preset_checkboxes.items()
-            if name != "Filename" and cb.isChecked()
+            if name != "Filename" and name not in BOM_HIDEABLE_COLUMNS and cb.isChecked()
         ]
         self._edit_settings.setValue("visible_preset_columns", self._visible_preset_cols)
+        self._rebuild_columns_and_repopulate()
+
+    def _on_hideable_col_toggled(self) -> None:
+        """Handle hideable column checkbox toggle (Nomenclature, Revision, Definition, Source)."""
+        self._visible_hideable_cols = [
+            name for name, cb in self._preset_checkboxes.items()
+            if name in BOM_HIDEABLE_COLUMNS and cb.isChecked()
+        ]
+        self._edit_settings.setValue("visible_hideable_columns", self._visible_hideable_cols)
         self._rebuild_columns_and_repopulate()
 
     def _on_show_filepath_toggled(self, checked: bool) -> None:
@@ -565,6 +619,7 @@ class BomEditDialog(QDialog):
         self._table.clear()                          # removes all items; headers persist
         self._table.setHeaderLabels(self._display_headers())
         self._item_by_row = []
+        self._pn_to_items.clear()  # Reset PN→Item index
 
         # parent_stack: list of (level, item_or_None)
         # The sentinel at position 0 represents the invisible root (level −1).
@@ -594,6 +649,10 @@ class BomEditDialog(QDialog):
             not_found  = bool(row_data.get("_not_found"))
             unreadable = bool(row_data.get("_unreadable"))
             row_locked = unreadable or not_found
+
+            # Build PN→Item index for fast linked updates
+            if pn:
+                self._pn_to_items.setdefault(pn, []).append(item)
 
             for col_idx, col_name in enumerate(self._columns):
 
@@ -710,18 +769,16 @@ class BomEditDialog(QDialog):
                 self._canonical_data[pn]["Source"] = text
                 self._modified_keys.setdefault(pn, set()).add("Source")
 
+        # Performance optimization: use PN→Item index instead of full tree traversal
         self._is_updating = True
-        for other_item in self._iter_all_items():
-            other_row_idx = other_item.data(0, Qt.ItemDataRole.UserRole)
-            if other_row_idx is None or other_row_idx == row_idx:
-                continue
-            other_pn = str(self._rows[other_row_idx].get("Part Number", ""))
-            if other_pn in pns_to_update:
-                combo = self._table.itemWidget(other_item, src_col_idx)
-                if isinstance(combo, QComboBox) and combo.currentText() != text:
-                    combo.blockSignals(True)
-                    combo.setCurrentText(text)
-                    combo.blockSignals(False)
+        for pn in pns_to_update:
+            if pn in self._pn_to_items:
+                for other_item in self._pn_to_items[pn]:
+                    combo = self._table.itemWidget(other_item, src_col_idx)
+                    if isinstance(combo, QComboBox) and combo.currentText() != text:
+                        combo.blockSignals(True)
+                        combo.setCurrentText(text)
+                        combo.blockSignals(False)
         self._is_updating = False
 
     # ── Regular cell edit ─────────────────────────────────────────────────────
@@ -818,17 +875,13 @@ class BomEditDialog(QDialog):
                     self._canonical_data[r_pn][col_name] = new_value
                     self._modified_keys.setdefault(r_pn, set()).add(col_name)
 
+        # Performance optimization: use PN→Item index instead of full tree traversal
         self._is_updating = True
-        for other_item in self._iter_all_items():
-            if other_item is item:
-                continue
-            other_row_idx = other_item.data(0, Qt.ItemDataRole.UserRole)
-            if other_row_idx is None:
-                continue
-            other_pn = str(self._rows[other_row_idx].get("Part Number", ""))
-            if other_pn in pns_to_update:
-                if other_item.text(col_idx) != new_value:
-                    other_item.setText(col_idx, new_value)
+        for pn in pns_to_update:
+            if pn in self._pn_to_items:
+                for other_item in self._pn_to_items[pn]:
+                    if other_item.text(col_idx) != new_value:
+                        other_item.setText(col_idx, new_value)
         self._is_updating = False
 
     # ── Write-back ────────────────────────────────────────────────────────────
@@ -880,6 +933,23 @@ class BomEditDialog(QDialog):
 
         renamed_count = 0
 
+        # Performance optimization: Build document cache once to avoid repeated scans
+        from pycatia import catia as _pycatia
+        caa         = _pycatia()
+        application = caa.application
+        application.visible = True
+        documents   = application.documents
+
+        # Cache: filepath → document
+        doc_cache: dict[Path, object] = {}
+        for i in range(1, documents.count + 1):
+            try:
+                doc = documents.item(i)
+                doc_path = Path(doc.full_name).resolve()
+                doc_cache[doc_path] = doc
+            except Exception:
+                pass
+
         for fp, pn in reversed(to_rename):
             if not PART_NUMBER_VALID_PATTERN.fullmatch(pn):
                 QMessageBox.warning(
@@ -898,17 +968,15 @@ class BomEditDialog(QDialog):
             target_existed_before = Path(new_fp).exists()
 
             try:
-                from pycatia import catia as _pycatia
-                caa         = _pycatia()
-                application = caa.application
-                application.visible = True
-                documents   = application.documents
-                src         = Path(fp).resolve()
+                src = Path(fp).resolve()
 
-                target_doc = _find_catia_doc_by_path(documents, src)
+                # Use cache for fast lookup
+                target_doc = doc_cache.get(src)
                 if target_doc is None:
                     documents.open(str(src))
                     target_doc = _find_catia_doc_by_path(documents, src)
+                    if target_doc:
+                        doc_cache[src] = target_doc
 
                 if target_doc is None:
                     QMessageBox.warning(
@@ -934,6 +1002,12 @@ class BomEditDialog(QDialog):
                         row["_filepath"] = new_fp
                         row["Filename"]  = pn
                 renamed_count += 1
+
+                # Update cache with new path
+                if Path(new_fp).resolve() != src:
+                    doc_cache[Path(new_fp).resolve()] = target_doc
+                    if src in doc_cache:
+                        del doc_cache[src]
 
             except Exception as e:
                 # Only treat the exception as a user-initiated cancel when:
@@ -1020,6 +1094,8 @@ class BomEditDialog(QDialog):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             ) == QMessageBox.StandardButton.Yes
         )
+
+        QMessageBox.information(self, "请在CATIA中继续操作", "准备就绪，请在CATIA中确认后续操作。")
 
         try:
             from pycatia import catia as _pycatia

@@ -96,6 +96,10 @@ FILENAME_NOT_FOUND: str = "未检索到"
 # Columns that are structural / derived – shown read-only in the edit table
 BOM_READONLY_COLUMNS: frozenset[str] = frozenset({"Level", "Type", "Filename", "Filepath", "Quantity"})
 
+# Standard BOM columns that can be hidden in the edit dialog
+# These are properties that users might not need to see/edit
+BOM_HIDEABLE_COLUMNS: list[str] = ["Nomenclature", "Revision", "Definition", "Source"]
+
 # Column order used in the BOM edit dialog (internal names)
 BOM_EDIT_COLUMN_ORDER: list[str] = [
     "Level", "Type", "Filename", "Part Number", "Quantity",

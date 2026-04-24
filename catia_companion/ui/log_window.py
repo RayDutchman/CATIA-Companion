@@ -1,8 +1,8 @@
 """
-Log window widget.
+日志窗口控件。
 
-Provides:
-- LogWindow – a floating, non-closeable QWidget that displays application logs
+提供：
+- LogWindow – 显示应用程序日志的浮动、不可关闭 QWidget
 """
 
 import sys
@@ -19,13 +19,12 @@ logger = logging.getLogger(__name__)
 
 
 class LogWindow(QWidget):
-    """Floating log viewer window.
+    """浮动日志查看器窗口。
 
-    Subscribes to :data:`~catia_companion.logging_setup.log_signal_emitter`
-    to receive formatted log messages in real time.
+    订阅 :data:`~catia_companion.logging_setup.log_signal_emitter`
+    以实时接收格式化的日志消息。
 
-    Closing the window hides it rather than destroying it so that the log
-    history is preserved.
+    关闭窗口会隐藏而不是销毁它，以便保留日志历史记录。
     """
 
     def __init__(self, parent=None) -> None:

@@ -1,5 +1,5 @@
 """
-Help dialog – displays user documentation in a scrollable rich-text window.
+帮助对话框 – 在可滚动的富文本窗口中显示用户文档。
 """
 
 from PySide6.QtWidgets import (
