@@ -138,6 +138,9 @@ class BomEditDialog(QDialog):
         # PN→Items index for fast linked updates (Performance optimization)
         # Maps Part Number to list of QTreeWidgetItems with that PN
         self._pn_to_items: dict[str, list[QTreeWidgetItem]] = {}
+        # Column-name → pixel width cache; persists across column visibility toggles
+        # so user-adjusted widths survive adding/removing columns.
+        self._col_widths: dict[str, int] = {}
 
         # ── Layout ────────────────────────────────────────────────────────────
         layout = QVBoxLayout(self)
@@ -302,6 +305,7 @@ class BomEditDialog(QDialog):
         self._table.setIndentation(16)
         self._table.setStyleSheet("QTreeWidget::item { min-height: 24px; }")
         self._table.itemChanged.connect(self._on_item_changed)
+        hdr.sectionResized.connect(self._on_section_resized)
         _delegate = _BomTreeDelegate(lambda: self._columns, self._table)
         self._table.setItemDelegate(_delegate)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -412,21 +416,36 @@ class BomEditDialog(QDialog):
         """Resize all columns to fit their content, with a minimum width."""
         # QTreeWidget has resizeColumnToContents(int) not resizeColumnsToContents()
         min_width = 60
-        for col in range(self._table.columnCount()):
-            self._table.resizeColumnToContents(col)
-            if self._table.columnWidth(col) < min_width:
-                self._table.setColumnWidth(col, min_width)
+        for col_idx, col_name in enumerate(self._columns):
+            self._table.resizeColumnToContents(col_idx)
+            if self._table.columnWidth(col_idx) < min_width:
+                self._table.setColumnWidth(col_idx, min_width)
+            # Update the cache so subsequent column-visibility toggles keep these widths
+            self._col_widths[col_name] = self._table.columnWidth(col_idx)
+
+    def _on_section_resized(self, logical_index: int, _old_size: int, new_size: int) -> None:
+        """Cache the new width whenever the user (or code) resizes a column."""
+        if logical_index < len(self._columns):
+            self._col_widths[self._columns[logical_index]] = new_size
 
     def _rebuild_columns_and_repopulate(self) -> None:
         """Rebuild the visible column list, update headers, and repopulate if rows are loaded."""
+        # Save current pixel widths by column name before the column list changes
+        for col_idx, col_name in enumerate(self._columns):
+            self._col_widths[col_name] = self._table.columnWidth(col_idx)
+
         self._columns = self._build_visible_columns()
         _headers = self._display_headers()
         self._table.setColumnCount(len(_headers))
         self._table.setHeaderLabels(_headers)
         if self._rows:
             self._populate_table()
-            for col in range(self._table.columnCount()):
-                self._table.resizeColumnToContents(col)
+            # Restore saved widths; auto-fit only columns that have no saved width yet
+            for col_idx, col_name in enumerate(self._columns):
+                if col_name in self._col_widths:
+                    self._table.setColumnWidth(col_idx, self._col_widths[col_name])
+                else:
+                    self._table.resizeColumnToContents(col_idx)
 
     # ── Preset column helpers ─────────────────────────────────────────────────
 
@@ -597,20 +616,23 @@ class BomEditDialog(QDialog):
         self._snapshot_data  = copy.deepcopy(self._canonical_data)
         self._modified_keys.clear()
 
-        saved_widths = (
-            [self._table.columnWidth(i) for i in range(self._table.columnCount())]
-            if self._bom_loaded else []
-        )
+        # Save current widths by column name before repopulating
+        if self._bom_loaded:
+            for col_idx, col_name in enumerate(self._columns):
+                self._col_widths[col_name] = self._table.columnWidth(col_idx)
 
         self._populate_table()
         if not self._bom_loaded:
-            for _c in range(self._table.columnCount()):
+            # First load: auto-fit all columns and seed the cache
+            for _c, col_name in enumerate(self._columns):
                 self._table.resizeColumnToContents(_c)
+                self._col_widths[col_name] = self._table.columnWidth(_c)
             self._bom_loaded = True
         else:
-            for i, w in enumerate(saved_widths):
-                if i < self._table.columnCount():
-                    self._table.setColumnWidth(i, w)
+            # Subsequent reloads: restore saved widths by column name
+            for col_idx, col_name in enumerate(self._columns):
+                if col_name in self._col_widths:
+                    self._table.setColumnWidth(col_idx, self._col_widths[col_name])
 
         self._save_btn.setEnabled(True)
         self._finish_btn.setEnabled(True)
