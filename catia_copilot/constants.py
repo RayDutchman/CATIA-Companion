@@ -95,8 +95,11 @@ BOM_DEFAULT_COLUMNS: list[str] = [
 # cannot be resolved via COM (the product is "not found").
 FILENAME_NOT_FOUND: str = "未检索到"
 
+# Sentinel internal column name for the row-number column (always first, read-only)
+BOM_ROW_NUMBER_COLUMN: str = "#"
+
 # Columns that are structural / derived – shown read-only in the edit table
-BOM_READONLY_COLUMNS: frozenset[str] = frozenset({"Level", "Type", "Filename", "Filepath", "Quantity"})
+BOM_READONLY_COLUMNS: frozenset[str] = frozenset({"#", "Level", "Type", "Filename", "Filepath", "Quantity"})
 
 # Standard BOM columns that can be hidden in the edit dialog
 # These are properties that users might not need to see/edit
@@ -110,6 +113,7 @@ BOM_EDIT_COLUMN_ORDER: list[str] = [
 
 # Internal column name → Chinese display name
 BOM_COLUMN_DISPLAY_NAMES: dict[str, str] = {
+    "#":            "#",
     "Level":        "层级",
     "Type":         "类型",
     "Filename":     "文件名",

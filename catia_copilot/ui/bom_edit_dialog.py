@@ -27,6 +27,7 @@ from catia_copilot.constants import (
     BOM_COLUMN_DISPLAY_NAMES,
     BOM_READONLY_COLUMNS,
     BOM_HIDEABLE_COLUMNS,
+    BOM_ROW_NUMBER_COLUMN,
     SOURCE_TO_DISPLAY,
     SOURCE_OPTIONS,
     PART_NUMBER_VALID_PATTERN,
@@ -438,6 +439,9 @@ class BomEditDialog(QDialog):
         self._table.setColumnCount(len(_headers))
         self._table.setHeaderLabels(_headers)
         if self._rows:
+            # Preserve the user's current scroll position across the repopulate
+            vscroll = self._table.verticalScrollBar().value()
+            hscroll = self._table.horizontalScrollBar().value()
             self._populate_table()
             # Restore saved widths; auto-fit only columns that have no saved width yet
             for col_idx, col_name in enumerate(self._columns):
@@ -445,6 +449,9 @@ class BomEditDialog(QDialog):
                     self._table.setColumnWidth(col_idx, self._col_widths[col_name])
                 else:
                     self._table.resizeColumnToContents(col_idx)
+            # Restore scroll position
+            self._table.verticalScrollBar().setValue(vscroll)
+            self._table.horizontalScrollBar().setValue(hscroll)
 
     # ── Preset column helpers ─────────────────────────────────────────────────
 
@@ -482,7 +489,17 @@ class BomEditDialog(QDialog):
             c for c in self._custom_columns
             if c not in BOM_EDIT_COLUMN_ORDER and c not in PRESET_USER_REF_PROPERTIES
         ]
-        return base + visible_preset + other_custom
+        # Insert "#" immediately after "Level" (column 0 → Level, column 1 → "#")
+        # so that the QTreeWidget tree-decoration (branch lines) stays in the
+        # Level column (logical index 0).  In summary mode Level is hidden, so
+        # "#" falls to the front (column 0) which is fine.
+        result = base + visible_preset + other_custom
+        if "Level" in result:
+            level_idx = result.index("Level")
+            result.insert(level_idx + 1, BOM_ROW_NUMBER_COLUMN)
+        else:
+            result.insert(0, BOM_ROW_NUMBER_COLUMN)
+        return result
 
     def _on_preset_col_toggled(self) -> None:
         # "Filename" checkbox controls the built-in filename column visibility
@@ -622,10 +639,15 @@ class BomEditDialog(QDialog):
 
         self._populate_table()
         if not self._bom_loaded:
-            # First load: auto-fit all columns and seed the cache
+            # First load: auto-fit all columns and seed the cache; '#' gets a
+            # fixed default of 40 px (resizable afterwards like any other column)
             for _c, col_name in enumerate(self._columns):
-                self._table.resizeColumnToContents(_c)
-                self._col_widths[col_name] = self._table.columnWidth(_c)
+                if col_name == BOM_ROW_NUMBER_COLUMN:
+                    self._table.setColumnWidth(_c, 40)
+                    self._col_widths[col_name] = 40
+                else:
+                    self._table.resizeColumnToContents(_c)
+                    self._col_widths[col_name] = self._table.columnWidth(_c)
             self._bom_loaded = True
         else:
             # Subsequent reloads: restore saved widths by column name
@@ -641,6 +663,12 @@ class BomEditDialog(QDialog):
     def _populate_table(self) -> None:
         self._is_updating = True
         self._table.blockSignals(True)
+
+        # Summary mode: all rows are flat top-level items with no children.
+        # Keeping setRootIsDecorated(True) reserves space for the expand arrow on
+        # every row, which pushes column-0 content to the right.  Disable it in
+        # summary mode; re-enable it in hierarchical mode so expand arrows show.
+        self._table.setRootIsDecorated(not self._summarize)
 
         self._table.clear()                          # removes all items; headers persist
         headers = self._display_headers()
@@ -707,12 +735,20 @@ class BomEditDialog(QDialog):
                     continue
 
                 # All other columns → item text
-                if col_name == "Quantity":
+                if col_name == BOM_ROW_NUMBER_COLUMN:
+                    value = str(row_idx + 1)
+                elif col_name == "Quantity":
                     value = str(row_data.get("Quantity", "1"))
                 elif col_name == "Filename":
                     fp = str(row_data.get("_filepath", ""))
                     fn = str(row_data.get("Filename", ""))
-                    value = (fp if fp else fn) if self._show_filepath_col else fn
+                    if self._show_filepath_col:
+                        value = fp if fp else fn
+                    else:
+                        # Always show filename with extension when the backing
+                        # path is known; fall back to the stored stem (which may
+                        # equal FILENAME_NOT_FOUND) when it is not.
+                        value = Path(fp).name if fp else fn
                 elif col_name == "Filepath":
                     value = str(row_data.get("_filepath", ""))
                 elif col_name in BOM_READONLY_COLUMNS:
@@ -730,9 +766,12 @@ class BomEditDialog(QDialog):
                     fn = str(row_data.get("Filename", ""))
                     if fp:
                         if self._show_filepath_col:
-                            if fn and fn != FILENAME_NOT_FOUND:
-                                item.setToolTip(col_idx, fn)
+                            # Column shows full path; tooltip shows just name+ext
+                            name_with_ext = Path(fp).name
+                            if name_with_ext and name_with_ext != FILENAME_NOT_FOUND:
+                                item.setToolTip(col_idx, name_with_ext)
                         else:
+                            # Column shows name+ext; tooltip shows full path
                             item.setToolTip(col_idx, fp)
 
             # Non-locked rows: allow in-place editing (delegate blocks read-only columns)
