@@ -407,7 +407,7 @@ Public Sub ContinueSelectProduct()
         ' 装配完成后的状态更新在 PlaceFastenerAtHole 中已完成
         CATIA.StatusBar = "已装配 " & g_count & " 个 " & g_fastenerPN & " -> " & g_targetPN & _
                           "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
-                          "  可点击翻转按钮修改方向，选下一孔继续，ESC结束"
+                          "  可点击翻转/撤销按钮修改，选下一孔继续，点"停止装配"按钮结束"
 
         End If  ' bHoleGeomOK
 
@@ -794,9 +794,14 @@ End Function
 '   - 将窗体 (Name) 设为 "FlipForm"，Caption 设为 "方向控制"。
 '   - 添加一个 Label：
 '       (Name)   = "lblWarning"
-'       Caption  = "⚠ 注意：请使用下方"停止装配"按钮结束，按ESC可能导致装配异常"
+'       Caption  = "⚠ 重要警告 ⚠" & Chr(10) & _
+'                  "按 ESC 会导致：" & Chr(10) & _
+'                  "• 翻转的零件重新翻转回去" & Chr(10) & _
+'                  "• 撤销的零件重新出现" & Chr(10) & _
+'                  "请务必使用下方"停止装配"按钮！"
 '       ForeColor = &H000000FF& (红色)
-'       Width    = 180  Height = 40（可按需调整）
+'       Font.Bold = True
+'       Width    = 200  Height = 80（可按需调整）
 '       WordWrap = True
 '   - 添加三个 CommandButton（从上到下排列）：
 '       (Name)   = "btnFlip"
@@ -828,16 +833,9 @@ End Function
 '      ' 则直接将已有紧固件移动到翻转后的位置（不删除重建）。
 '      If g_hasLastComp Then
 '          Call MoveLastFastener()
-'
-'          ' 【关键】强制提交事务，防止 ESC 回滚翻转操作
-'          ' 通过 Selection.Clear 创建新的事务边界
-'          Dim sel As Selection
-'          Set sel = CATIA.ActiveDocument.Selection
-'          sel.Clear
-'
 '          CATIA.StatusBar = "已重新定向（方向翻转）" & g_count & " 个 " & g_fastenerPN & _
 '                            "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
-'                            "  选下一孔继续，ESC结束"
+'                            "  选下一孔继续，点"停止装配"按钮结束"
 '      End If
 '
 '      ' 重新启用按钮
@@ -853,12 +851,6 @@ End Function
 '      ' === 执行撤销操作 ===
 '      If g_historyCount > 0 Then
 '          Call UndoLastFastener()
-'
-'          ' 【关键】强制提交事务，防止 ESC 回滚撤销操作
-'          ' 通过 Selection.Clear 创建新的事务边界
-'          Dim sel As Selection
-'          Set sel = CATIA.ActiveDocument.Selection
-'          sel.Clear
 '      End If
 '
 '      ' 重新启用按钮（如果还有历史记录）
