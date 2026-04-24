@@ -326,9 +326,6 @@ Public Sub ContinueSelectProduct()
         Dim bHoleGeomOK As Boolean
 
         ' ── 选择安装孔的第一个圆 ──────────────────────────────────────────
-        ' 禁用翻转按钮，防止在 SelectElement2 期间按下翻转按钮
-        FlipForm.btnFlip.Enabled = False
-
         status = sel.SelectElement2(holeFilter, _
             "选择安装孔的第一个圆 (" & g_nutPlatePN & " -> " & g_targetPN & _
             "  已装配:" & g_count & ")  [ESC终止]", False)
@@ -336,11 +333,6 @@ Public Sub ContinueSelectProduct()
             g_loopActive = False
             g_hasLastComp = False
             Exit Do
-        End If
-
-        ' 恢复翻转按钮状态（若有最近装配的托板螺母）
-        If g_hasLastComp Then
-            FlipForm.btnFlip.Enabled = True
         End If
 
         ' 取当前选中项所属的叶层产品（具体实例）。
@@ -383,9 +375,6 @@ Public Sub ContinueSelectProduct()
             Loop
 
             ' ── 选择安装孔的第二个圆 ──────────────────────────────────────
-            ' 禁用翻转按钮，防止在 SelectElement2 期间按下翻转按钮
-            FlipForm.btnFlip.Enabled = False
-
             status = sel.SelectElement2(holeFilter, _
                 "选择安装孔的第二个圆 (" & g_nutPlatePN & " -> " & g_targetPN & _
                 "  已装配:" & g_count & ")  [ESC终止]", False)
@@ -393,11 +382,6 @@ Public Sub ContinueSelectProduct()
                 g_loopActive = False
                 g_hasLastComp = False
                 Exit Do
-            End If
-
-            ' 恢复翻转按钮状态（若有最近装配的托板螺母）
-            If g_hasLastComp Then
-                FlipForm.btnFlip.Enabled = True
             End If
 
             Set hole2Ref = sel.Item(1).Reference
@@ -935,6 +919,11 @@ End Function
 '
 '  Private Sub btnFlip_Click()
 '      If Not g_loopActive Then Exit Sub
+'
+'      ' 暂时禁用 ESC 的默认行为，防止 ESC 在操作期间触发按钮事件
+'      Me.SetControlsToExecute = Array()
+'
+'      ' === 执行翻转操作 ===
 '      g_flipDir = Not g_flipDir
 '      btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
 '      ' 如果当前可翻转重装（装配后尚未选下一孔），
@@ -945,13 +934,24 @@ End Function
 '                            "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
 '                            "  选下一孔继续，ESC结束"
 '      End If
+'
+'      ' 恢复 ESC 的正常功能（如需要的话）
+'      ' Me.SetControlsToExecute = Array(Me.btnFlip)  ' 根据需要恢复
 '  End Sub
 '
 '  Private Sub btnUndo_Click()
 '      If Not g_loopActive Then Exit Sub
+'
+'      ' 暂时禁用 ESC 的默认行为，防止 ESC 在操作期间触发按钮事件
+'      Me.SetControlsToExecute = Array()
+'
+'      ' === 执行撤销操作 ===
 '      If g_historyCount > 0 Then
 '          Call UndoLastNutPlate()
 '      End If
+'
+'      ' 恢复 ESC 的正常功能（如需要的话）
+'      ' Me.SetControlsToExecute = Array(Me.btnUndo)  ' 根据需要恢复
 '  End Sub
 '
 ' ---------------------------------------------------------------------------
