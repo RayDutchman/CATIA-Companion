@@ -113,7 +113,7 @@ BOM_EDIT_COLUMN_ORDER: list[str] = [
 
 # Internal column name → Chinese display name
 BOM_COLUMN_DISPLAY_NAMES: dict[str, str] = {
-    "#":            "行号",
+    "#":            "#",
     "Level":        "层级",
     "Type":         "类型",
     "Filename":     "文件名",

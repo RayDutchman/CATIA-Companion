@@ -417,22 +417,37 @@ class BomEditDialog(QDialog):
         # QTreeWidget has resizeColumnToContents(int) not resizeColumnsToContents()
         min_width = 60
         for col_idx, col_name in enumerate(self._columns):
+            if col_name == BOM_ROW_NUMBER_COLUMN:
+                continue
             self._table.resizeColumnToContents(col_idx)
             if self._table.columnWidth(col_idx) < min_width:
                 self._table.setColumnWidth(col_idx, min_width)
             # Update the cache so subsequent column-visibility toggles keep these widths
             self._col_widths[col_name] = self._table.columnWidth(col_idx)
+        self._pin_rownumber_width()
 
     def _on_section_resized(self, logical_index: int, _old_size: int, new_size: int) -> None:
         """Cache the new width whenever the user (or code) resizes a column."""
         if logical_index < len(self._columns):
-            self._col_widths[self._columns[logical_index]] = new_size
+            col_name = self._columns[logical_index]
+            if col_name != BOM_ROW_NUMBER_COLUMN:
+                self._col_widths[col_name] = new_size
+
+    _ROW_NUMBER_WIDTH: int = 40  # px – enough for 3-digit row numbers
+
+    def _pin_rownumber_width(self) -> None:
+        """Set the '#' column to a fixed narrow width after every populate."""
+        if BOM_ROW_NUMBER_COLUMN not in self._columns:
+            return
+        rn_idx = self._columns.index(BOM_ROW_NUMBER_COLUMN)
+        self._table.setColumnWidth(rn_idx, self._ROW_NUMBER_WIDTH)
 
     def _rebuild_columns_and_repopulate(self) -> None:
         """Rebuild the visible column list, update headers, and repopulate if rows are loaded."""
         # Save current pixel widths by column name before the column list changes
         for col_idx, col_name in enumerate(self._columns):
-            self._col_widths[col_name] = self._table.columnWidth(col_idx)
+            if col_name != BOM_ROW_NUMBER_COLUMN:
+                self._col_widths[col_name] = self._table.columnWidth(col_idx)
 
         self._columns = self._build_visible_columns()
         _headers = self._display_headers()
@@ -445,10 +460,13 @@ class BomEditDialog(QDialog):
             self._populate_table()
             # Restore saved widths; auto-fit only columns that have no saved width yet
             for col_idx, col_name in enumerate(self._columns):
+                if col_name == BOM_ROW_NUMBER_COLUMN:
+                    continue
                 if col_name in self._col_widths:
                     self._table.setColumnWidth(col_idx, self._col_widths[col_name])
                 else:
                     self._table.resizeColumnToContents(col_idx)
+            self._pin_rownumber_width()
             # Restore scroll position
             self._table.verticalScrollBar().setValue(vscroll)
             self._table.horizontalScrollBar().setValue(hscroll)
@@ -489,8 +507,17 @@ class BomEditDialog(QDialog):
             c for c in self._custom_columns
             if c not in BOM_EDIT_COLUMN_ORDER and c not in PRESET_USER_REF_PROPERTIES
         ]
-        # BOM_ROW_NUMBER_COLUMN is always the first column (row number, read-only)
-        return [BOM_ROW_NUMBER_COLUMN] + base + visible_preset + other_custom
+        # Insert "#" immediately after "Level" (column 0 → Level, column 1 → "#")
+        # so that the QTreeWidget tree-decoration (branch lines) stays in the
+        # Level column (logical index 0).  In summary mode Level is hidden, so
+        # "#" falls to the front (column 0) which is fine.
+        result = base + visible_preset + other_custom
+        if "Level" in result:
+            level_idx = result.index("Level")
+            result.insert(level_idx + 1, BOM_ROW_NUMBER_COLUMN)
+        else:
+            result.insert(0, BOM_ROW_NUMBER_COLUMN)
+        return result
 
     def _on_preset_col_toggled(self) -> None:
         # "Filename" checkbox controls the built-in filename column visibility
@@ -626,20 +653,26 @@ class BomEditDialog(QDialog):
         # Save current widths by column name before repopulating
         if self._bom_loaded:
             for col_idx, col_name in enumerate(self._columns):
-                self._col_widths[col_name] = self._table.columnWidth(col_idx)
+                if col_name != BOM_ROW_NUMBER_COLUMN:
+                    self._col_widths[col_name] = self._table.columnWidth(col_idx)
 
         self._populate_table()
         if not self._bom_loaded:
             # First load: auto-fit all columns and seed the cache
             for _c, col_name in enumerate(self._columns):
+                if col_name == BOM_ROW_NUMBER_COLUMN:
+                    continue
                 self._table.resizeColumnToContents(_c)
                 self._col_widths[col_name] = self._table.columnWidth(_c)
             self._bom_loaded = True
         else:
             # Subsequent reloads: restore saved widths by column name
             for col_idx, col_name in enumerate(self._columns):
+                if col_name == BOM_ROW_NUMBER_COLUMN:
+                    continue
                 if col_name in self._col_widths:
                     self._table.setColumnWidth(col_idx, self._col_widths[col_name])
+        self._pin_rownumber_width()
 
         self._save_btn.setEnabled(True)
         self._finish_btn.setEnabled(True)
