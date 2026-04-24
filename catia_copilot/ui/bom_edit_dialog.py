@@ -32,6 +32,7 @@ from catia_copilot.constants import (
     SOURCE_OPTIONS,
     PART_NUMBER_VALID_PATTERN,
     FILENAME_NOT_FOUND,
+    BOM_THUMBNAIL_MAX_SIZE,
 )
 from catia_copilot.catia.bom_collect import collect_bom_rows, flatten_bom_to_summary
 from catia_copilot.catia.bom_write import write_bom_to_catia
@@ -1373,6 +1374,14 @@ class BomEditDialog(QDialog):
                 pixmap = QPixmap()
                 loaded = pixmap.loadFromData(img_bytes)
                 if loaded and not pixmap.isNull():
+                    if (pixmap.width() > BOM_THUMBNAIL_MAX_SIZE
+                            or pixmap.height() > BOM_THUMBNAIL_MAX_SIZE):
+                        pixmap = pixmap.scaled(
+                            BOM_THUMBNAIL_MAX_SIZE,
+                            BOM_THUMBNAIL_MAX_SIZE,
+                            Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation,
+                        )
                     thumb_label = QLabel()
                     thumb_label.setPixmap(pixmap)
                     thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
