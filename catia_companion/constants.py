@@ -77,12 +77,12 @@ PRESET_USER_REF_PROPERTIES: list[str] = [
 
 BOM_ALL_COLUMNS: list[str] = [
     "Level", "Type", "Part Number", "Nomenclature",
-    "Definition", "Revision", "Description", "Source", "Quantity",
+    "Definition", "Revision", "Source", "Quantity",
 ]
 
 BOM_DEFAULT_COLUMNS: list[str] = [
     "Level", "Type", "Part Number", "Nomenclature",
-    "Definition", "Revision", "Description", "Source", "Quantity",
+    "Definition", "Revision", "Source", "Quantity",
 ]
 
 # ---------------------------------------------------------------------------
@@ -96,10 +96,14 @@ FILENAME_NOT_FOUND: str = "未检索到"
 # Columns that are structural / derived – shown read-only in the edit table
 BOM_READONLY_COLUMNS: frozenset[str] = frozenset({"Level", "Type", "Filename", "Filepath", "Quantity"})
 
+# Standard BOM columns that can be hidden in the edit dialog
+# These are properties that users might not need to see/edit
+BOM_HIDEABLE_COLUMNS: list[str] = ["Nomenclature", "Revision", "Definition", "Source"]
+
 # Column order used in the BOM edit dialog (internal names)
 BOM_EDIT_COLUMN_ORDER: list[str] = [
     "Level", "Type", "Filename", "Part Number", "Quantity",
-    "Nomenclature", "Revision", "Definition", "Description", "Source",
+    "Nomenclature", "Revision", "Definition", "Source",
 ]
 
 # Internal column name → Chinese display name
@@ -112,7 +116,6 @@ BOM_COLUMN_DISPLAY_NAMES: dict[str, str] = {
     "Nomenclature": "术语（中文名称）",
     "Definition":   "定义",
     "Revision":     "版本",
-    "Description":  "描述",
     "Source":       "源",
     "Quantity":     "数量",
 }
@@ -126,7 +129,6 @@ BOM_COLUMN_MIN_WIDTHS: dict[str, int] = {
     "Nomenclature": 20,
     "Definition":   20,
     "Revision":     10,
-    "Description":  30,
     "Source":       8,
     "Quantity":     8,
 }

@@ -67,7 +67,6 @@ def collect_bom_rows(
         "Nomenclature": "nomenclature",
         "Revision":     "revision",
         "Definition":   "definition",
-        "Description":  "description",
         "Source":       "source",
     }
 

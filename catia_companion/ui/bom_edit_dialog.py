@@ -26,6 +26,7 @@ from catia_companion.constants import (
     BOM_EDIT_COLUMN_ORDER,
     BOM_COLUMN_DISPLAY_NAMES,
     BOM_READONLY_COLUMNS,
+    BOM_HIDEABLE_COLUMNS,
     SOURCE_TO_DISPLAY,
     SOURCE_OPTIONS,
     PART_NUMBER_VALID_PATTERN,
@@ -83,6 +84,14 @@ class BomEditDialog(QDialog):
             saved_visible = [saved_visible]
         self._visible_preset_cols: list[str] = [
             c for c in saved_visible if c in PRESET_USER_REF_PROPERTIES
+        ]
+
+        # Visible hideable standard columns (Nomenclature, Revision, Definition, Source)
+        saved_hideable = self._edit_settings.value("visible_hideable_columns", BOM_HIDEABLE_COLUMNS)
+        if isinstance(saved_hideable, str):
+            saved_hideable = [saved_hideable]
+        self._visible_hideable_cols: list[str] = [
+            c for c in saved_hideable if c in BOM_HIDEABLE_COLUMNS
         ]
 
         self._summarize: bool = self._edit_settings.value("summarize", False, type=bool)
@@ -219,29 +228,54 @@ class BomEditDialog(QDialog):
         hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(hint)
 
-        # Preset column visibility checkboxes
-        preset_group  = QGroupBox("自定义属性列（勾选以显示）")
-        preset_layout = QHBoxLayout(preset_group)
-        preset_layout.setSpacing(12)
+        # Preset column visibility checkboxes (2 rows layout)
+        preset_group  = QGroupBox("属性列（勾选以显示）")
+        preset_main_layout = QVBoxLayout(preset_group)
+        preset_main_layout.setSpacing(8)
+        preset_main_layout.setContentsMargins(8, 6, 8, 6)
+
+        # Row 1: Filename checkbox + 显示完整路径 + hideable standard columns
+        row1_layout = QHBoxLayout()
+        row1_layout.setSpacing(12)
         self._preset_checkboxes: dict[str, QCheckBox] = {}
+
         # "Filename" is a built-in column but can be toggled like a preset
         fn_cb = QCheckBox(BOM_COLUMN_DISPLAY_NAMES.get("Filename", "Filename"))
         fn_cb.setChecked(self._show_filename_col)
         fn_cb.toggled.connect(self._on_preset_col_toggled)
-        preset_layout.addWidget(fn_cb)
+        row1_layout.addWidget(fn_cb)
         self._preset_checkboxes["Filename"] = fn_cb
+
         # "显示完整路径" follows immediately after the Filename checkbox
         self._filepath_chk = QCheckBox("显示完整路径")
         self._filepath_chk.setToolTip("勾选后文件名列将显示文件完整路径（含目录），而非仅文件名")
         self._filepath_chk.setChecked(self._show_filepath_col)
         self._filepath_chk.toggled.connect(self._on_show_filepath_toggled)
-        preset_layout.addWidget(self._filepath_chk)
+        row1_layout.addWidget(self._filepath_chk)
+
+        # Hideable standard columns (Nomenclature, Revision, Definition, Source)
+        for col_name in BOM_HIDEABLE_COLUMNS:
+            cb = QCheckBox(BOM_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
+            cb.setChecked(col_name in self._visible_hideable_cols)
+            cb.toggled.connect(self._on_hideable_col_toggled)
+            row1_layout.addWidget(cb)
+            self._preset_checkboxes[col_name] = cb
+
+        row1_layout.addStretch()
+        preset_main_layout.addLayout(row1_layout)
+
+        # Row 2: Preset user-defined properties (物料编码, 物料名称, etc.)
+        row2_layout = QHBoxLayout()
+        row2_layout.setSpacing(12)
         for col_name in PRESET_USER_REF_PROPERTIES:
             cb = QCheckBox(col_name)
             cb.setChecked(col_name in self._visible_preset_cols)
             cb.toggled.connect(self._on_preset_col_toggled)
-            preset_layout.addWidget(cb)
+            row2_layout.addWidget(cb)
             self._preset_checkboxes[col_name] = cb
+        row2_layout.addStretch()
+        preset_main_layout.addLayout(row2_layout)
+
         layout.addWidget(preset_group)
 
         # BOM tree widget (replaces QTableWidget; tree handles expand/collapse natively)
@@ -402,8 +436,11 @@ class BomEditDialog(QDialog):
 
     def _build_visible_columns(self) -> list[str]:
         base = list(BOM_EDIT_COLUMN_ORDER)
+        # Filter out hidden columns (Filename and hideable columns)
         if not self._show_filename_col:
             base = [c for c in base if c != "Filename"]
+        # Filter out hidden hideable columns
+        base = [c for c in base if c not in BOM_HIDEABLE_COLUMNS or c in self._visible_hideable_cols]
         if self._summarize:
             # In summary mode Level has no meaning; also hide Type unless assemblies shown
             cols_to_hide = {"Level"}
@@ -428,9 +465,18 @@ class BomEditDialog(QDialog):
                 self._edit_settings.setValue("show_filename_column", self._show_filename_col)
         self._visible_preset_cols = [
             name for name, cb in self._preset_checkboxes.items()
-            if name != "Filename" and cb.isChecked()
+            if name != "Filename" and name not in BOM_HIDEABLE_COLUMNS and cb.isChecked()
         ]
         self._edit_settings.setValue("visible_preset_columns", self._visible_preset_cols)
+        self._rebuild_columns_and_repopulate()
+
+    def _on_hideable_col_toggled(self) -> None:
+        """Handle hideable column checkbox toggle (Nomenclature, Revision, Definition, Source)."""
+        self._visible_hideable_cols = [
+            name for name, cb in self._preset_checkboxes.items()
+            if name in BOM_HIDEABLE_COLUMNS and cb.isChecked()
+        ]
+        self._edit_settings.setValue("visible_hideable_columns", self._visible_hideable_cols)
         self._rebuild_columns_and_repopulate()
 
     def _on_show_filepath_toggled(self, checked: bool) -> None:
