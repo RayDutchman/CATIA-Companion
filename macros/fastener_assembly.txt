@@ -808,8 +808,8 @@ End Function
 '  Private Sub btnFlip_Click()
 '      If Not g_loopActive Then Exit Sub
 '
-'      ' 暂时禁用 ESC 的默认行为，防止 ESC 在操作期间触发按钮事件
-'      Me.SetControlsToExecute = Array()
+'      ' 禁用按钮，防止在操作期间重复点击
+'      btnFlip.Enabled = False
 '
 '      ' === 执行翻转操作 ===
 '      g_flipDir = Not g_flipDir
@@ -823,23 +823,25 @@ End Function
 '                            "  选下一孔继续，ESC结束"
 '      End If
 '
-'      ' 恢复 ESC 的正常功能（如需要的话）
-'      ' Me.SetControlsToExecute = Array(Me.btnFlip)  ' 根据需要恢复
+'      ' 重新启用按钮
+'      btnFlip.Enabled = True
 '  End Sub
 '
 '  Private Sub btnUndo_Click()
 '      If Not g_loopActive Then Exit Sub
 '
-'      ' 暂时禁用 ESC 的默认行为，防止 ESC 在操作期间触发按钮事件
-'      Me.SetControlsToExecute = Array()
+'      ' 禁用按钮，防止在操作期间重复点击
+'      btnUndo.Enabled = False
 '
 '      ' === 执行撤销操作 ===
 '      If g_historyCount > 0 Then
 '          Call UndoLastFastener()
 '      End If
 '
-'      ' 恢复 ESC 的正常功能（如需要的话）
-'      ' Me.SetControlsToExecute = Array(Me.btnUndo)  ' 根据需要恢复
+'      ' 重新启用按钮（如果还有历史记录）
+'      If g_historyCount > 0 Then
+'          btnUndo.Enabled = True
+'      End If
 '  End Sub
 '
 ' ---------------------------------------------------------------------------
