@@ -12,7 +12,7 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from catia_companion.constants import FILENAME_NOT_FOUND
+from catia_copilot.constants import FILENAME_NOT_FOUND
 
 logger = logging.getLogger(__name__)
 

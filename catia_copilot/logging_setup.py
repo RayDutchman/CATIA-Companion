@@ -1,5 +1,5 @@
 """
-CATIA Companion 日志基础设施模块。
+CATIA Copilot 日志基础设施模块。
 
 设置轮转文件日志和标准输出日志，以及基于 Qt 信号的处理器，
 使日志消息可以转发到应用内的 LogWindow 窗口。
@@ -16,9 +16,9 @@ from PySide6.QtCore import QObject, Signal
 # 日志目录和文件配置
 # ---------------------------------------------------------------------------
 
-LOG_DIR: Path  = Path.home() / "CATIA_Companion" / "logs"
+LOG_DIR: Path  = Path.home() / "CATIA_Copilot" / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
-LOG_FILE: Path = LOG_DIR / "catia_companion.log"
+LOG_FILE: Path = LOG_DIR / "catia_copilot.log"
 
 # 日志文件大小和备份配置
 LOG_MAX_BYTES = 2 * 1024 * 1024  # 单个日志文件最大 2MB

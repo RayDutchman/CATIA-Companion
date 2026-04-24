@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QSettings
 
-from catia_companion.catia.dependencies import find_dependencies
+from catia_copilot.catia.dependencies import find_dependencies
 
 logger = logging.getLogger(__name__)
 

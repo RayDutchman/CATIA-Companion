@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QPixmap, QColor
 from PySide6.QtCore import Qt, QSettings
 
-from catia_companion.constants import (
+from catia_copilot.constants import (
     PRESET_USER_REF_PROPERTIES,
     BOM_EDIT_COLUMN_ORDER,
     BOM_COLUMN_DISPLAY_NAMES,
@@ -32,15 +32,15 @@ from catia_companion.constants import (
     PART_NUMBER_VALID_PATTERN,
     FILENAME_NOT_FOUND,
 )
-from catia_companion.catia.bom_collect import collect_bom_rows, flatten_bom_to_summary
-from catia_companion.catia.bom_write import write_bom_to_catia
-from catia_companion.utils import read_catia_thumbnail
-from catia_companion.ui.bom_catia_helpers import (
+from catia_copilot.catia.bom_collect import collect_bom_rows, flatten_bom_to_summary
+from catia_copilot.catia.bom_write import write_bom_to_catia
+from catia_copilot.utils import read_catia_thumbnail
+from catia_copilot.ui.bom_catia_helpers import (
     _is_catia_com_error,
     _find_catia_doc_by_path,
 )
-from catia_companion.ui.bom_widgets import _BomTreeDelegate, _BomTreeWidget, _ITEM_LOCKED_ROLE
-from catia_companion.ui.bom_file_rename_dialog import _FileRenameDialog
+from catia_copilot.ui.bom_widgets import _BomTreeDelegate, _BomTreeWidget, _ITEM_LOCKED_ROLE
+from catia_copilot.ui.bom_file_rename_dialog import _FileRenameDialog
 
 logger = logging.getLogger(__name__)
 

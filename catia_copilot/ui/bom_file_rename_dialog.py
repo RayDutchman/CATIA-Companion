@@ -7,14 +7,14 @@ from PySide6.QtWidgets import (
     QPushButton, QMessageBox, QFileDialog,
 )
 
-from catia_companion.constants import PART_NUMBER_VALID_PATTERN
+from catia_copilot.constants import PART_NUMBER_VALID_PATTERN
 
 
 class _FileRenameDialog(QDialog):
     """通过 CATIA SaveAs 重命名或移动单个 CATIA 文件的对话框。
 
     允许用户独立更改文件茎名（不含扩展名的文件名）和/或目标目录。
-    使用 :data:`~catia_companion.constants.PART_NUMBER_VALID_PATTERN`
+    使用 :data:`~catia_copilot.constants.PART_NUMBER_VALID_PATTERN`
     验证新文件茎名，并按需创建目标目录。
     """
 

@@ -1,5 +1,5 @@
 """
-Application-wide constants for CATIA Companion.
+Application-wide constants for CATIA Copilot.
 
 All magic strings, column definitions, and configuration values are kept here
 so they can be imported by any module without circular-dependency risk.
@@ -11,7 +11,7 @@ import re
 # Application info
 # ---------------------------------------------------------------------------
 
-APP_NAME    = "CATIA Companion"
+APP_NAME    = "CATIA Copilot"
 APP_VERSION = "1.3.0"
 APP_DATE    = "2026-04-22"
 APP_AUTHOR  = "CHEN Weibo"
@@ -50,7 +50,7 @@ MAIN_WINDOW_DEFAULT_WIDTH  = 480
 MAIN_WINDOW_DEFAULT_HEIGHT = 520
 
 # Relative path to the QSS stylesheet (used by main.py entry point)
-STYLESHEET_RELATIVE_PATH = "catia_companion/ui/style.qss"
+STYLESHEET_RELATIVE_PATH = "catia_copilot/ui/style.qss"
 
 # ---------------------------------------------------------------------------
 # Resource file paths (relative to project root / frozen executable directory)

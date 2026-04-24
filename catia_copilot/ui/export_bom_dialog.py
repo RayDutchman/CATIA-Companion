@@ -16,13 +16,13 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QSettings
 
-from catia_companion.constants import (
+from catia_copilot.constants import (
     BOM_ALL_COLUMNS,
     BOM_DEFAULT_COLUMNS,
     PRESET_USER_REF_PROPERTIES,
     BOM_COLUMN_DISPLAY_NAMES,
 )
-from catia_companion.catia.bom_export import export_bom_to_excel
+from catia_copilot.catia.bom_export import export_bom_to_excel
 
 logger = logging.getLogger(__name__)
 
