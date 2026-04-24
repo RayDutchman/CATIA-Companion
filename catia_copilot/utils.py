@@ -199,13 +199,14 @@ def _read_thumbnail_via_windows_shell(filepath: str, size: int = 256) -> bytes |
 
     try:
         # IShellItemImageFactory::GetImage (vtable slot 3)
-        # SIIGBF_BIGGERSIZEOK = 0x01
+        # SIIGBF_THUMBNAILONLY = 0x08 – fail if only a generic file-type icon
+        # is available; this prevents returning the CATIA icon as a thumbnail.
         hbm = ctypes.c_void_p(0)
         if _vtcall(
             pFactory.value, 3,
             ctypes.HRESULT,
             [_SIZE, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)],
-            [_SIZE(size, size), 0x01, ctypes.byref(hbm)],
+            [_SIZE(size, size), 0x08, ctypes.byref(hbm)],
         ) != 0 or not hbm:
             return None
 
