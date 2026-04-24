@@ -1,6 +1,9 @@
 """CATIA COM 辅助函数，供 BOM 相关模块共用。"""
 
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def _is_catia_com_error(exc: Exception) -> bool:
@@ -22,7 +25,7 @@ def _find_catia_doc_by_path(docs, path: Path) -> object | None:
 
     参数：
         docs: CATIA 文档集合
-        path: 要匹配的文件路径
+        path: 要匹配的文件路径（已解析的绝对路径）
 
     返回：
         匹配的 CATIA 文档对象，或 None
@@ -31,35 +34,6 @@ def _find_catia_doc_by_path(docs, path: Path) -> object | None:
         try:
             d = docs.item(i)
             if Path(d.full_name).resolve() == path:
-                return d
-        except Exception:
-            pass
-    return None
-
-
-def _find_catia_doc_by_part_number(docs, pn: str) -> object | None:
-    """返回根产品零件编号与 *pn* 匹配的第一个已打开 CATIA 文档对象。
-
-    当零件尚未保存到磁盘时（无文件路径），可通过零件编号定位已在 CATIA
-    中打开的文档。如果零件编号不可用则回退到按文档名（不含扩展名）匹配。
-    未找到时返回 ``None``。
-
-    参数：
-        docs: CATIA 文档集合
-        pn:   要匹配的零件编号
-
-    返回：
-        匹配的 CATIA 文档对象，或 None
-    """
-    for i in range(1, docs.count + 1):
-        try:
-            d = docs.item(i)
-            try:
-                doc_pn = d.com_object.Product.PartNumber
-            except Exception:
-                # 非零件/产品类文档（如工程图）无 .Product；回退到文档名茎
-                doc_pn = Path(d.name).stem
-            if doc_pn == pn:
                 return d
         except Exception:
             pass

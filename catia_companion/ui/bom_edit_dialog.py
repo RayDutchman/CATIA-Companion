@@ -38,7 +38,6 @@ from catia_companion.utils import read_catia_thumbnail
 from catia_companion.ui.bom_catia_helpers import (
     _is_catia_com_error,
     _find_catia_doc_by_path,
-    _find_catia_doc_by_part_number,
 )
 from catia_companion.ui.bom_widgets import _BomTreeDelegate, _BomTreeWidget, _ITEM_LOCKED_ROLE
 from catia_companion.ui.bom_file_rename_dialog import _FileRenameDialog
@@ -1313,6 +1312,7 @@ class BomEditDialog(QDialog):
         fp_path      = Path(fp) if fp else None
         is_component = row_data.get("Type") == "部件"
         not_found    = bool(row_data.get("_not_found"))
+        unreadable   = bool(row_data.get("_unreadable"))
         pn           = str(row_data.get("Part Number", ""))
 
         # Ensure the right-clicked row is selected so that the downstream
@@ -1351,13 +1351,15 @@ class BomEditDialog(QDialog):
         act_open_path.setEnabled(path_available)
 
         # ── 在CATIA中打开 ─────────────────────────────────────────────────────
-        # Locate by Part Number only.  Exclude:
-        #   • 部件 – their Part Number identifies the parent product
-        #   • not_found (断链接, light-red rows) – CATIA couldn't resolve the
-        #     reference; such rows may not have a valid Part Number in CATIA's
-        #     session and "opening" them is meaningless
+        # Enabled only when the file exists on disk and is not a broken/unreadable
+        # reference.  Component rows share the parent product's filepath so are
+        # excluded as well.
         act_open_catia = menu.addAction("在CATIA中打开")
-        act_open_catia.setEnabled(not is_component and not not_found and bool(pn))
+        catia_available = (
+            not is_component and not not_found and not unreadable
+            and fp_path is not None and fp_path.exists()
+        )
+        act_open_catia.setEnabled(catia_available)
 
         menu.addSeparator()
 
@@ -1373,7 +1375,7 @@ class BomEditDialog(QDialog):
         if action == act_open_path:
             self._open_path(fp)
         elif action == act_open_catia:
-            self._open_in_catia(pn, fp)
+            self._open_in_catia(fp)
         elif action == act_edit_path:
             self._rename_selected_file()
 
@@ -1389,56 +1391,47 @@ class BomEditDialog(QDialog):
         except Exception as exc:
             logger.warning(f"Failed to open path in Explorer: {exc}")
 
-    def _open_in_catia(self, orig_pn: str, fp: str = "") -> None:
-        """Activate the already-open CATIA document for the row identified by
-        *orig_pn* (the Part Number as loaded from CATIA, used as the key into
-        ``_snapshot_data``) and optionally *fp* (the backing file path).
+    def _open_in_catia(self, fp: str) -> None:
+        """Open the CATIA document at file path *fp* via ``documents.open``.
 
-        Lookup strategy (dual-track):
-        1. If *fp* resolves to an existing file, try to match by full path first.
-           This is immune to Part Number edits that have not yet been written back.
-        2. Fall back to matching by Part Number, using the value from
-           ``_snapshot_data`` – which is updated on every write-back and therefore
-           always reflects the PN that CATIA currently holds, even after a rename.
-
-        The caller must ensure that broken-link (not_found) rows are excluded
-        from triggering this method.
+        After opening, the CATIA V5 main window is brought to the Windows
+        foreground via ``win32gui`` when available.
         """
         try:
-            from pycatia import catia as _pycatia
+            from pycatia import catia as _pycatia  # noqa: PLC0415
             caa         = _pycatia()
             application = caa.application
             application.visible = True
             documents   = application.documents
 
-            doc: object | None = None
+            fp_resolved = Path(fp).resolve()
+            documents.open(str(fp_resolved))
 
-            # ── 1st track: match by file path (not affected by PN edits) ─────
-            if fp:
-                fp_path = Path(fp)
-                if fp_path.exists():
-                    doc = _find_catia_doc_by_path(documents, fp_path.resolve())
+            # ── Bring the CATIA V5 main window to the Windows foreground ──────
+            try:
+                import win32gui  # noqa: PLC0415
+                import win32con  # noqa: PLC0415
 
-            # ── 2nd track: match by snapshot PN (reflects last write-back) ───
-            snapshot_pn = self._snapshot_data.get(orig_pn, {}).get(
-                "Part Number", orig_pn
-            )
-            if snapshot_pn != orig_pn:
-                logger.debug(
-                    "_open_in_catia: falling back to snapshot PN %r (orig %r)",
-                    snapshot_pn, orig_pn,
-                )
-            if doc is None:
-                doc = _find_catia_doc_by_part_number(documents, snapshot_pn)
+                def _raise_catia_window(hwnd, _extra):
+                    if not win32gui.IsWindowVisible(hwnd):
+                        return
+                    title = win32gui.GetWindowText(hwnd)
+                    # Match only the CATIA V5 application window, not other
+                    # windows that happen to contain the word "CATIA".
+                    if title.startswith("CATIA V5"):
+                        try:
+                            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                            win32gui.SetForegroundWindow(hwnd)
+                        except Exception:
+                            pass
+                        # Stop enumeration after the first CATIA V5 window.
+                        return False
 
-            if doc is None:
-                QMessageBox.warning(
-                    self, "在CATIA中打开失败",
-                    f"无法在CATIA中找到零件编号为 \"{snapshot_pn}\" 的文档。\n\n"
-                    f"请确认该零件已在CATIA中打开。",
-                )
-                return
+                win32gui.EnumWindows(_raise_catia_window, None)
+            except ImportError:
+                pass
+            except Exception:
+                pass
 
-            doc.activate()
         except Exception as e:
             QMessageBox.warning(self, "在CATIA中打开失败", f"无法在CATIA中打开文件：\n{e}")
