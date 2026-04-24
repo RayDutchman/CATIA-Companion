@@ -283,16 +283,13 @@ Public Sub ContinueSelectProduct()
     End If
 
     ' 验证选中的是否为 Product 对象
+    ' 先显式清空，防止模块级变量残留旧值在 On Error Resume Next 下绕过 Is Nothing 判断
+    Set targetProduct = Nothing
     On Error Resume Next
     Set targetProduct = sel.Item(1).Value
-    Dim testProducts As Object
-    Set testProducts = Nothing
-    If Not targetProduct Is Nothing Then
-        Set testProducts = targetProduct.products
-    End If
     On Error GoTo 0
 
-    If targetProduct Is Nothing Or testProducts Is Nothing Then
+    If targetProduct Is Nothing Or TypeName(targetProduct) <> "Product" Then
         MsgBox "所选对象不是产品或部件。" & Chr(10) & _
                "请在产品结构树中选择一个产品（Product）或部件。", _
                vbExclamation, "快速装配托板螺母"
