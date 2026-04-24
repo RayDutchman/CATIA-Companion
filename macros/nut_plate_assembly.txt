@@ -289,6 +289,30 @@ Public Sub ContinueSelectProduct()
     Set targetProduct = sel.Item(1).Value
     On Error GoTo 0
 
+    ' ── [DEBUG] 显示选择信息，排查 TypeName 问题 ────────────────────────────
+    Dim dbgSelCount As Integer
+    Dim dbgItemType As String
+    Dim dbgValueType As String
+    Dim dbgIsNothing As String
+    dbgSelCount = sel.Count
+    dbgItemType = ""
+    dbgValueType = ""
+    dbgIsNothing = IIf(targetProduct Is Nothing, "True", "False")
+    If dbgSelCount >= 1 Then
+        On Error Resume Next
+        dbgItemType = TypeName(sel.Item(1))
+        dbgValueType = TypeName(sel.Item(1).Value)
+        On Error GoTo 0
+    End If
+    MsgBox "[DEBUG] 选择信息" & Chr(10) & _
+           "sel.Count              = " & dbgSelCount & Chr(10) & _
+           "TypeName(sel.Item(1))  = " & dbgItemType & Chr(10) & _
+           "TypeName(.Value)       = " & dbgValueType & Chr(10) & _
+           "TypeName(targetProduct)= " & TypeName(targetProduct) & Chr(10) & _
+           "targetProduct Is Nothing = " & dbgIsNothing, _
+           vbInformation, "快速装配托板螺母 [DEBUG]"
+    ' ── [DEBUG END] ──────────────────────────────────────────────────────────
+
     If targetProduct Is Nothing Or TypeName(targetProduct) <> "Product" Then
         MsgBox "所选对象不是产品或部件。" & Chr(10) & _
                "请在产品结构树中选择一个产品（Product）或部件。", _
