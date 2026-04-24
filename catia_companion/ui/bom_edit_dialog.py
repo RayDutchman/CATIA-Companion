@@ -1404,20 +1404,67 @@ class BomEditDialog(QDialog):
         The caller must ensure that broken-link (not_found) rows are excluded
         from triggering this method.
         """
+        logger.debug("_open_in_catia: called with orig_pn=%r, fp=%r", orig_pn, fp)
         try:
             from pycatia import catia as _pycatia
+            logger.debug("_open_in_catia: pycatia imported successfully")
             caa         = _pycatia()
             application = caa.application
+            logger.debug(
+                "_open_in_catia: CATIA application obtained, visible=%s",
+                application.visible,
+            )
             application.visible = True
             documents   = application.documents
+            doc_count   = documents.count
+            logger.debug("_open_in_catia: %d document(s) currently open in CATIA", doc_count)
+
+            # ── Enumerate all open documents for debug purposes ───────────────
+            for i in range(1, doc_count + 1):
+                try:
+                    d = documents.item(i)
+                    try:
+                        d_full = d.full_name
+                    except Exception as fe:
+                        d_full = f"<full_name error: {fe}>"
+                    try:
+                        d_pn = d.com_object.Product.PartNumber
+                    except Exception as pe:
+                        d_pn = f"<no PN: {pe}>"
+                    logger.debug(
+                        "_open_in_catia:   open doc[%d]: name=%r  full_name=%r  pn=%r",
+                        i, d.name, d_full, d_pn,
+                    )
+                except Exception as de:
+                    logger.debug(
+                        "_open_in_catia:   open doc[%d]: error accessing document: %s",
+                        i, de,
+                    )
 
             doc: object | None = None
 
             # ── 1st track: match by file path (not affected by PN edits) ─────
             if fp:
                 fp_path = Path(fp)
+                logger.debug(
+                    "_open_in_catia: fp_path=%r  exists=%s",
+                    str(fp_path), fp_path.exists(),
+                )
                 if fp_path.exists():
-                    doc = _find_catia_doc_by_path(documents, fp_path.resolve())
+                    resolved = fp_path.resolve()
+                    logger.debug(
+                        "_open_in_catia: resolved fp=%r, starting path-based search",
+                        str(resolved),
+                    )
+                    doc = _find_catia_doc_by_path(documents, resolved)
+                    logger.debug(
+                        "_open_in_catia: path-based search result: %s",
+                        "found" if doc is not None else "not found",
+                    )
+            else:
+                logger.debug(
+                    "_open_in_catia: no file path provided, skipping path-based search",
+                )
 
             # ── 2nd track: match by snapshot PN (reflects last write-back) ───
             snapshot_pn = self._snapshot_data.get(orig_pn, {}).get(
@@ -1425,13 +1472,24 @@ class BomEditDialog(QDialog):
             )
             if snapshot_pn != orig_pn:
                 logger.debug(
-                    "_open_in_catia: falling back to snapshot PN %r (orig %r)",
+                    "_open_in_catia: snapshot PN %r differs from orig PN %r",
                     snapshot_pn, orig_pn,
                 )
             if doc is None:
+                logger.debug(
+                    "_open_in_catia: starting PN-based search for %r",
+                    snapshot_pn,
+                )
                 doc = _find_catia_doc_by_part_number(documents, snapshot_pn)
+                logger.debug(
+                    "_open_in_catia: PN-based search result: %s",
+                    "found" if doc is not None else "not found",
+                )
 
             if doc is None:
+                logger.debug(
+                    "_open_in_catia: document not found; showing warning to user"
+                )
                 QMessageBox.warning(
                     self, "在CATIA中打开失败",
                     f"无法在CATIA中找到零件编号为 \"{snapshot_pn}\" 的文档。\n\n"
@@ -1439,6 +1497,52 @@ class BomEditDialog(QDialog):
                 )
                 return
 
+            logger.debug("_open_in_catia: calling doc.activate() on %r", doc.name)
             doc.activate()
+            logger.debug("_open_in_catia: doc.activate() returned successfully")
+
+            # ── Bring the CATIA main window to the Windows foreground ─────────
+            # doc.activate() makes the document active inside CATIA but does not
+            # necessarily raise the CATIA window above other applications due to
+            # Windows focus-stealing prevention.  Attempt to force the window
+            # to the front via win32gui when available.
+            try:
+                import win32gui   # noqa: PLC0415
+                import win32con   # noqa: PLC0415
+
+                def _try_raise(hwnd, _extra):
+                    if not win32gui.IsWindowVisible(hwnd):
+                        return
+                    title = win32gui.GetWindowText(hwnd)
+                    if "CATIA" in title:
+                        logger.debug(
+                            "_open_in_catia: found CATIA window hwnd=0x%x title=%r",
+                            hwnd, title,
+                        )
+                        try:
+                            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                            win32gui.SetForegroundWindow(hwnd)
+                            logger.debug(
+                                "_open_in_catia: SetForegroundWindow succeeded for hwnd=0x%x",
+                                hwnd,
+                            )
+                        except Exception as fw_err:
+                            logger.debug(
+                                "_open_in_catia: SetForegroundWindow failed for hwnd=0x%x: %s",
+                                hwnd, fw_err,
+                            )
+
+                win32gui.EnumWindows(_try_raise, None)
+                logger.debug("_open_in_catia: win32gui foreground activation attempt complete")
+            except ImportError:
+                logger.debug(
+                    "_open_in_catia: win32gui not available; CATIA may not come to foreground"
+                )
+            except Exception as win_err:
+                logger.debug(
+                    "_open_in_catia: win32gui foreground activation error: %s", win_err
+                )
+
         except Exception as e:
+            logger.debug("_open_in_catia: unexpected exception", exc_info=True)
             QMessageBox.warning(self, "在CATIA中打开失败", f"无法在CATIA中打开文件：\n{e}")

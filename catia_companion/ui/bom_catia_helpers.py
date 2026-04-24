@@ -1,6 +1,9 @@
 """CATIA COM 辅助函数，供 BOM 相关模块共用。"""
 
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def _is_catia_com_error(exc: Exception) -> bool:
@@ -27,13 +30,28 @@ def _find_catia_doc_by_path(docs, path: Path) -> object | None:
     返回：
         匹配的 CATIA 文档对象，或 None
     """
+    logger.debug("_find_catia_doc_by_path: searching for path=%r across %d doc(s)", str(path), docs.count)
     for i in range(1, docs.count + 1):
         try:
             d = docs.item(i)
-            if Path(d.full_name).resolve() == path:
+            try:
+                d_resolved = Path(d.full_name).resolve()
+            except Exception as path_err:
+                logger.debug(
+                    "_find_catia_doc_by_path:   doc[%d] full_name resolve error: %s",
+                    i, path_err,
+                )
+                continue
+            match = d_resolved == path
+            logger.debug(
+                "_find_catia_doc_by_path:   doc[%d] path=%r  match=%s",
+                i, str(d_resolved), match,
+            )
+            if match:
                 return d
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_find_catia_doc_by_path:   doc[%d] unexpected error: %s", i, exc)
+    logger.debug("_find_catia_doc_by_path: no match found")
     return None
 
 
@@ -51,16 +69,26 @@ def _find_catia_doc_by_part_number(docs, pn: str) -> object | None:
     返回：
         匹配的 CATIA 文档对象，或 None
     """
+    logger.debug("_find_catia_doc_by_part_number: searching for pn=%r across %d doc(s)", pn, docs.count)
     for i in range(1, docs.count + 1):
         try:
             d = docs.item(i)
             try:
                 doc_pn = d.com_object.Product.PartNumber
-            except Exception:
+                logger.debug(
+                    "_find_catia_doc_by_part_number:   doc[%d] name=%r  PN=%r  match=%s",
+                    i, d.name, doc_pn, doc_pn == pn,
+                )
+            except Exception as pn_err:
                 # 非零件/产品类文档（如工程图）无 .Product；回退到文档名茎
                 doc_pn = Path(d.name).stem
+                logger.debug(
+                    "_find_catia_doc_by_part_number:   doc[%d] name=%r  no Product.PartNumber (%s)  -> using name stem=%r  match=%s",
+                    i, d.name, pn_err, doc_pn, doc_pn == pn,
+                )
             if doc_pn == pn:
                 return d
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("_find_catia_doc_by_part_number:   doc[%d] unexpected error: %s", i, exc)
+    logger.debug("_find_catia_doc_by_part_number: no match found")
     return None
