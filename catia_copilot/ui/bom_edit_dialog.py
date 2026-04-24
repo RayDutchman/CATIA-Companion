@@ -27,6 +27,7 @@ from catia_copilot.constants import (
     BOM_COLUMN_DISPLAY_NAMES,
     BOM_READONLY_COLUMNS,
     BOM_HIDEABLE_COLUMNS,
+    BOM_ROW_NUMBER_COLUMN,
     SOURCE_TO_DISPLAY,
     SOURCE_OPTIONS,
     PART_NUMBER_VALID_PATTERN,
@@ -488,8 +489,8 @@ class BomEditDialog(QDialog):
             c for c in self._custom_columns
             if c not in BOM_EDIT_COLUMN_ORDER and c not in PRESET_USER_REF_PROPERTIES
         ]
-        # "#" is always the first column (row number, read-only)
-        return ["#"] + base + visible_preset + other_custom
+        # BOM_ROW_NUMBER_COLUMN is always the first column (row number, read-only)
+        return [BOM_ROW_NUMBER_COLUMN] + base + visible_preset + other_custom
 
     def _on_preset_col_toggled(self) -> None:
         # "Filename" checkbox controls the built-in filename column visibility
@@ -714,7 +715,7 @@ class BomEditDialog(QDialog):
                     continue
 
                 # All other columns → item text
-                if col_name == "#":
+                if col_name == BOM_ROW_NUMBER_COLUMN:
                     value = str(row_idx + 1)
                 elif col_name == "Quantity":
                     value = str(row_data.get("Quantity", "1"))

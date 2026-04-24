@@ -95,6 +95,9 @@ BOM_DEFAULT_COLUMNS: list[str] = [
 # cannot be resolved via COM (the product is "not found").
 FILENAME_NOT_FOUND: str = "未检索到"
 
+# Sentinel internal column name for the row-number column (always first, read-only)
+BOM_ROW_NUMBER_COLUMN: str = "#"
+
 # Columns that are structural / derived – shown read-only in the edit table
 BOM_READONLY_COLUMNS: frozenset[str] = frozenset({"#", "Level", "Type", "Filename", "Filepath", "Quantity"})
 
