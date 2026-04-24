@@ -904,13 +904,23 @@ End Function
 '
 ' 创建步骤：在 VBA IDE 中，Insert > UserForm。
 '   - 将窗体 (Name) 设为 "FlipForm"，Caption 设为 "方向控制"。
-'   - 添加两个 CommandButton：
+'   - 添加一个 Label：
+'       (Name)   = "lblWarning"
+'       Caption  = "⚠ 注意：请使用下方"停止装配"按钮结束，按ESC可能导致装配异常"
+'       ForeColor = &H000000FF& (红色)
+'       Width    = 180  Height = 40（可按需调整）
+'       WordWrap = True
+'   - 添加三个 CommandButton（从上到下排列）：
 '       (Name)   = "btnFlip"
 '       Caption  = "翻转方向: 否"
 '       Width    = 160  Height = 36（可按需调整）
 '
 '       (Name)   = "btnUndo"
 '       Caption  = "撤销上一个"
+'       Width    = 160  Height = 36（可按需调整）
+'
+'       (Name)   = "btnStop"
+'       Caption  = "停止装配"
 '       Width    = 160  Height = 36（可按需调整）
 '   - 打开窗体的代码模块，将下方代码粘贴进去。
 ' ============================================================================
@@ -954,6 +964,17 @@ End Function
 '      If g_historyCount > 0 Then
 '          btnUndo.Enabled = True
 '      End If
+'  End Sub
+'
+'  Private Sub btnStop_Click()
+'      ' 停止装配循环
+'      g_loopActive = False
+'      g_hasLastComp = False
+'      Unload Me
+'      CATIA.StatusBar = "用户停止装配。共装配 " & g_count & " 个 " & g_nutPlatePN
+'      MsgBox "装配已停止！" & Chr(10) & _
+'             "共装配 " & g_count & " 个 " & g_nutPlatePN & " 到 " & g_targetPN & "。", _
+'             vbInformation, "快速装配托板螺母"
 '  End Sub
 '
 ' ---------------------------------------------------------------------------
