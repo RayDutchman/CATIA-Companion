@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QProgressDialog, QRadioButton, QButtonGroup,
     QMenu, QWidgetAction, QLineEdit, QGridLayout
 )
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QColor
 from PySide6.QtCore import Qt, QSettings
 
 from catia_companion.constants import (
@@ -164,7 +164,7 @@ class BomEditDialog(QDialog):
 
         # ── BOM type + display options (single compact group) ────────────────
         display_group  = QGroupBox("BOM类型与显示选项")
-        display_group.setMinimumHeight(85)  # Prevent height jumping when switching BOM types
+        display_group.setMinimumHeight(60)  # Prevent height jumping when switching BOM types
         display_layout = QVBoxLayout(display_group)
         display_layout.setSpacing(4)
         display_layout.setContentsMargins(8, 6, 8, 6)
