@@ -1095,6 +1095,8 @@ class BomEditDialog(QDialog):
             ) == QMessageBox.StandardButton.Yes
         )
 
+        QMessageBox.information(self, "请在CATIA中继续操作", "准备就绪，请在CATIA中确认后续操作。")
+
         try:
             from pycatia import catia as _pycatia
             caa         = _pycatia()
