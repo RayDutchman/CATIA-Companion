@@ -1405,7 +1405,6 @@ class BomEditDialog(QDialog):
             documents   = application.documents
 
             fp_resolved = Path(fp).resolve()
-            logger.debug("_open_in_catia: opening %r", str(fp_resolved))
             documents.open(str(fp_resolved))
 
             # ── Bring the CATIA V5 main window to the Windows foreground ──────
@@ -1423,23 +1422,16 @@ class BomEditDialog(QDialog):
                         try:
                             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
                             win32gui.SetForegroundWindow(hwnd)
-                            logger.debug(
-                                "_open_in_catia: raised CATIA V5 window hwnd=0x%x", hwnd
-                            )
-                        except Exception as fw_err:
-                            logger.debug(
-                                "_open_in_catia: SetForegroundWindow failed hwnd=0x%x: %s",
-                                hwnd, fw_err,
-                            )
+                        except Exception:
+                            pass
                         # Stop enumeration after the first CATIA V5 window.
                         return False
 
                 win32gui.EnumWindows(_raise_catia_window, None)
             except ImportError:
                 pass
-            except Exception as win_err:
-                logger.debug("_open_in_catia: win32gui error: %s", win_err)
+            except Exception:
+                pass
 
         except Exception as e:
-            logger.debug("_open_in_catia: unexpected exception", exc_info=True)
             QMessageBox.warning(self, "在CATIA中打开失败", f"无法在CATIA中打开文件：\n{e}")
