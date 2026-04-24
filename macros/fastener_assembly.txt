@@ -52,7 +52,7 @@ Public Const DEBUG_MODE As Boolean = False
 '   5. 装配循环：选择孔口圆形边 -> 添加紧固件实例并定位。
 '      装配完成后可点击浮动面板上的"翻转方向"按钮撤销并重装（方向相反）。
 '      翻转按钮在每次装配后始终有效（包括正在选下一孔时），影响最近一次装配的紧固件。
-'      按 ESC 结束循环。
+'      点""停止装配""按钮结束循环。
 '
 ' ----------------------------------------------------------------------------
 
@@ -79,12 +79,8 @@ Public g_assemblyHistory()         ' 动态数组，存储每个装配件的 Pro
 Public g_historyCount As Long      ' 历史记录数量
 
 ' 装配循环活动标志：ContinueSelectProduct 进入 Do 循环时设为 True，ESC/循环结束时设为 False。
-' FlipForm.btnFlip_MouseUp 检查此标志，作为防御性保护（MouseUp 本身已不受 ESC 触发）。
+' FlipForm.btnFlip_Click 检查此标志，防止循环结束后残留的 Click 事件切换 g_flipDir。
 Public g_loopActive   As Boolean
-
-' 最近一次对 g_lastComp 执行的操作是否为翻转（MoveLastFastener）。
-' 用于在 ESC 后重新应用被 CATIA 回滚的翻转操作。
-Public g_lastOpWasFlip As Boolean
 
 ' 装配循环共享状态（供 PlaceFastenerAtHole 及状态栏更新使用）
 Public targetProduct As Object
@@ -279,17 +275,16 @@ Public Sub ContinueSelectProduct()
 
         status = sel.SelectElement2(holeFilter, _
             "选择孔的入口圆形边 (" & g_fastenerPN & " -> " & g_targetPN & _
-            "  已装配:" & g_count & ")  [ESC终止]", False)
+            "  已装配:" & g_count & ")  点""停止装配""按钮结束", False)
         If status <> "Normal" Then
             g_loopActive = False
-            ' ESC 退出 SelectElement2 时，CATIA 会回滚最后一个"未提交"的撤销记录。
-            ' 若翻转操作（MoveLastFastener）在本次 SelectElement2 期间执行，
-            ' 其 Position.SetComponents 将被 CATIA 撤销，导致紧固件翻转还原。
-            ' 解决方案：在 ESC 后、循环结束前立即重新应用翻转（此时不在选择事务中，操作可持久保留）。
-            If g_hasLastComp And g_lastOpWasFlip Then
-                Call MoveLastFastener()
-            End If
             g_hasLastComp = False
+            Exit Do
+        End If
+
+        ' 检查 g_loopActive：如果用户点击了"停止装配"按钮或关闭了 UserForm，
+        ' SelectElement2 可能仍返回 "Normal"（用户选择了孔），但应停止循环
+        If Not g_loopActive Then
             Exit Do
         End If
 
@@ -418,7 +413,7 @@ Public Sub ContinueSelectProduct()
         ' 装配完成后的状态更新在 PlaceFastenerAtHole 中已完成
         CATIA.StatusBar = "已装配 " & g_count & " 个 " & g_fastenerPN & " -> " & g_targetPN & _
                           "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
-                          "  可点击翻转按钮修改方向，选下一孔继续，ESC结束"
+                          "  可翻转/撤销，选下一孔继续"
 
         End If  ' bHoleGeomOK
 
@@ -428,7 +423,6 @@ Public Sub ContinueSelectProduct()
     g_hasLastComp = False
     Unload FlipForm
 
-    CATIA.StatusBar = "装配完成！共装配 " & g_count & " 个 " & g_fastenerPN
     MsgBox "装配完成！" & Chr(10) & _
            "共装配 " & g_count & " 个 " & g_fastenerPN & " 到 " & g_targetPN & "。", _
            vbInformation, "快速装配紧固件"
@@ -548,7 +542,6 @@ Public Sub PlaceFastenerAtHole()
     ' ── 记录最近装配件信息（供翻转重装使用） ─────────────────────────────
     Set g_lastProducts = products
     g_lastCompIdx = products.Count   ' 刚添加的件始终在末尾
-    g_lastOpWasFlip = False          ' 新装配件尚未执行翻转
     g_count = g_count + 1
 
     ' 新装配后启用翻转按钮
@@ -800,18 +793,22 @@ End Function
 
 
 ' ============================================================================
-' ── FlipForm UserForm 代码 ──────────────────────────────────────────────────
+' ── 装配控制面板 UserForm 代码 ──────────────────────────────────────────────
 '
 ' 创建步骤：在 VBA IDE 中，Insert > UserForm。
-'   - 将窗体 (Name) 设为 "FlipForm"，Caption 设为 "方向控制"。
-'   - 添加两个 CommandButton：
+'   - 将窗体 (Name) 设为 "FlipForm"，Caption 设为 "装配控制面板"。
+'   - 添加三个 CommandButton（从上到下排列）：
 '       (Name)   = "btnFlip"
 '       Caption  = "翻转方向: 否"
-'       Width    = 160  Height = 36（可按需调整）
+'       Width    = 180  Height = 36（可按需调整）
 '
 '       (Name)   = "btnUndo"
 '       Caption  = "撤销上一个"
-'       Width    = 160  Height = 36（可按需调整）
+'       Width    = 180  Height = 36（可按需调整）
+'
+'       (Name)   = "btnStop"
+'       Caption  = "退出（请勿按[ESC]退出）"
+'       Width    = 180  Height = 36（可按需调整）
 '   - 打开窗体的代码模块，将下方代码粘贴进去。
 ' ============================================================================
 '
@@ -819,24 +816,45 @@ End Function
 '
 '  Private Sub btnFlip_Click()
 '      If Not g_loopActive Then Exit Sub
+'      btnFlip.Enabled = False
+'
 '      g_flipDir = Not g_flipDir
 '      btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
-'      ' 如果当前可翻转重装（装配后尚未选下一孔），
-'      ' 则直接将已有紧固件移动到翻转后的位置（不删除重建）。
+'
+'      ' 装配后可翻转重装：直接移动已有紧固件到翻转后的位置
 '      If g_hasLastComp Then
 '          Call MoveLastFastener()
-'          g_lastOpWasFlip = True    ' 记录翻转已执行，供 ESC 后重新应用
 '          CATIA.StatusBar = "已重新定向（方向翻转）" & g_count & " 个 " & g_fastenerPN & _
 '                            "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
-'                            "  选下一孔继续，ESC结束"
+'                            "  选下一孔继续"
 '      End If
+'
+'      btnFlip.Enabled = True
 '  End Sub
 '
 '  Private Sub btnUndo_Click()
 '      If Not g_loopActive Then Exit Sub
+'      btnUndo.Enabled = False
+'
 '      If g_historyCount > 0 Then
 '          Call UndoLastFastener()
 '      End If
+'
+'      If g_historyCount > 0 Then
+'          btnUndo.Enabled = True
+'      End If
+'  End Sub
+'
+'  Private Sub btnStop_Click()
+'      g_loopActive = False
+'      g_hasLastComp = False
+'      Unload Me
+'
+'      ' 通过 ESC 取消 SelectElement2（仅在等待选择时有效）
+'      On Error Resume Next
+'      SendKeys "{ESC}", True
+'      DoEvents
+'      On Error GoTo 0
 '  End Sub
 '
 ' ---------------------------------------------------------------------------
