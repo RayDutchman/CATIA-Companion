@@ -543,14 +543,23 @@ class MainWindow(QMainWindow):
 
         此处使用 iLibraryType=2（VBA 项目文件模式）：
           - iLibraryName：.catvba 文件完整路径
-          - iProgramName：VBA 模块名（catvba 默认模块名为 "模块1"，英文环境为 "Module1"）
+          - iProgramName：VBA 模块名（中文 CATIA 默认为 "模块1"，英文/法语等环境为 "Module1"）
           - iFunctionName：要调用的函数/子程序名（通常为 "CATMain"）
           - iParameters：传递给宏的参数列表
+
+        为兼容不同语言的 CATIA 安装，依次尝试 "模块1"（中文）和 "Module1"（英文/法语），
+        任一成功即返回；两者均失败时抛出最后一次的异常。
         """
-        module_name = "模块1"
-        app.com_object.SystemService.ExecuteScript(
-            str(macro_path), 2, module_name, func_name, params
-        )
+        last_exc: Exception | None = None
+        for module_name in ("模块1", "Module1"):
+            try:
+                app.com_object.SystemService.ExecuteScript(
+                    str(macro_path), 2, module_name, func_name, params
+                )
+                return
+            except Exception as e:
+                last_exc = e
+        raise last_exc  # type: ignore[misc]
 
     def _run_template_macro(
         self,
