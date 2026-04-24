@@ -722,7 +722,13 @@ class BomEditDialog(QDialog):
                 elif col_name == "Filename":
                     fp = str(row_data.get("_filepath", ""))
                     fn = str(row_data.get("Filename", ""))
-                    value = (fp if fp else fn) if self._show_filepath_col else fn
+                    if self._show_filepath_col:
+                        value = fp if fp else fn
+                    else:
+                        # Always show filename with extension when the backing
+                        # path is known; fall back to the stored stem (which may
+                        # equal FILENAME_NOT_FOUND) when it is not.
+                        value = Path(fp).name if fp else fn
                 elif col_name == "Filepath":
                     value = str(row_data.get("_filepath", ""))
                 elif col_name in BOM_READONLY_COLUMNS:
@@ -740,9 +746,12 @@ class BomEditDialog(QDialog):
                     fn = str(row_data.get("Filename", ""))
                     if fp:
                         if self._show_filepath_col:
-                            if fn and fn != FILENAME_NOT_FOUND:
-                                item.setToolTip(col_idx, fn)
+                            # Column shows full path; tooltip shows just name+ext
+                            name_with_ext = Path(fp).name
+                            if name_with_ext and name_with_ext != FILENAME_NOT_FOUND:
+                                item.setToolTip(col_idx, name_with_ext)
                         else:
+                            # Column shows name+ext; tooltip shows full path
                             item.setToolTip(col_idx, fp)
 
             # Non-locked rows: allow in-place editing (delegate blocks read-only columns)
