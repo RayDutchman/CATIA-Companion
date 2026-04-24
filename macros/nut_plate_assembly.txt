@@ -292,7 +292,8 @@ Public Sub ContinueSelectProduct()
     g_loopActive = True
     ' 初始化装配历史记录
     g_historyCount = 0
-    ReDim g_assemblyHistory(0 To 99, 0 To 1)  ' 最多100个托板螺母，每个记录存储 Products 和 Index
+    ' 每个历史记录存储：(0)=Products集合, (1)=Index, (2-4)=holeAxis1, (5-7)=holeAxis2, (8-10)=holePt
+    ReDim g_assemblyHistory(0 To 99, 0 To 10)  ' 最多100个托板螺母
     FlipForm.Show vbModeless
     FlipForm.btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
     FlipForm.btnUndo.Enabled = False
@@ -690,6 +691,16 @@ Public Sub PlaceNutPlateAtHole()
     If g_historyCount < 100 Then
         Set g_assemblyHistory(g_historyCount, 0) = products
         g_assemblyHistory(g_historyCount, 1) = products.Count
+        ' 保存孔的几何信息，供撤销后翻转使用
+        g_assemblyHistory(g_historyCount, 2) = g_holeAxis1X
+        g_assemblyHistory(g_historyCount, 3) = g_holeAxis1Y
+        g_assemblyHistory(g_historyCount, 4) = g_holeAxis1Z
+        g_assemblyHistory(g_historyCount, 5) = g_holeAxis2X
+        g_assemblyHistory(g_historyCount, 6) = g_holeAxis2Y
+        g_assemblyHistory(g_historyCount, 7) = g_holeAxis2Z
+        g_assemblyHistory(g_historyCount, 8) = g_holePtX
+        g_assemblyHistory(g_historyCount, 9) = g_holePtY
+        g_assemblyHistory(g_historyCount, 10) = g_holePtZ
         g_historyCount = g_historyCount + 1
         FlipForm.btnUndo.Enabled = True
     End If
@@ -820,6 +831,16 @@ Public Sub UndoLastNutPlate()
         ' 因为删除组件后，集合中的索引会发生变化，
         ' 最后添加的组件始终位于 products.Count 位置
         g_lastCompIdx = g_lastProducts.Count
+        ' 恢复该组件对应的孔几何信息，供翻转使用
+        g_holeAxis1X = CDbl(g_assemblyHistory(g_historyCount - 1, 2))
+        g_holeAxis1Y = CDbl(g_assemblyHistory(g_historyCount - 1, 3))
+        g_holeAxis1Z = CDbl(g_assemblyHistory(g_historyCount - 1, 4))
+        g_holeAxis2X = CDbl(g_assemblyHistory(g_historyCount - 1, 5))
+        g_holeAxis2Y = CDbl(g_assemblyHistory(g_historyCount - 1, 6))
+        g_holeAxis2Z = CDbl(g_assemblyHistory(g_historyCount - 1, 7))
+        g_holePtX = CDbl(g_assemblyHistory(g_historyCount - 1, 8))
+        g_holePtY = CDbl(g_assemblyHistory(g_historyCount - 1, 9))
+        g_holePtZ = CDbl(g_assemblyHistory(g_historyCount - 1, 10))
         g_hasLastComp = True
     Else
         g_hasLastComp = False
