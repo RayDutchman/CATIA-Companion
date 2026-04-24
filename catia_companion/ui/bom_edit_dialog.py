@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QPushButton, QTreeWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QCheckBox, QGroupBox, QMessageBox, QApplication,
     QFileDialog, QProgressDialog, QRadioButton, QButtonGroup,
-    QMenu, QWidgetAction,
+    QMenu, QWidgetAction, QLineEdit
 )
 from PySide6.QtGui import QPixmap
 from PySide6.QtCore import Qt, QSettings
