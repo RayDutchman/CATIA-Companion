@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QPushButton, QTreeWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QCheckBox, QGroupBox, QMessageBox, QApplication,
     QFileDialog, QProgressDialog, QRadioButton, QButtonGroup,
-    QMenu, QWidgetAction, QLineEdit
+    QMenu, QWidgetAction, QLineEdit, QGridLayout
 )
 from PySide6.QtGui import QPixmap
 from PySide6.QtCore import Qt, QSettings
@@ -164,6 +164,7 @@ class BomEditDialog(QDialog):
 
         # ── BOM type + display options (single compact group) ────────────────
         display_group  = QGroupBox("BOM类型与显示选项")
+        display_group.setMinimumHeight(80)  # Prevent height jumping when switching BOM types
         display_layout = QVBoxLayout(display_group)
         display_layout.setSpacing(4)
         display_layout.setContentsMargins(8, 6, 8, 6)
@@ -228,54 +229,58 @@ class BomEditDialog(QDialog):
         hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(hint)
 
-        # Preset column visibility checkboxes (2 rows layout)
+        # Preset column visibility checkboxes (2 rows layout with grid for alignment)
         preset_group  = QGroupBox("属性列（勾选以显示）")
         preset_main_layout = QVBoxLayout(preset_group)
         preset_main_layout.setSpacing(8)
         preset_main_layout.setContentsMargins(8, 6, 8, 6)
 
-        # Row 1: Filename checkbox + 显示完整路径 + hideable standard columns
-        row1_layout = QHBoxLayout()
-        row1_layout.setSpacing(12)
+        # Use QGridLayout for proper alignment and even distribution
+        grid_layout = QGridLayout()
+        grid_layout.setSpacing(12)
+        grid_layout.setColumnStretch(100, 1)  # Add stretch at the end
+
         self._preset_checkboxes: dict[str, QCheckBox] = {}
+
+        # Row 0: Filename checkbox + 显示完整路径 + hideable standard columns
+        col = 0
 
         # "Filename" is a built-in column but can be toggled like a preset
         fn_cb = QCheckBox(BOM_COLUMN_DISPLAY_NAMES.get("Filename", "Filename"))
         fn_cb.setChecked(self._show_filename_col)
         fn_cb.toggled.connect(self._on_preset_col_toggled)
-        row1_layout.addWidget(fn_cb)
+        grid_layout.addWidget(fn_cb, 0, col)
         self._preset_checkboxes["Filename"] = fn_cb
+        col += 1
 
         # "显示完整路径" follows immediately after the Filename checkbox
         self._filepath_chk = QCheckBox("显示完整路径")
         self._filepath_chk.setToolTip("勾选后文件名列将显示文件完整路径（含目录），而非仅文件名")
         self._filepath_chk.setChecked(self._show_filepath_col)
         self._filepath_chk.toggled.connect(self._on_show_filepath_toggled)
-        row1_layout.addWidget(self._filepath_chk)
+        grid_layout.addWidget(self._filepath_chk, 0, col)
+        col += 1
 
         # Hideable standard columns (Nomenclature, Revision, Definition, Source)
         for col_name in BOM_HIDEABLE_COLUMNS:
             cb = QCheckBox(BOM_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
             cb.setChecked(col_name in self._visible_hideable_cols)
             cb.toggled.connect(self._on_hideable_col_toggled)
-            row1_layout.addWidget(cb)
+            grid_layout.addWidget(cb, 0, col)
             self._preset_checkboxes[col_name] = cb
+            col += 1
 
-        row1_layout.addStretch()
-        preset_main_layout.addLayout(row1_layout)
-
-        # Row 2: Preset user-defined properties (物料编码, 物料名称, etc.)
-        row2_layout = QHBoxLayout()
-        row2_layout.setSpacing(12)
+        # Row 1: Preset user-defined properties (物料编码, 物料名称, etc.)
+        col = 0
         for col_name in PRESET_USER_REF_PROPERTIES:
             cb = QCheckBox(col_name)
             cb.setChecked(col_name in self._visible_preset_cols)
             cb.toggled.connect(self._on_preset_col_toggled)
-            row2_layout.addWidget(cb)
+            grid_layout.addWidget(cb, 1, col)
             self._preset_checkboxes[col_name] = cb
-        row2_layout.addStretch()
-        preset_main_layout.addLayout(row2_layout)
+            col += 1
 
+        preset_main_layout.addLayout(grid_layout)
         layout.addWidget(preset_group)
 
         # BOM tree widget (replaces QTableWidget; tree handles expand/collapse natively)
