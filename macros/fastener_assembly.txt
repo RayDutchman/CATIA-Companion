@@ -649,7 +649,10 @@ Public Sub UndoLastFastener()
     ' 更新 g_hasLastComp：撤销后上一个变成了当前最后一个
     If g_historyCount > 0 Then
         Set g_lastProducts = g_assemblyHistory(g_historyCount - 1, 0)
-        g_lastCompIdx = CLng(g_assemblyHistory(g_historyCount - 1, 1))
+        ' 使用当前 products.Count 而不是历史记录中的索引，
+        ' 因为删除组件后，集合中的索引会发生变化，
+        ' 最后添加的组件始终位于 products.Count 位置
+        g_lastCompIdx = g_lastProducts.Count
         g_hasLastComp = True
     Else
         g_hasLastComp = False
