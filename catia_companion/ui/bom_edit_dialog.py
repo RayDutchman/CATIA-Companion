@@ -1392,11 +1392,9 @@ class BomEditDialog(QDialog):
             logger.warning(f"Failed to open path in Explorer: {exc}")
 
     def _open_in_catia(self, fp: str) -> None:
-        """Activate or open the CATIA document at file path *fp*.
+        """Open the CATIA document at file path *fp* via ``documents.open``.
 
-        If the file is already loaded in CATIA the existing document is
-        activated.  Otherwise ``documents.open`` is called to load it fresh.
-        After activation the CATIA V5 main window is brought to the Windows
+        After opening, the CATIA V5 main window is brought to the Windows
         foreground via ``win32gui`` when available.
         """
         try:
@@ -1407,23 +1405,8 @@ class BomEditDialog(QDialog):
             documents   = application.documents
 
             fp_resolved = Path(fp).resolve()
-            logger.debug("_open_in_catia: fp=%r", str(fp_resolved))
-
-            doc = _find_catia_doc_by_path(documents, fp_resolved)
-            if doc is None:
-                logger.debug("_open_in_catia: not yet open – calling documents.open()")
-                documents.open(str(fp_resolved))
-                doc = _find_catia_doc_by_path(documents, fp_resolved)
-
-            if doc is None:
-                QMessageBox.warning(
-                    self, "在CATIA中打开失败",
-                    f"无法在CATIA中打开文件：\n{fp}",
-                )
-                return
-
-            logger.debug("_open_in_catia: activating %r", doc.name)
-            doc.activate()
+            logger.debug("_open_in_catia: opening %r", str(fp_resolved))
+            documents.open(str(fp_resolved))
 
             # ── Bring the CATIA V5 main window to the Windows foreground ──────
             try:
