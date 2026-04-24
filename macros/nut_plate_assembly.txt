@@ -335,6 +335,12 @@ Public Sub ContinueSelectProduct()
             Exit Do
         End If
 
+        ' 检查 g_loopActive：如果用户点击了"停止装配"按钮或关闭了 UserForm，
+        ' SelectElement2 可能仍返回 "Normal"（用户选择了孔），但应停止循环
+        If Not g_loopActive Then
+            Exit Do
+        End If
+
         ' 取当前选中项所属的叶层产品（具体实例）。
         ' GetMeasurable（不带上下文）在叶层零件自己的坐标系中返回测量值，
         ' 确保即使同一零件在装配体中存在多个实例，也能正确测量被点击实例的几何。
@@ -381,6 +387,12 @@ Public Sub ContinueSelectProduct()
             If status <> "Normal" Then
                 g_loopActive = False
                 g_hasLastComp = False
+                Exit Do
+            End If
+
+            ' 检查 g_loopActive：如果用户点击了"停止装配"按钮或关闭了 UserForm，
+            ' SelectElement2 可能仍返回 "Normal"（用户选择了孔），但应停止循环
+            If Not g_loopActive Then
                 Exit Do
             End If
 
@@ -976,15 +988,16 @@ End Function
 '      g_loopActive = False
 '      g_hasLastComp = False
 '
+'      ' 立即关闭 UserForm
+'      Unload Me
+'
 '      ' 通过模拟按下 ESC 键来取消正在进行的 SelectElement2 操作
-'      ' 这是取消 CATIA 阻塞式选择操作的最可靠方法
+'      ' 注意：只有当用户正在 SelectElement2 等待选择时，ESC 才会被捕获
+'      ' 如果用户在其他时候点击停止按钮，ESC 可能不会有效果，但不会造成问题
 '      On Error Resume Next
 '      SendKeys "{ESC}", True  ' True = 等待按键被处理
 '      DoEvents  ' 允许 VBA 处理消息队列
 '      On Error GoTo 0
-'
-'      ' 注意：UserForm 会在 SelectElement2 返回后由主循环的 Exit Do 后自动卸载
-'      ' 这里不调用 Unload Me，因为 ESC 会导致循环退出并执行清理代码
 '  End Sub
 '
 ' ---------------------------------------------------------------------------
