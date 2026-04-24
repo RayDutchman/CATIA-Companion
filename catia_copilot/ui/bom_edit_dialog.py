@@ -438,6 +438,9 @@ class BomEditDialog(QDialog):
         self._table.setColumnCount(len(_headers))
         self._table.setHeaderLabels(_headers)
         if self._rows:
+            # Preserve the user's current scroll position across the repopulate
+            vscroll = self._table.verticalScrollBar().value()
+            hscroll = self._table.horizontalScrollBar().value()
             self._populate_table()
             # Restore saved widths; auto-fit only columns that have no saved width yet
             for col_idx, col_name in enumerate(self._columns):
@@ -445,6 +448,9 @@ class BomEditDialog(QDialog):
                     self._table.setColumnWidth(col_idx, self._col_widths[col_name])
                 else:
                     self._table.resizeColumnToContents(col_idx)
+            # Restore scroll position
+            self._table.verticalScrollBar().setValue(vscroll)
+            self._table.horizontalScrollBar().setValue(hscroll)
 
     # ── Preset column helpers ─────────────────────────────────────────────────
 
@@ -482,7 +488,8 @@ class BomEditDialog(QDialog):
             c for c in self._custom_columns
             if c not in BOM_EDIT_COLUMN_ORDER and c not in PRESET_USER_REF_PROPERTIES
         ]
-        return base + visible_preset + other_custom
+        # "#" is always the first column (row number, read-only)
+        return ["#"] + base + visible_preset + other_custom
 
     def _on_preset_col_toggled(self) -> None:
         # "Filename" checkbox controls the built-in filename column visibility
@@ -707,7 +714,9 @@ class BomEditDialog(QDialog):
                     continue
 
                 # All other columns → item text
-                if col_name == "Quantity":
+                if col_name == "#":
+                    value = str(row_idx + 1)
+                elif col_name == "Quantity":
                     value = str(row_data.get("Quantity", "1"))
                 elif col_name == "Filename":
                     fp = str(row_data.get("_filepath", ""))
