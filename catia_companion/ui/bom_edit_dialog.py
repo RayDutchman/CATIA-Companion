@@ -285,7 +285,9 @@ class BomEditDialog(QDialog):
 
         # BOM tree widget (replaces QTableWidget; tree handles expand/collapse natively)
         self._table = _BomTreeWidget()
-        self._table.setHeaderLabels(self._display_headers())
+        _init_headers = self._display_headers()
+        self._table.setColumnCount(len(_init_headers))
+        self._table.setHeaderLabels(_init_headers)
         hdr = self._table.header()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hdr.setStretchLastSection(True)
@@ -298,6 +300,7 @@ class BomEditDialog(QDialog):
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.setAlternatingRowColors(True)
         self._table.setIndentation(16)
+        self._table.setStyleSheet("QTreeWidget::item { min-height: 24px; }")
         self._table.itemChanged.connect(self._on_item_changed)
         _delegate = _BomTreeDelegate(lambda: self._columns, self._table)
         self._table.setItemDelegate(_delegate)
@@ -417,7 +420,9 @@ class BomEditDialog(QDialog):
     def _rebuild_columns_and_repopulate(self) -> None:
         """Rebuild the visible column list, update headers, and repopulate if rows are loaded."""
         self._columns = self._build_visible_columns()
-        self._table.setHeaderLabels(self._display_headers())
+        _headers = self._display_headers()
+        self._table.setColumnCount(len(_headers))
+        self._table.setHeaderLabels(_headers)
         if self._rows:
             self._populate_table()
             for col in range(self._table.columnCount()):
@@ -617,7 +622,9 @@ class BomEditDialog(QDialog):
         self._table.blockSignals(True)
 
         self._table.clear()                          # removes all items; headers persist
-        self._table.setHeaderLabels(self._display_headers())
+        headers = self._display_headers()
+        self._table.setColumnCount(len(headers))     # Qt never shrinks column count on its own
+        self._table.setHeaderLabels(headers)
         self._item_by_row = []
         self._pn_to_items.clear()  # Reset PN→Item index
 
