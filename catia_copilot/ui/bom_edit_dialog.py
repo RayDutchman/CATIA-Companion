@@ -664,6 +664,12 @@ class BomEditDialog(QDialog):
         self._is_updating = True
         self._table.blockSignals(True)
 
+        # Summary mode: all rows are flat top-level items with no children.
+        # Keeping setRootIsDecorated(True) reserves space for the expand arrow on
+        # every row, which pushes column-0 content to the right.  Disable it in
+        # summary mode; re-enable it in hierarchical mode so expand arrows show.
+        self._table.setRootIsDecorated(not self._summarize)
+
         self._table.clear()                          # removes all items; headers persist
         headers = self._display_headers()
         self._table.setColumnCount(len(headers))     # Qt never shrinks column count on its own
