@@ -74,6 +74,10 @@ Public g_hasLastComp  As Boolean
 Public g_lastProducts As Object
 Public g_lastCompIdx  As Long
 
+' 装配历史记录（供撤销使用）
+Public g_assemblyHistory()         ' 动态数组，存储每个装配件的 Products 集合和索引
+Public g_historyCount As Long      ' 历史记录数量
+
 ' 装配循环活动标志：ContinueSelectProduct 进入 Do 循环时设为 True，ESC/循环结束时设为 False。
 ' FlipForm.btnFlip_Click 检查此标志，防止循环结束后残留的 Click 事件切换 g_flipDir。
 Public g_loopActive   As Boolean
@@ -286,8 +290,12 @@ Public Sub ContinueSelectProduct()
     g_count = 0
     g_hasLastComp = False
     g_loopActive = True
+    ' 初始化装配历史记录
+    g_historyCount = 0
+    ReDim g_assemblyHistory(0 To 99, 0 To 1)  ' 最多100个托板螺母，每个记录存储 Products 和 Index
     FlipForm.Show vbModeless
     FlipForm.btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
+    FlipForm.btnUndo.Enabled = False
 
     Dim holeFilter As Variant
     holeFilter = Array("MonoDim")
@@ -678,6 +686,14 @@ Public Sub PlaceNutPlateAtHole()
     g_lastOpWasFlip = False          ' 新装配件尚未执行翻转
     g_count = g_count + 1
 
+    ' ── 记录到装配历史（供撤销使用） ──────────────────────────────────────
+    If g_historyCount < 100 Then
+        Set g_assemblyHistory(g_historyCount, 0) = products
+        g_assemblyHistory(g_historyCount, 1) = products.Count
+        g_historyCount = g_historyCount + 1
+        FlipForm.btnUndo.Enabled = True
+    End If
+
 End Sub
 
 
@@ -773,6 +789,46 @@ End Sub
 
 
 ' ============================================================================
+' UndoLastNutPlate：撤销最近装配的托板螺母。
+' ============================================================================
+Public Sub UndoLastNutPlate()
+    If g_historyCount = 0 Then Exit Sub
+
+    ' 获取最后一条历史记录
+    Dim lastIdx As Long
+    lastIdx = g_historyCount - 1
+    Dim products As Object
+    Set products = g_assemblyHistory(lastIdx, 0)
+    Dim compIdx As Long
+    compIdx = CLng(g_assemblyHistory(lastIdx, 1))
+
+    ' 删除该托板螺母
+    On Error Resume Next
+    products.Remove compIdx
+    On Error GoTo 0
+
+    ' 清除历史记录中的最后一项
+    Set g_assemblyHistory(lastIdx, 0) = Nothing
+    g_assemblyHistory(lastIdx, 1) = 0
+    g_historyCount = g_historyCount - 1
+    g_count = g_count - 1
+
+    ' 更新 g_hasLastComp：撤销后上一个变成了当前最后一个
+    If g_historyCount > 0 Then
+        Set g_lastProducts = g_assemblyHistory(g_historyCount - 1, 0)
+        g_lastCompIdx = CLng(g_assemblyHistory(g_historyCount - 1, 1))
+        g_hasLastComp = True
+    Else
+        g_hasLastComp = False
+        FlipForm.btnUndo.Enabled = False
+    End If
+
+    ' 更新状态栏
+    CATIA.StatusBar = "已撤销上一个托板螺母。当前已装配: " & g_count & " 个 " & g_nutPlatePN
+End Sub
+
+
+' ============================================================================
 ' 辅助函数：返回坐标系 {vx, vy, vz} 第 [col] 列的第 [row] 行分量。
 ' ============================================================================
 Private Function FrameCol(ByVal row As Integer, ByVal col As Integer, _
@@ -830,9 +886,13 @@ End Function
 '
 ' 创建步骤：在 VBA IDE 中，Insert > UserForm。
 '   - 将窗体 (Name) 设为 "FlipForm"，Caption 设为 "方向控制"。
-'   - 添加一个 CommandButton：
+'   - 添加两个 CommandButton：
 '       (Name)   = "btnFlip"
 '       Caption  = "翻转方向: 否"
+'       Width    = 160  Height = 36（可按需调整）
+'
+'       (Name)   = "btnUndo"
+'       Caption  = "撤销上一个"
 '       Width    = 160  Height = 36（可按需调整）
 '   - 打开窗体的代码模块，将下方代码粘贴进去。
 ' ============================================================================
@@ -851,6 +911,13 @@ End Function
 '          CATIA.StatusBar = "已重新定向（方向翻转）" & g_count & " 个 " & g_nutPlatePN & _
 '                            "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
 '                            "  选下一孔继续，ESC结束"
+'      End If
+'  End Sub
+'
+'  Private Sub btnUndo_Click()
+'      If Not g_loopActive Then Exit Sub
+'      If g_historyCount > 0 Then
+'          Call UndoLastNutPlate()
 '      End If
 '  End Sub
 '
