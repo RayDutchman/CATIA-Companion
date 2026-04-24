@@ -1,20 +1,20 @@
 """
-CATIA Companion - 应用程序入口点。
+CATIA Copilot - 应用程序入口点。
 
-所有应用逻辑都在 ``catia_companion`` 包中实现。
+所有应用逻辑都在 ``catia_copilot`` 包中实现。
 本文件仅负责启动 Qt 应用程序并显示主窗口。
 """
 
 import sys
 
 # 确保在创建任何控件之前初始化日志系统和 Qt 信号发射器
-import catia_companion.logging_setup  # noqa: F401
+import catia_copilot.logging_setup  # noqa: F401
 
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
-from catia_companion.utils import resource_path
-from catia_companion.constants import STYLESHEET_RELATIVE_PATH, APP_ICON_PATH
-from catia_companion.ui.main_window import MainWindow
+from catia_copilot.utils import resource_path
+from catia_copilot.constants import STYLESHEET_RELATIVE_PATH, APP_ICON_PATH
+from catia_copilot.ui.main_window import MainWindow
 
 
 def main() -> None:
@@ -23,7 +23,7 @@ def main() -> None:
     初始化 Qt 应用程序，加载样式表和图标，显示主窗口。
     """
     app = QApplication(sys.argv)
-    app.setApplicationName("CATIA Companion")
+    app.setApplicationName("CATIA Copilot")
 
     # 应用统一的 QSS 样式表
     qss_path = resource_path(STYLESHEET_RELATIVE_PATH)

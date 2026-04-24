@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-from catia_companion.constants import APP_NAME, APP_VERSION, APP_AUTHOR, APP_CONTACT
+from catia_copilot.constants import APP_NAME, APP_VERSION, APP_AUTHOR, APP_CONTACT
 
 
 _HELP_HTML = f"""\

@@ -8,7 +8,7 @@ CATPart 模板刷写。
 import logging
 from pathlib import Path
 
-from catia_companion.constants import PRESET_USER_REF_PROPERTIES
+from catia_copilot.constants import PRESET_USER_REF_PROPERTIES
 
 logger = logging.getLogger(__name__)
 
@@ -40,14 +40,14 @@ def apply_part_template(
     """如果缺少标准用户自定义属性，则向每个 CATPart 添加这些属性。
 
     属性以空字符串添加，并在刷写后自动保存文件。*output_folder* 为与通用
-    :class:`~catia_companion.ui.convert_dialog.FileConvertDialog` 的 API
+    :class:`~catia_copilot.ui.convert_dialog.FileConvertDialog` 的 API
     兼容性而接受，但实际不使用（零件就地保存）。
 
     参数
     ----------
     progress_callback:
         可选的 ``(index, total)`` 回调，在处理每个文件后调用，与
-        :class:`~catia_companion.ui.convert_dialog.FileConvertDialog` 兼容。
+        :class:`~catia_copilot.ui.convert_dialog.FileConvertDialog` 兼容。
     keep_open:
         当为 ``True`` 时，刷写后**不**关闭文档。在操作已在 CATIA 中打开的
         文档时使用此选项（例如通过"使用当前活动文档"选择的当前活动文档）。

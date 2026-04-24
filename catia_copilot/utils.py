@@ -1,5 +1,5 @@
 """
-CATIA Companion 实用工具函数模块。
+CATIA Copilot 实用工具函数模块。
 
 提供：
 - resource_path()        – 解析打包资源文件路径（支持 PyInstaller）

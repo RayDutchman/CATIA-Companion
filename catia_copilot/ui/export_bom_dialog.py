@@ -12,17 +12,17 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QFileDialog, QAbstractItemView, QRadioButton, QButtonGroup, QLineEdit,
     QGroupBox, QPushButton, QMessageBox, QProgressDialog, QApplication,
-    QCheckBox, QComboBox,
+    QCheckBox, QComboBox, QWidget,
 )
 from PySide6.QtCore import Qt, QSettings
 
-from catia_companion.constants import (
+from catia_copilot.constants import (
     BOM_ALL_COLUMNS,
     BOM_DEFAULT_COLUMNS,
     PRESET_USER_REF_PROPERTIES,
     BOM_COLUMN_DISPLAY_NAMES,
 )
-from catia_companion.catia.bom_export import export_bom_to_excel
+from catia_copilot.catia.bom_export import export_bom_to_excel
 
 logger = logging.getLogger(__name__)
 
@@ -112,10 +112,13 @@ class ExportBomDialog(QDialog):
 
         # ── BOM type + summary options (combined group) ─────────────────────
         bom_opts_group  = QGroupBox("BOM类型与汇总选项")
+        bom_opts_group.setMinimumHeight(60)  # Prevent height jumping when switching BOM types
         bom_opts_layout = QVBoxLayout(bom_opts_group)
+        bom_opts_layout.setSpacing(4)
+        bom_opts_layout.setContentsMargins(8, 6, 8, 6)
 
-        # Radio buttons (层级 vs 汇总)
-        type_row = QHBoxLayout()
+        # Single row: radio buttons + inline summary options
+        bom_type_row = QHBoxLayout()
         self._bom_type_btn_group = QButtonGroup(self)
         self._radio_hierarchical = QRadioButton("层级BOM")
         self._radio_summary      = QRadioButton("汇总BOM")
@@ -125,32 +128,31 @@ class ExportBomDialog(QDialog):
             self._radio_hierarchical.setChecked(True)
         self._bom_type_btn_group.addButton(self._radio_hierarchical)
         self._bom_type_btn_group.addButton(self._radio_summary)
-        type_row.addWidget(self._radio_hierarchical)
-        type_row.addWidget(self._radio_summary)
-        type_row.addStretch()
-        bom_opts_layout.addLayout(type_row)
         self._radio_summary.toggled.connect(self._on_bom_type_changed)
+        bom_type_row.addWidget(self._radio_hierarchical)
+        bom_type_row.addWidget(self._radio_summary)
 
-        # Summary-only options (shown only in summary mode, no sub-groupbox)
+        self._summary_opts_widget = QWidget()
+        summary_opts_layout = QHBoxLayout(self._summary_opts_widget)
+        summary_opts_layout.setContentsMargins(0, 0, 0, 0)
+        summary_opts_layout.setSpacing(8)
+
         self._include_assemblies_chk = QCheckBox("包含产品和部件（子装配体）")
         self._include_assemblies_chk.setToolTip(
             "勾选后，汇总BOM中也会列出产品和部件（子装配体），而不仅限于零件。"
         )
         self._include_assemblies_chk.setChecked(self._summary_include_assemblies)
         self._include_assemblies_chk.toggled.connect(self._on_include_assemblies_toggled)
-        bom_opts_layout.addWidget(self._include_assemblies_chk)
-
-        sort_row = QHBoxLayout()
-        self._sort_row_label = QLabel("排序列:")
+        summary_opts_layout.addWidget(self._include_assemblies_chk)
+        summary_opts_layout.addSpacing(8)
+        summary_opts_layout.addWidget(QLabel("排序列:"))
         self._sort_col_combo = QComboBox()
-        sort_row.addWidget(self._sort_row_label)
-        sort_row.addWidget(self._sort_col_combo)
-        sort_row.addStretch()
-        bom_opts_layout.addLayout(sort_row)
+        summary_opts_layout.addWidget(self._sort_col_combo)
 
-        self._include_assemblies_chk.setVisible(self._summarize)
-        self._sort_row_label.setVisible(self._summarize)
-        self._sort_col_combo.setVisible(self._summarize)
+        self._summary_opts_widget.setVisible(self._summarize)
+        bom_type_row.addWidget(self._summary_opts_widget)
+        bom_type_row.addStretch()
+        bom_opts_layout.addLayout(bom_type_row)
         layout.addWidget(bom_opts_group)
         col_group  = QGroupBox("导出列（拖动以排序）")
         col_outer  = QVBoxLayout(col_group)
@@ -309,10 +311,8 @@ class ExportBomDialog(QDialog):
         self._summarize = summary_checked
         self._settings.setValue("summarize", summary_checked)
 
-        # Show/hide summary options
-        self._include_assemblies_chk.setVisible(summary_checked)
-        self._sort_row_label.setVisible(summary_checked)
-        self._sort_col_combo.setVisible(summary_checked)
+        # Show/hide summary options as a unit
+        self._summary_opts_widget.setVisible(summary_checked)
 
         if summary_checked:
             # Move all "Level" items from selected to available

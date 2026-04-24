@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QTreeWidget, QStyledItemDelegate
 from PySide6.QtGui import QColor, QPen, QPainter
 from PySide6.QtCore import Qt
 
-from catia_companion.constants import BOM_READONLY_COLUMNS
+from catia_copilot.constants import BOM_READONLY_COLUMNS
 
 # 自定义 UserRole 用于 QTreeWidgetItem：标记行为锁定（不可读/未找到）
 _ITEM_LOCKED_ROLE: int = Qt.ItemDataRole.UserRole + 1
@@ -14,7 +14,7 @@ class _BomTreeDelegate(QStyledItemDelegate):
     """BOM QTreeWidget 的逐列只读强制委托。
 
     QTreeWidgetItem 的 flags 是按行设置的；此委托对内部名称属于
-    :data:`~catia_companion.constants.BOM_READONLY_COLUMNS` 的列，
+    :data:`~catia_copilot.constants.BOM_READONLY_COLUMNS` 的列，
     以及被标记为锁定的行（文件未找到/不可读）从 :meth:`createEditor`
     返回 ``None``，从而阻止编辑。
     """

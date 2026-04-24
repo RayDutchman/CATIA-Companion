@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "catia-companion"
+name = "catia-copilot"
 version = "1.3.0"
 description = "A lightweight internal tool to streamline common CATIA V5 workflows."
 authors = [
@@ -17,4 +17,4 @@ dependencies = [
 ]
 
 [project.scripts]
-catia-companion = "main:main"
+catia-copilot = "main:main"

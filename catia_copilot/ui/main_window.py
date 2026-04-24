@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt
 
-from catia_companion.constants import (
+from catia_copilot.constants import (
     APP_NAME,
     ABOUT_TEXT,
     MAIN_WINDOW_DEFAULT_WIDTH,
@@ -28,16 +28,16 @@ from catia_companion.constants import (
     ISO_XML_FILE_PATH,
     CRACK_DIR_PATH,
 )
-from catia_companion.utils import resource_path, detect_catia_root
-from catia_companion.logging_setup import log_signal_emitter
-from catia_companion.catia.conversion import convert_drawing_to_pdf, convert_part_to_step
-from catia_companion.catia.template import apply_part_template
-from catia_companion.ui.log_window import LogWindow
-from catia_companion.ui.convert_dialog import FileConvertDialog
-from catia_companion.ui.export_bom_dialog import ExportBomDialog
-from catia_companion.ui.find_deps_dialog import FindDependenciesDialog
-from catia_companion.ui.bom_edit_dialog import BomEditDialog
-from catia_companion.ui.help_dialog import HelpDialog
+from catia_copilot.utils import resource_path, detect_catia_root
+from catia_copilot.logging_setup import log_signal_emitter
+from catia_copilot.catia.conversion import convert_drawing_to_pdf, convert_part_to_step
+from catia_copilot.catia.template import apply_part_template
+from catia_copilot.ui.log_window import LogWindow
+from catia_copilot.ui.convert_dialog import FileConvertDialog
+from catia_copilot.ui.export_bom_dialog import ExportBomDialog
+from catia_copilot.ui.find_deps_dialog import FindDependenciesDialog
+from catia_copilot.ui.bom_edit_dialog import BomEditDialog
+from catia_copilot.ui.help_dialog import HelpDialog
 
 logger = logging.getLogger(__name__)
 

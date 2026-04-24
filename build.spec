@@ -1,11 +1,11 @@
-# build.spec — PyInstaller spec file for CATIA Companion
+# build.spec — PyInstaller spec file for CATIA Copilot
 #
 # How to build:
 #   pyinstaller build.spec
 #
-# Output: dist/CATIA Companion/
-# The executable is placed in dist/CATIA Companion/ and all supporting files
-# (resources/, macros/, catia_companion/, etc.) are placed inside the default
+# Output: dist/CATIA Copilot/
+# The executable is placed in dist/CATIA Copilot/ and all supporting files
+# (resources/, macros/, catia_copilot/, etc.) are placed inside the default
 # _internal/ subdirectory alongside it.
 #
 # Before building, place the application icon at:
@@ -23,8 +23,8 @@ a = Analysis(
         ('macros', 'macros'),
         ('drawing_templates', 'drawing_templates'),
         ('crack', 'crack'),
-        ('catia_companion/ui/style.qss', 'catia_companion/ui'),
-        ('catia_companion', 'catia_companion'),
+        ('catia_copilot/ui/style.qss', 'catia_copilot/ui'),
+        ('catia_copilot', 'catia_copilot'),
     ],
     hiddenimports=[],
     hookspath=[],
@@ -44,7 +44,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='CATIA Companion',
+    name='CATIA Copilot',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -65,5 +65,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='CATIA Companion',
+    name='CATIA Copilot',
 )

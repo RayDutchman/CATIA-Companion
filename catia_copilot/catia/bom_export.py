@@ -9,14 +9,14 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from catia_companion.constants import (
+from catia_copilot.constants import (
     BOM_DEFAULT_COLUMNS,
     BOM_COLUMN_DISPLAY_NAMES,
     BOM_COLUMN_MIN_WIDTHS,
     SOURCE_TO_DISPLAY,
 )
-from catia_companion.utils import estimate_column_width
-from catia_companion.catia.bom_collect import collect_bom_rows, flatten_bom_to_summary
+from catia_copilot.utils import estimate_column_width
+from catia_copilot.catia.bom_collect import collect_bom_rows, flatten_bom_to_summary
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ def export_bom_to_excel(
         Destination directory.  Defaults to each source file's parent.
     columns:
         Internal column names to include.  Defaults to
-        :data:`~catia_companion.constants.BOM_DEFAULT_COLUMNS`.
+        :data:`~catia_copilot.constants.BOM_DEFAULT_COLUMNS`.
     custom_columns:
         Column names that are user-defined properties.
     row_progress_callback:
@@ -55,7 +55,7 @@ def export_bom_to_excel(
         The output filename will have the suffix ``_BOM汇总`` instead of
         ``_BOM``.
     summary_include_assemblies:
-        Passed to :func:`~catia_companion.catia.bom_collect.flatten_bom_to_summary`.
+        Passed to :func:`~catia_copilot.catia.bom_collect.flatten_bom_to_summary`.
         When ``True`` sub-assemblies and assemblies are included in the summary.
         Only used when *summarize* is ``True``.
     summary_sort_column:

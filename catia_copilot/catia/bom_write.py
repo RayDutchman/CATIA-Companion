@@ -9,7 +9,7 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from catia_companion.constants import (
+from catia_copilot.constants import (
     BOM_READONLY_COLUMNS,
     SOURCE_FROM_DISPLAY,
 )
