@@ -550,7 +550,6 @@ Public Sub ContinueSelectProduct()
     g_hasLastComp = False
     Unload FlipForm
 
-    CATIA.StatusBar = "装配完成！共装配 " & g_count & " 个 " & g_nutPlatePN
     MsgBox "装配完成！" & Chr(10) & _
            "共装配 " & g_count & " 个 " & g_nutPlatePN & " 到 " & g_targetPN & "。", _
            vbInformation, "快速装配托板螺母"
