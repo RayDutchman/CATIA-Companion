@@ -1,6 +1,6 @@
 """BOM 树控件：自定义委托与带连接线的 QTreeWidget。"""
 
-from PySide6.QtWidgets import QTreeWidget, QStyledItemDelegate, QStyle
+from PySide6.QtWidgets import QTreeWidget, QStyledItemDelegate
 from PySide6.QtGui import QColor, QPen, QPainter
 from PySide6.QtCore import Qt
 
@@ -32,17 +32,6 @@ class _BomTreeDelegate(QStyledItemDelegate):
         if col_name in BOM_READONLY_COLUMNS:
             return None
         return super().createEditor(parent, option, index)
-
-    def paint(self, painter: QPainter, option, index) -> None:
-        super().paint(painter, option, index)
-        # 在每个单元格右侧绘制一条竖向分隔线，与表头列分隔线视觉风格保持一致。
-        painter.save()
-        # 使用调色板的 mid 颜色（与 Qt 默认表头分隔线颜色相同）。
-        pen = QPen(option.palette.mid().color(), 1)
-        painter.setPen(pen)
-        r = option.rect
-        painter.drawLine(r.right(), r.top(), r.right(), r.bottom())
-        painter.restore()
 
 
 class _BomTreeWidget(QTreeWidget):
