@@ -134,6 +134,31 @@ CATIA-Copilot/
 
 ---
 
+## 自定义属性联动说明（`PRESET_USER_REF_PROPERTIES`）
+
+`catia_copilot/constants.py` 中的 `PRESET_USER_REF_PROPERTIES` 列表定义了程序内置的用户自定义属性名称（物料编码、物料名称、规格型号、物料来源、数据状态、存货类别、重量、备注）。手动编辑该列表后，**Python 部分**会在重启程序后全部自动生效，**VBA 宏和文档**则需手动同步。
+
+### ✅ 修改后自动联动（Python 层）
+
+| 文件 | 作用 |
+|------|------|
+| `catia_copilot/catia/template.py` | 刷写零件模板时，按列表逐项向 CATPart 写入用户属性 |
+| `catia_copilot/ui/bom_edit_dialog.py` | BOM 编辑对话框：过滤已保存可见列、构建全量列集合、渲染属性复选框、生成显示列头 |
+| `catia_copilot/ui/export_bom_dialog.py` | BOM 导出对话框：构建"可用列 / 已选列"列表 |
+
+### ⚠️ 需手动同步的地方
+
+| 文件 | 原因 |
+|------|------|
+| `macros/generate_drawing.catvbs`（第 85–88 行） | VBA 宏内独立硬编码属性名数组（与 Python 列表相互独立），且包含 `PRESET_USER_REF_PROPERTIES` 中没有的 `"材料"` 字段 |
+| `macros/refresh_drawing_info.catvbs`（第 119–121 行） | 同上，另一个独立的 VBA 属性名数组 |
+| `catia_copilot/ui/help_dialog.py`（第 52–53、76–77 行） | 帮助窗口 HTML 文本中硬编码了属性名称列表，仅影响界面说明文字，不影响功能 |
+| `README.md`（本文件）| 功能一览表中对属性名的文字描述需同步更新 |
+
+> **总结：** 修改 `constants.py` 中的 `PRESET_USER_REF_PROPERTIES` 后，Python 程序所有读写逻辑均会在重启后自动跟随更新；唯一需要人工同步的是两个 VBA 宏文件中各自独立的属性名数组，以及帮助文档和 README 中的说明文字。
+
+---
+
 ## 联系方式
 
 - **开发者：** CHEN Weibo
