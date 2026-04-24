@@ -970,6 +970,15 @@ End Function
 '      ' 停止装配循环
 '      g_loopActive = False
 '      g_hasLastComp = False
+'
+'      ' 取消正在进行的 SelectElement2 操作（通过清空选择集）
+'      ' 这会导致 SelectElement2 返回非 "Normal" 状态，从而退出循环
+'      On Error Resume Next
+'      Dim sel As Object
+'      Set sel = CATIA.ActiveDocument.Selection
+'      sel.Clear
+'      On Error GoTo 0
+'
 '      Unload Me
 '      CATIA.StatusBar = "用户停止装配。共装配 " & g_count & " 个 " & g_nutPlatePN
 '      MsgBox "装配已停止！" & Chr(10) & _
