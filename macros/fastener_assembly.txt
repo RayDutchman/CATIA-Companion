@@ -250,20 +250,6 @@ Public Sub ContinueSelectProduct()
         Exit Sub
     End If
 
-    ' 进一步验证：确保所选 Product 是装配体/部件，而非零件实例（CATPart 实例）。
-    ' 零件实例的 ReferenceProduct.Part 可访问；子装配体/装配体的 .Part 会报错。
-    Dim tmpPartFA As Object
-    On Error Resume Next
-    Set tmpPartFA = targetProduct.ReferenceProduct.Part
-    On Error GoTo 0
-    If Not tmpPartFA Is Nothing Then
-        MsgBox "所选对象是零件实例，无法将紧固件装入零件。" & Chr(10) & _
-               "请在产品结构树中选择一个产品（Product）或部件（Sub-assembly）。", _
-               vbExclamation, "快速装配紧固件"
-        sel.Clear
-        Exit Sub
-    End If
-
     g_targetPN = targetProduct.PartNumber
     sel.Clear
 
