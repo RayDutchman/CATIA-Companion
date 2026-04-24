@@ -235,7 +235,24 @@ Public Sub ContinueSelectProduct()
         Exit Sub
     End If
 
+    ' 验证选中的是否为 Product 对象
+    On Error Resume Next
     Set targetProduct = sel.Item(1).Value
+    Dim testProducts As Object
+    Set testProducts = Nothing
+    If Not targetProduct Is Nothing Then
+        Set testProducts = targetProduct.products
+    End If
+    On Error GoTo 0
+
+    If targetProduct Is Nothing Or testProducts Is Nothing Then
+        MsgBox "所选对象不是产品或部件。" & Chr(10) & _
+               "请在产品结构树中选择一个产品（Product）或部件。", _
+               vbExclamation, "快速装配紧固件"
+        sel.Clear
+        Exit Sub
+    End If
+
     g_targetPN = targetProduct.PartNumber
     sel.Clear
 
