@@ -164,7 +164,7 @@ class BomEditDialog(QDialog):
 
         # ── BOM type + display options (single compact group) ────────────────
         display_group  = QGroupBox("BOM类型与显示选项")
-        display_group.setMinimumHeight(60)  # Prevent height jumping when switching BOM types
+        display_group.setMinimumHeight(85)  # Prevent height jumping when switching BOM types
         display_layout = QVBoxLayout(display_group)
         display_layout.setSpacing(4)
         display_layout.setContentsMargins(8, 6, 8, 6)
