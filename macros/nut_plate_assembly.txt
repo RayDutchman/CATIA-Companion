@@ -52,7 +52,7 @@ Public Const DEBUG_MODE As Boolean = False
 '   5. 装配循环：选择安装孔的两个圆形边 -> 添加托板螺母实例并定位。
 '      装配完成后可点击浮动面板上的"翻转方向"按钮撤销并重装（方向相反）。
 '      翻转按钮在每次装配后始终有效（包括正在选下一孔时），影响最近一次装配的托板螺母。
-'      按""停止装配""按钮结束循环。
+'      按""退出""按钮结束循环。
 '
 ' ----------------------------------------------------------------------------
 
@@ -309,239 +309,435 @@ Public Sub ContinueSelectProduct()
     FlipForm.btnFlip.Enabled = False  ' 初始禁用，装配后启用
     FlipForm.btnUndo.Enabled = False
 
+    Dim firstFilter As Variant
+    firstFilter = Array("MonoDim", "Vertex")
     Dim holeFilter As Variant
     holeFilter = Array("MonoDim")
+    Dim ptFilter As Variant
+    ptFilter = Array("Vertex")
 
     Do
-        ' 6a. 选择安装孔的两个圆形边
+        ' 6a. 自动识别选取模式：选择圆形边（圆弧模式）或顶点（点+线模式）
         Set sel = CATIA.ActiveDocument.Selection
         sel.Clear
 
         Dim spaAssembly As Object
         Set spaAssembly = CATIA.ActiveDocument.GetWorkbench("SPAWorkbench")
 
-        Dim hole1Ref As Object, hole2Ref As Object
-        Dim hole1Meas As Object, hole2Meas As Object
-        Dim holeCenter1(2), holeCenter2(2)
+        Dim holePt(2) As Double     ' 锚点（targetProduct 坐标系）
+        Dim holeAxis1(2) As Double  ' 第一轴线（targetProduct 坐标系）
+        Dim holeAxis2(2) As Double  ' 第二轴线（targetProduct 坐标系）
         Dim bHoleGeomOK As Boolean
+        bHoleGeomOK = False
 
-        ' ── 选择安装孔的第一个圆 ──────────────────────────────────────────
-        status = sel.SelectElement2(holeFilter, _
-            "选择安装孔的第一个圆 (" & g_nutPlatePN & " -> " & g_targetPN & _
-            "  已装配:" & g_count & ")  点""停止装配""按钮结束", False)
+        ' ── 第一步：选择第一个元素（圆形边 或 锚点顶点）────────────────────────
+        status = sel.SelectElement2(firstFilter, _
+            "选择安装孔的第一个圆（圆弧模式）或第一个锚点顶点（点+线模式） [" & g_nutPlatePN & " -> " & g_targetPN & _
+            "  已装配:" & g_count & "]  点""退出""按钮结束", False)
         If status <> "Normal" Then
             g_loopActive = False
             g_hasLastComp = False
             Exit Do
         End If
+        ' 检查 g_loopActive
+        If Not g_loopActive Then Exit Do
 
-        ' 检查 g_loopActive：如果用户点击了"停止装配"按钮或关闭了 UserForm，
-        ' SelectElement2 可能仍返回 "Normal"（用户选择了孔），但应停止循环
-        If Not g_loopActive Then
-            Exit Do
-        End If
+        Dim firstRef As Object: Set firstRef = sel.Item(1).Reference
+        Dim firstLeafProd As Object: Set firstLeafProd = sel.Item(1).LeafProduct
+        Dim firstMeas As Object
 
-        ' 取当前选中项所属的叶层产品（具体实例）。
-        ' GetMeasurable（不带上下文）在叶层零件自己的坐标系中返回测量值，
-        ' 确保即使同一零件在装配体中存在多个实例，也能正确测量被点击实例的几何。
-        Set hole1Ref = sel.Item(1).Reference
-        Dim hole1LeafProd As Object
-        Set hole1LeafProd = sel.Item(1).LeafProduct
-        bHoleGeomOK = False
-        Dim axis1Raw(2)   ' hole1 圆的轴线（叶层坐标系，Variant，供 holeAxis2 推导使用）
-        If TryGetMeasurable(spaAssembly, hole1Ref, hole1Meas) Then
-            bHoleGeomOK = TryGetCenter(hole1Meas, holeCenter1) And TryGetAxis(hole1Meas, axis1Raw)
-        End If
-
-        If Not bHoleGeomOK Then
-            MsgBox "无法获取第一个安装孔的圆心和轴线。" & Chr(10) & _
-                   "请选择孔的圆或圆弧（而非直线或曲线）。", _
-                   vbExclamation, "快速装配托板螺母"
+        If Not TryGetMeasurable(spaAssembly, firstRef, firstMeas) Then
+            MsgBox "无法测量所选元素，请重新选择。", vbExclamation, "快速装配托板螺母"
             sel.Clear
         Else
-            ' ── 将 center1 和 axis1Raw 从 hole1LeafProd 正向推导到根产品坐标系 ─
-            ' 格式：m(0..2)=X轴列, m(3..5)=Y轴列, m(6..8)=Z轴列, m(9..11)=平移T
-            Dim h1M(11)   ' Position 矩阵（不能声明 As Double）
-            Dim h1Tx As Double, h1Ty As Double, h1Tz As Double
-            Dim h1Cur As Object: Set h1Cur = hole1LeafProd
-            Dim h1Par As Object
-            Do
-                Set h1Par = h1Cur.Parent
-                If TypeName(h1Par) = "ProductDocument" Then Exit Do
-                h1Cur.Position.GetComponents h1M
-                h1Tx = h1M(0)*holeCenter1(0) + h1M(3)*holeCenter1(1) + h1M(6)*holeCenter1(2) + h1M(9)
-                h1Ty = h1M(1)*holeCenter1(0) + h1M(4)*holeCenter1(1) + h1M(7)*holeCenter1(2) + h1M(10)
-                h1Tz = h1M(2)*holeCenter1(0) + h1M(5)*holeCenter1(1) + h1M(8)*holeCenter1(2) + h1M(11)
-                holeCenter1(0) = h1Tx: holeCenter1(1) = h1Ty: holeCenter1(2) = h1Tz
-                h1Tx = h1M(0)*axis1Raw(0) + h1M(3)*axis1Raw(1) + h1M(6)*axis1Raw(2)
-                h1Ty = h1M(1)*axis1Raw(0) + h1M(4)*axis1Raw(1) + h1M(7)*axis1Raw(2)
-                h1Tz = h1M(2)*axis1Raw(0) + h1M(5)*axis1Raw(1) + h1M(8)*axis1Raw(2)
-                axis1Raw(0) = h1Tx: axis1Raw(1) = h1Ty: axis1Raw(2) = h1Tz
-                Set h1Cur = h1Par.Parent
-            Loop
-
-            ' ── 选择安装孔的第二个圆 ──────────────────────────────────────
-            status = sel.SelectElement2(holeFilter, _
-                "选择安装孔的第二个圆 (" & g_nutPlatePN & " -> " & g_targetPN & _
-                "  已装配:" & g_count & ")  点""停止装配""按钮结束", False)
-            If status <> "Normal" Then
-                g_loopActive = False
-                g_hasLastComp = False
-                Exit Do
-            End If
-
-            ' 检查 g_loopActive：如果用户点击了"停止装配"按钮或关闭了 UserForm，
-            ' SelectElement2 可能仍返回 "Normal"（用户选择了孔），但应停止循环
-            If Not g_loopActive Then
-                Exit Do
-            End If
-
-            Set hole2Ref = sel.Item(1).Reference
-            Dim hole2LeafProd As Object
-            Set hole2LeafProd = sel.Item(1).LeafProduct
-            bHoleGeomOK = False
-            If TryGetMeasurable(spaAssembly, hole2Ref, hole2Meas) Then
-                bHoleGeomOK = TryGetCenter(hole2Meas, holeCenter2)
-            End If
-
-            If Not bHoleGeomOK Then
-                MsgBox "无法获取第二个安装孔的圆心。" & Chr(10) & _
-                       "请选择孔的圆或圆弧（而非直线或曲线）。", _
-                       vbExclamation, "快速装配托板螺母"
-                sel.Clear
-            Else
-                ' ── 将 center2 从 hole2LeafProd 正向推导到根产品坐标系 ─────
-                Dim h2M(11)   ' Position 矩阵（不能声明 As Double）
-                Dim h2Tx As Double, h2Ty As Double, h2Tz As Double
-                Dim h2Cur As Object: Set h2Cur = hole2LeafProd
-                Dim h2Par As Object
+            ' 自动检测：先尝试作为圆弧（圆弧模式），再尝试作为顶点（点+线模式）
+            ' 注意：圆弧的 GetPoint 也会成功（返回圆心），因此必须先检测圆弧，否则会误判为点。
+            Dim hole1Meas As Object, hole2Ref As Object, hole2Meas As Object
+            Dim holeCenter1(2), holeCenter2(2)
+            Dim axis1Raw(2)   ' hole1 圆的轴线（叶层坐标系，Variant，供 holeAxis2 推导使用）
+            Set hole1Meas = firstMeas
+            If TryGetCenter(hole1Meas, holeCenter1) And TryGetAxis(hole1Meas, axis1Raw) Then
+                ' ── 圆弧模式：将 center1 和 axis1Raw 从 firstLeafProd 正向推导到根产品坐标系 ──
+                ' 格式：m(0..2)=X轴列, m(3..5)=Y轴列, m(6..8)=Z轴列, m(9..11)=平移T
+                Dim h1M(11)   ' Position 矩阵（不能声明 As Double）
+                Dim h1Tx As Double, h1Ty As Double, h1Tz As Double
+                Dim h1Cur As Object: Set h1Cur = firstLeafProd
+                Dim h1Par As Object
                 Do
-                    Set h2Par = h2Cur.Parent
-                    If TypeName(h2Par) = "ProductDocument" Then Exit Do
-                    h2Cur.Position.GetComponents h2M
-                    h2Tx = h2M(0)*holeCenter2(0) + h2M(3)*holeCenter2(1) + h2M(6)*holeCenter2(2) + h2M(9)
-                    h2Ty = h2M(1)*holeCenter2(0) + h2M(4)*holeCenter2(1) + h2M(7)*holeCenter2(2) + h2M(10)
-                    h2Tz = h2M(2)*holeCenter2(0) + h2M(5)*holeCenter2(1) + h2M(8)*holeCenter2(2) + h2M(11)
-                    holeCenter2(0) = h2Tx: holeCenter2(1) = h2Ty: holeCenter2(2) = h2Tz
-                    Set h2Cur = h2Par.Parent
+                    Set h1Par = h1Cur.Parent
+                    If TypeName(h1Par) = "ProductDocument" Then Exit Do
+                    h1Cur.Position.GetComponents h1M
+                    h1Tx = h1M(0)*holeCenter1(0) + h1M(3)*holeCenter1(1) + h1M(6)*holeCenter1(2) + h1M(9)
+                    h1Ty = h1M(1)*holeCenter1(0) + h1M(4)*holeCenter1(1) + h1M(7)*holeCenter1(2) + h1M(10)
+                    h1Tz = h1M(2)*holeCenter1(0) + h1M(5)*holeCenter1(1) + h1M(8)*holeCenter1(2) + h1M(11)
+                    holeCenter1(0) = h1Tx: holeCenter1(1) = h1Ty: holeCenter1(2) = h1Tz
+                    h1Tx = h1M(0)*axis1Raw(0) + h1M(3)*axis1Raw(1) + h1M(6)*axis1Raw(2)
+                    h1Ty = h1M(1)*axis1Raw(0) + h1M(4)*axis1Raw(1) + h1M(7)*axis1Raw(2)
+                    h1Tz = h1M(2)*axis1Raw(0) + h1M(5)*axis1Raw(1) + h1M(8)*axis1Raw(2)
+                    axis1Raw(0) = h1Tx: axis1Raw(1) = h1Ty: axis1Raw(2) = h1Tz
+                    Set h1Cur = h1Par.Parent
                 Loop
 
-                ' ── 6b. 计算安装孔的几何（根产品坐标系）───────────────────────
-                ' 锚点 = 两个圆心的中点（均已变换到根产品坐标系）
-                Dim holePt(2) As Double
-                holePt(0) = (holeCenter1(0) + holeCenter2(0)) / 2
-                holePt(1) = (holeCenter1(1) + holeCenter2(1)) / 2
-                holePt(2) = (holeCenter1(2) + holeCenter2(2)) / 2
+                ' 选择安装孔的第二个圆
+                status = sel.SelectElement2(holeFilter, _
+                    "选择安装孔的第二个圆 (" & g_nutPlatePN & " -> " & g_targetPN & _
+                    "  已装配:" & g_count & ")  点""退出""按钮结束", False)
+                If status <> "Normal" Then
+                    g_loopActive = False
+                    g_hasLastComp = False
+                    Exit Do
+                End If
+                If Not g_loopActive Then Exit Do
 
-                ' 第一轴线 = 两个圆心连线的方向（从 holeCenter1 指向 holeCenter2）
-                Dim holeAxis1(2) As Double
-                holeAxis1(0) = holeCenter2(0) - holeCenter1(0)
-                holeAxis1(1) = holeCenter2(1) - holeCenter1(1)
-                holeAxis1(2) = holeCenter2(2) - holeCenter1(2)
-                Dim holeAxis1Len As Double
-                holeAxis1Len = Sqr(holeAxis1(0)*holeAxis1(0) + holeAxis1(1)*holeAxis1(1) + holeAxis1(2)*holeAxis1(2))
-                If holeAxis1Len < 0.000000000001 Then
-                    MsgBox "两个安装孔的圆心重合，无法确定第一轴线。", vbExclamation, "快速装配托板螺母"
+                Set hole2Ref = sel.Item(1).Reference
+                Dim hole2LeafProd As Object
+                Set hole2LeafProd = sel.Item(1).LeafProduct
+                bHoleGeomOK = False
+                If TryGetMeasurable(spaAssembly, hole2Ref, hole2Meas) Then
+                    bHoleGeomOK = TryGetCenter(hole2Meas, holeCenter2)
+                End If
+
+                If Not bHoleGeomOK Then
+                    MsgBox "无法获取第二个安装孔的圆心。" & Chr(10) & _
+                           "请选择孔的圆或圆弧（而非直线或曲线）。", _
+                           vbExclamation, "快速装配托板螺母"
                     sel.Clear
                 Else
-                    holeAxis1(0) = holeAxis1(0) / holeAxis1Len
-                    holeAxis1(1) = holeAxis1(1) / holeAxis1Len
-                    holeAxis1(2) = holeAxis1(2) / holeAxis1Len
+                    ' 将 center2 从 hole2LeafProd 正向推导到根产品坐标系
+                    Dim h2M(11)   ' Position 矩阵（不能声明 As Double）
+                    Dim h2Tx As Double, h2Ty As Double, h2Tz As Double
+                    Dim h2Cur As Object: Set h2Cur = hole2LeafProd
+                    Dim h2Par As Object
+                    Do
+                        Set h2Par = h2Cur.Parent
+                        If TypeName(h2Par) = "ProductDocument" Then Exit Do
+                        h2Cur.Position.GetComponents h2M
+                        h2Tx = h2M(0)*holeCenter2(0) + h2M(3)*holeCenter2(1) + h2M(6)*holeCenter2(2) + h2M(9)
+                        h2Ty = h2M(1)*holeCenter2(0) + h2M(4)*holeCenter2(1) + h2M(7)*holeCenter2(2) + h2M(10)
+                        h2Tz = h2M(2)*holeCenter2(0) + h2M(5)*holeCenter2(1) + h2M(8)*holeCenter2(2) + h2M(11)
+                        holeCenter2(0) = h2Tx: holeCenter2(1) = h2Ty: holeCenter2(2) = h2Tz
+                        Set h2Cur = h2Par.Parent
+                    Loop
 
-                    ' 第二轴线：axis1Raw 已在根产品坐标系中，归一化后投影到垂直于 holeAxis1 的分量
-                    Dim axis1RawLen As Double
-                    axis1RawLen = Sqr(axis1Raw(0)*axis1Raw(0) + axis1Raw(1)*axis1Raw(1) + axis1Raw(2)*axis1Raw(2))
-                    If axis1RawLen > 0.000000000001 Then
-                        axis1Raw(0) = axis1Raw(0) / axis1RawLen
-                        axis1Raw(1) = axis1Raw(1) / axis1RawLen
-                        axis1Raw(2) = axis1Raw(2) / axis1RawLen
+                    ' 计算安装孔的几何（根产品坐标系）
+                    ' 锚点 = 两个圆心的中点
+                    Dim circleMidPt(2) As Double
+                    circleMidPt(0) = (holeCenter1(0) + holeCenter2(0)) / 2
+                    circleMidPt(1) = (holeCenter1(1) + holeCenter2(1)) / 2
+                    circleMidPt(2) = (holeCenter1(2) + holeCenter2(2)) / 2
+
+                    ' 第一轴线 = 两圆心连线方向（从 holeCenter1 指向 holeCenter2）
+                    Dim circleAxis1(2) As Double
+                    circleAxis1(0) = holeCenter2(0) - holeCenter1(0)
+                    circleAxis1(1) = holeCenter2(1) - holeCenter1(1)
+                    circleAxis1(2) = holeCenter2(2) - holeCenter1(2)
+                    Dim circleAxis1Len As Double
+                    circleAxis1Len = Sqr(circleAxis1(0)*circleAxis1(0) + circleAxis1(1)*circleAxis1(1) + circleAxis1(2)*circleAxis1(2))
+                    If circleAxis1Len < 0.000000000001 Then
+                        MsgBox "两个安装孔的圆心重合，无法确定第一轴线。", vbExclamation, "快速装配托板螺母"
+                        sel.Clear
+                        bHoleGeomOK = False
+                    Else
+                        circleAxis1(0) = circleAxis1(0) / circleAxis1Len
+                        circleAxis1(1) = circleAxis1(1) / circleAxis1Len
+                        circleAxis1(2) = circleAxis1(2) / circleAxis1Len
+
+                        ' 第二轴线：axis1Raw 已在根坐标系，归一化后投影到垂直于第一轴线的分量
+                        Dim ax1RLen As Double
+                        ax1RLen = Sqr(axis1Raw(0)*axis1Raw(0) + axis1Raw(1)*axis1Raw(1) + axis1Raw(2)*axis1Raw(2))
+                        If ax1RLen > 0.000000000001 Then
+                            axis1Raw(0) = axis1Raw(0) / ax1RLen
+                            axis1Raw(1) = axis1Raw(1) / ax1RLen
+                            axis1Raw(2) = axis1Raw(2) / ax1RLen
+                        End If
+                        Dim hDP As Double
+                        hDP = axis1Raw(0)*circleAxis1(0) + axis1Raw(1)*circleAxis1(1) + axis1Raw(2)*circleAxis1(2)
+                        Dim circleAxis2(2) As Double
+                        circleAxis2(0) = axis1Raw(0) - hDP * circleAxis1(0)
+                        circleAxis2(1) = axis1Raw(1) - hDP * circleAxis1(1)
+                        circleAxis2(2) = axis1Raw(2) - hDP * circleAxis1(2)
+                        Dim circleAxis2Len As Double
+                        circleAxis2Len = Sqr(circleAxis2(0)*circleAxis2(0) + circleAxis2(1)*circleAxis2(1) + circleAxis2(2)*circleAxis2(2))
+                        If circleAxis2Len < 0.000000000001 Then
+                            MsgBox "第一个安装孔的轴线与两圆心连线平行，无法确定第二轴线。", vbExclamation, "快速装配托板螺母"
+                            sel.Clear
+                            bHoleGeomOK = False
+                        Else
+                            circleAxis2(0) = circleAxis2(0) / circleAxis2Len
+                            circleAxis2(1) = circleAxis2(1) / circleAxis2Len
+                            circleAxis2(2) = circleAxis2(2) / circleAxis2Len
+
+                            ' 收集 targetProduct→根 变换链，逆序施加逆变换到 targetProduct 坐标系
+                            Dim tpChain(49, 11)     ' 最多50层，Variant（不能声明 As Double）
+                            Dim tpDepth As Integer
+                            tpDepth = 0
+                            Dim tpCur As Object: Set tpCur = targetProduct
+                            Dim tpPar As Object
+                            Dim tpM(11)             ' 不能声明 As Double
+                            Dim tpKk As Integer
+                            Do
+                                Set tpPar = tpCur.Parent
+                                If TypeName(tpPar) = "ProductDocument" Then Exit Do
+                                tpCur.Position.GetComponents tpM
+                                For tpKk = 0 To 11: tpChain(tpDepth, tpKk) = tpM(tpKk): Next tpKk
+                                tpDepth = tpDepth + 1
+                                Set tpCur = tpPar.Parent
+                            Loop
+                            Dim tpii As Integer
+                            Dim tpOff0 As Double, tpOff1 As Double, tpOff2 As Double
+                            Dim tpAx As Double, tpAy As Double, tpAz As Double
+                            For tpii = tpDepth - 1 To 0 Step -1
+                                tpOff0 = circleMidPt(0) - tpChain(tpii, 9)
+                                tpOff1 = circleMidPt(1) - tpChain(tpii, 10)
+                                tpOff2 = circleMidPt(2) - tpChain(tpii, 11)
+                                circleMidPt(0) = tpChain(tpii, 0)*tpOff0 + tpChain(tpii, 1)*tpOff1 + tpChain(tpii, 2)*tpOff2
+                                circleMidPt(1) = tpChain(tpii, 3)*tpOff0 + tpChain(tpii, 4)*tpOff1 + tpChain(tpii, 5)*tpOff2
+                                circleMidPt(2) = tpChain(tpii, 6)*tpOff0 + tpChain(tpii, 7)*tpOff1 + tpChain(tpii, 8)*tpOff2
+                                tpAx = tpChain(tpii, 0)*circleAxis1(0) + tpChain(tpii, 1)*circleAxis1(1) + tpChain(tpii, 2)*circleAxis1(2)
+                                tpAy = tpChain(tpii, 3)*circleAxis1(0) + tpChain(tpii, 4)*circleAxis1(1) + tpChain(tpii, 5)*circleAxis1(2)
+                                tpAz = tpChain(tpii, 6)*circleAxis1(0) + tpChain(tpii, 7)*circleAxis1(1) + tpChain(tpii, 8)*circleAxis1(2)
+                                circleAxis1(0) = tpAx: circleAxis1(1) = tpAy: circleAxis1(2) = tpAz
+                                tpAx = tpChain(tpii, 0)*circleAxis2(0) + tpChain(tpii, 1)*circleAxis2(1) + tpChain(tpii, 2)*circleAxis2(2)
+                                tpAy = tpChain(tpii, 3)*circleAxis2(0) + tpChain(tpii, 4)*circleAxis2(1) + tpChain(tpii, 5)*circleAxis2(2)
+                                tpAz = tpChain(tpii, 6)*circleAxis2(0) + tpChain(tpii, 7)*circleAxis2(1) + tpChain(tpii, 8)*circleAxis2(2)
+                                circleAxis2(0) = tpAx: circleAxis2(1) = tpAy: circleAxis2(2) = tpAz
+                            Next tpii
+
+                            holePt(0) = circleMidPt(0): holePt(1) = circleMidPt(1): holePt(2) = circleMidPt(2)
+                            holeAxis1(0) = circleAxis1(0): holeAxis1(1) = circleAxis1(1): holeAxis1(2) = circleAxis1(2)
+                            holeAxis2(0) = circleAxis2(0): holeAxis2(1) = circleAxis2(1): holeAxis2(2) = circleAxis2(2)
+                            bHoleGeomOK = True
+                        End If  ' circleAxis2Len
+                    End If  ' circleAxis1Len
+                End If  ' bHoleGeomOK (second circle)
+
+            Else
+                ' ── 点+线模式（圆弧检测失败，尝试作为顶点） ──────────────────────
+                Dim np1Coord(2)
+                Dim bNp1OK As Boolean: bNp1OK = TryGetPoint(firstMeas, np1Coord)
+
+                If bNp1OK Then
+                ' ── 点+线模式 ──────────────────────────────────────────────────
+                ' 将 np1Coord 从 firstLeafProd 正向推导到根产品坐标系
+                Dim np1Cur As Object: Set np1Cur = firstLeafProd
+                Dim np1M(11): Dim np1Par As Object
+                Dim np1Tx As Double, np1Ty As Double, np1Tz As Double
+                Do
+                    Set np1Par = np1Cur.Parent
+                    If TypeName(np1Par) = "ProductDocument" Then Exit Do
+                    np1Cur.Position.GetComponents np1M
+                    np1Tx = np1M(0)*np1Coord(0) + np1M(3)*np1Coord(1) + np1M(6)*np1Coord(2) + np1M(9)
+                    np1Ty = np1M(1)*np1Coord(0) + np1M(4)*np1Coord(1) + np1M(7)*np1Coord(2) + np1M(10)
+                    np1Tz = np1M(2)*np1Coord(0) + np1M(5)*np1Coord(1) + np1M(8)*np1Coord(2) + np1M(11)
+                    np1Coord(0) = np1Tx: np1Coord(1) = np1Ty: np1Coord(2) = np1Tz
+                    Set np1Cur = np1Par.Parent
+                Loop
+
+                ' 步骤2：选择第二个点
+                sel.Clear
+                status = sel.SelectElement2(ptFilter, _
+                    "【点+线模式】第2步：选择第二个点", False)
+                If status <> "Normal" Then
+                    g_loopActive = False
+                    g_hasLastComp = False
+                    Exit Do
+                End If
+                If Not g_loopActive Then Exit Do
+
+                Dim np2Ref As Object: Set np2Ref = sel.Item(1).Reference
+                Dim np2LeafProd As Object: Set np2LeafProd = sel.Item(1).LeafProduct
+                Dim np2Meas As Object
+                Dim np2Coord(2)
+                Dim bNp2OK As Boolean: bNp2OK = False
+                If TryGetMeasurable(spaAssembly, np2Ref, np2Meas) Then
+                    bNp2OK = TryGetPoint(np2Meas, np2Coord)
+                End If
+                If Not bNp2OK Then
+                    MsgBox "无法获取第二个点的坐标。" & Chr(10) & _
+                           "请选择一个顶点或点要素。", _
+                           vbExclamation, "快速装配托板螺母"
+                    sel.Clear
+                Else
+                    ' 将 np2Coord 从 np2LeafProd 正向推导到根产品坐标系
+                    Dim np2Cur As Object: Set np2Cur = np2LeafProd
+                    Dim np2M(11): Dim np2Par As Object
+                    Dim np2Tx As Double, np2Ty As Double, np2Tz As Double
+                    Do
+                        Set np2Par = np2Cur.Parent
+                        If TypeName(np2Par) = "ProductDocument" Then Exit Do
+                        np2Cur.Position.GetComponents np2M
+                        np2Tx = np2M(0)*np2Coord(0) + np2M(3)*np2Coord(1) + np2M(6)*np2Coord(2) + np2M(9)
+                        np2Ty = np2M(1)*np2Coord(0) + np2M(4)*np2Coord(1) + np2M(7)*np2Coord(2) + np2M(10)
+                        np2Tz = np2M(2)*np2Coord(0) + np2M(5)*np2Coord(1) + np2M(8)*np2Coord(2) + np2M(11)
+                        np2Coord(0) = np2Tx: np2Coord(1) = np2Ty: np2Coord(2) = np2Tz
+                        Set np2Cur = np2Par.Parent
+                    Loop
+
+                    ' 步骤3：选择轴线方向
+                    sel.Clear
+                    status = sel.SelectElement2(holeFilter, _
+                        "【点+线模式】第3步：选择轴线方向（直线或轴线）", False)
+                    If status <> "Normal" Then
+                        g_loopActive = False
+                        g_hasLastComp = False
+                        Exit Do
                     End If
-                    Dim holeDotProduct As Double
-                    holeDotProduct = axis1Raw(0)*holeAxis1(0) + axis1Raw(1)*holeAxis1(1) + axis1Raw(2)*holeAxis1(2)
-                    Dim holeAxis2(2) As Double
-                    holeAxis2(0) = axis1Raw(0) - holeDotProduct * holeAxis1(0)
-                    holeAxis2(1) = axis1Raw(1) - holeDotProduct * holeAxis1(1)
-                    holeAxis2(2) = axis1Raw(2) - holeDotProduct * holeAxis1(2)
-                    Dim holeAxis2Len As Double
-                    holeAxis2Len = Sqr(holeAxis2(0)*holeAxis2(0) + holeAxis2(1)*holeAxis2(1) + holeAxis2(2)*holeAxis2(2))
-                    If holeAxis2Len < 0.000000000001 Then
-                        MsgBox "第一个安装孔的轴线与两圆心连线平行，无法确定第二轴线。", vbExclamation, "快速装配托板螺母"
+                    If Not g_loopActive Then Exit Do
+
+                    Dim npLnRef As Object: Set npLnRef = sel.Item(1).Reference
+                    Dim npLnLeafProd As Object: Set npLnLeafProd = sel.Item(1).LeafProduct
+                    Dim npLnMeas As Object
+                    Dim npLnDir(2)
+                    Dim bNpLnOK As Boolean: bNpLnOK = False
+                    If TryGetMeasurable(spaAssembly, npLnRef, npLnMeas) Then
+                        bNpLnOK = TryGetDirection(npLnMeas, npLnDir)
+                    End If
+                    If Not bNpLnOK Then
+                        MsgBox "无法获取所选直线的方向。" & Chr(10) & _
+                               "请选择一条直线或直线型边。", _
+                               vbExclamation, "快速装配托板螺母"
                         sel.Clear
                     Else
-                        holeAxis2(0) = holeAxis2(0) / holeAxis2Len
-                        holeAxis2(1) = holeAxis2(1) / holeAxis2Len
-                        holeAxis2(2) = holeAxis2(2) / holeAxis2Len
-
-                        ' ── 步骤2：收集 targetProduct→根 变换链，逆序施加逆变换到 targetProduct 坐标系 ─
-                        ' targetProduct 可能位于结构树的任意层级，因此不能仅用单层 Position 求逆。
-                        ' 先从 targetProduct 向上收集各层的 Position 矩阵（tpChain），
-                        ' 再从根向下（逆序遍历）依次施加逆变换：local = R^T * (parent - T)，
-                        ' 将孔的根坐标转换到 targetProduct 局部坐标系，
-                        ' 与 Position.SetComponents 所需坐标系一致。
-                        Dim tpChain(49, 11)     ' 最多50层，Variant（不能声明 As Double）
-                        Dim tpDepth As Integer
-                        tpDepth = 0
-                        Dim tpCur As Object: Set tpCur = targetProduct
-                        Dim tpPar As Object
-                        Dim tpM(11)             ' 不能声明 As Double
-                        Dim tpKk As Integer
-                        Do
-                            Set tpPar = tpCur.Parent
-                            If TypeName(tpPar) = "ProductDocument" Then Exit Do
-                            tpCur.Position.GetComponents tpM
-                            For tpKk = 0 To 11: tpChain(tpDepth, tpKk) = tpM(tpKk): Next tpKk
-                            tpDepth = tpDepth + 1
-                            Set tpCur = tpPar.Parent
-                        Loop
-                        ' 从根向下依次施加逆变换（逆序遍历 tpChain）
-                        Dim tpii As Integer
-                        Dim tpOff0 As Double, tpOff1 As Double, tpOff2 As Double
-                        Dim tpAx As Double, tpAy As Double, tpAz As Double
-                        For tpii = tpDepth - 1 To 0 Step -1
-                            tpOff0 = holePt(0) - tpChain(tpii, 9)
-                            tpOff1 = holePt(1) - tpChain(tpii, 10)
-                            tpOff2 = holePt(2) - tpChain(tpii, 11)
-                            holePt(0) = tpChain(tpii, 0)*tpOff0 + tpChain(tpii, 1)*tpOff1 + tpChain(tpii, 2)*tpOff2
-                            holePt(1) = tpChain(tpii, 3)*tpOff0 + tpChain(tpii, 4)*tpOff1 + tpChain(tpii, 5)*tpOff2
-                            holePt(2) = tpChain(tpii, 6)*tpOff0 + tpChain(tpii, 7)*tpOff1 + tpChain(tpii, 8)*tpOff2
-                            ' 轴向1逆变换（R^T * axis，方向向量不含平移）
-                            tpAx = tpChain(tpii, 0)*holeAxis1(0) + tpChain(tpii, 1)*holeAxis1(1) + tpChain(tpii, 2)*holeAxis1(2)
-                            tpAy = tpChain(tpii, 3)*holeAxis1(0) + tpChain(tpii, 4)*holeAxis1(1) + tpChain(tpii, 5)*holeAxis1(2)
-                            tpAz = tpChain(tpii, 6)*holeAxis1(0) + tpChain(tpii, 7)*holeAxis1(1) + tpChain(tpii, 8)*holeAxis1(2)
-                            holeAxis1(0) = tpAx: holeAxis1(1) = tpAy: holeAxis1(2) = tpAz
-                            ' 轴向2逆变换
-                            tpAx = tpChain(tpii, 0)*holeAxis2(0) + tpChain(tpii, 1)*holeAxis2(1) + tpChain(tpii, 2)*holeAxis2(2)
-                            tpAy = tpChain(tpii, 3)*holeAxis2(0) + tpChain(tpii, 4)*holeAxis2(1) + tpChain(tpii, 5)*holeAxis2(2)
-                            tpAz = tpChain(tpii, 6)*holeAxis2(0) + tpChain(tpii, 7)*holeAxis2(1) + tpChain(tpii, 8)*holeAxis2(2)
-                            holeAxis2(0) = tpAx: holeAxis2(1) = tpAy: holeAxis2(2) = tpAz
-                        Next tpii
-
-                        sel.Clear
-
-                        ' 写入模块级变量供 PlaceNutPlateAtHole 使用
-                        g_holeAxis1X = holeAxis1(0): g_holeAxis1Y = holeAxis1(1): g_holeAxis1Z = holeAxis1(2)
-                        g_holeAxis2X = holeAxis2(0): g_holeAxis2Y = holeAxis2(1): g_holeAxis2Z = holeAxis2(2)
-                        g_holePtX    = holePt(0):    g_holePtY    = holePt(1):    g_holePtZ    = holePt(2)
-
-                        ' ── 调试：孔的几何（叶层零件坐标系 -> 根产品坐标系 -> targetProduct 局部坐标系） ──
-                        If DEBUG_MODE Then
-                            MsgBox "[DEBUG] 安装孔几何（已变换到 targetProduct 局部坐标系）" & Chr(10) & _
-                                   "锚点     = (" & Round(holePt(0), 4) & ", " & Round(holePt(1), 4) & ", " & Round(holePt(2), 4) & ")" & Chr(10) & _
-                                   "第一轴线 = (" & Round(holeAxis1(0), 4) & ", " & Round(holeAxis1(1), 4) & ", " & Round(holeAxis1(2), 4) & ")" & Chr(10) & _
-                                   "第二轴线 = (" & Round(holeAxis2(0), 4) & ", " & Round(holeAxis2(1), 4) & ", " & Round(holeAxis2(2), 4) & ")", _
-                                   vbInformation, "快速装配托板螺母[DEBUG]"
+                        ' 归一化轴线方向
+                        Dim npLnDirLen As Double
+                        npLnDirLen = Sqr(npLnDir(0)*npLnDir(0) + npLnDir(1)*npLnDir(1) + npLnDir(2)*npLnDir(2))
+                        If npLnDirLen > 0.000000000001 Then
+                            npLnDir(0) = npLnDir(0)/npLnDirLen
+                            npLnDir(1) = npLnDir(1)/npLnDirLen
+                            npLnDir(2) = npLnDir(2)/npLnDirLen
                         End If
 
-                        ' 6c. 装配并定位托板螺母
-                        Call PlaceNutPlateAtHole()
+                        ' 将 npLnDir 从 npLnLeafProd 正向推导到根产品坐标系
+                        Dim npLnCur As Object: Set npLnCur = npLnLeafProd
+                        Dim npLnM(11): Dim npLnPar As Object
+                        Dim npLnTx As Double, npLnTy As Double, npLnTz As Double
+                        Do
+                            Set npLnPar = npLnCur.Parent
+                            If TypeName(npLnPar) = "ProductDocument" Then Exit Do
+                            npLnCur.Position.GetComponents npLnM
+                            npLnTx = npLnM(0)*npLnDir(0) + npLnM(3)*npLnDir(1) + npLnM(6)*npLnDir(2)
+                            npLnTy = npLnM(1)*npLnDir(0) + npLnM(4)*npLnDir(1) + npLnM(7)*npLnDir(2)
+                            npLnTz = npLnM(2)*npLnDir(0) + npLnM(5)*npLnDir(1) + npLnM(8)*npLnDir(2)
+                            npLnDir(0) = npLnTx: npLnDir(1) = npLnTy: npLnDir(2) = npLnTz
+                            Set npLnCur = npLnPar.Parent
+                        Loop
 
-                        ' 装配完成后的状态更新在 PlaceNutPlateAtHole 中已完成
-                        CATIA.StatusBar = "已装配 " & g_count & " 个 " & g_nutPlatePN & " -> " & g_targetPN & _
-                                          "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
-                                          "  可翻转/撤销，选下一孔继续"
-                    End If
-                End If
+                        ' 计算安装孔的几何（根产品坐标系）
+                        ' 锚点 = 两点中点
+                        Dim pointModeMidPt(2) As Double
+                        pointModeMidPt(0) = (np1Coord(0) + np2Coord(0)) / 2
+                        pointModeMidPt(1) = (np1Coord(1) + np2Coord(1)) / 2
+                        pointModeMidPt(2) = (np1Coord(2) + np2Coord(2)) / 2
+
+                        ' 第一轴线 = 两点连线方向（从第一点指向第二点）
+                        Dim pointModeAxis1(2) As Double
+                        pointModeAxis1(0) = np2Coord(0) - np1Coord(0)
+                        pointModeAxis1(1) = np2Coord(1) - np1Coord(1)
+                        pointModeAxis1(2) = np2Coord(2) - np1Coord(2)
+                        Dim pointModeAxis1Len As Double
+                        pointModeAxis1Len = Sqr(pointModeAxis1(0)*pointModeAxis1(0) + pointModeAxis1(1)*pointModeAxis1(1) + pointModeAxis1(2)*pointModeAxis1(2))
+                        If pointModeAxis1Len < 0.000000000001 Then
+                            MsgBox "两个点重合，无法确定第一轴线。", vbExclamation, "快速装配托板螺母"
+                            sel.Clear
+                        Else
+                            pointModeAxis1(0) = pointModeAxis1(0) / pointModeAxis1Len
+                            pointModeAxis1(1) = pointModeAxis1(1) / pointModeAxis1Len
+                            pointModeAxis1(2) = pointModeAxis1(2) / pointModeAxis1Len
+
+                            ' 第二轴线：npLnDir（已在根坐标系），投影到垂直于第一轴线的分量
+                            Dim np2DP As Double
+                            np2DP = npLnDir(0)*pointModeAxis1(0) + npLnDir(1)*pointModeAxis1(1) + npLnDir(2)*pointModeAxis1(2)
+                            Dim pointModeAxis2(2) As Double
+                            pointModeAxis2(0) = npLnDir(0) - np2DP * pointModeAxis1(0)
+                            pointModeAxis2(1) = npLnDir(1) - np2DP * pointModeAxis1(1)
+                            pointModeAxis2(2) = npLnDir(2) - np2DP * pointModeAxis1(2)
+                            Dim pointModeAxis2Len As Double
+                            pointModeAxis2Len = Sqr(pointModeAxis2(0)*pointModeAxis2(0) + pointModeAxis2(1)*pointModeAxis2(1) + pointModeAxis2(2)*pointModeAxis2(2))
+                            If pointModeAxis2Len < 0.000000000001 Then
+                                MsgBox "所选轴线方向与两点连线平行，无法确定第二轴线。", vbExclamation, "快速装配托板螺母"
+                                sel.Clear
+                            Else
+                                pointModeAxis2(0) = pointModeAxis2(0) / pointModeAxis2Len
+                                pointModeAxis2(1) = pointModeAxis2(1) / pointModeAxis2Len
+                                pointModeAxis2(2) = pointModeAxis2(2) / pointModeAxis2Len
+
+                                ' 收集 targetProduct→根 变换链，逆序施加逆变换到 targetProduct 坐标系
+                                Dim tp2Chain(49, 11)    ' 不能声明 As Double
+                                Dim tp2Depth As Integer: tp2Depth = 0
+                                Dim tp2Cur As Object: Set tp2Cur = targetProduct
+                                Dim tp2Par As Object
+                                Dim tp2M(11)            ' 不能声明 As Double
+                                Dim tp2Kk As Integer
+                                Do
+                                    Set tp2Par = tp2Cur.Parent
+                                    If TypeName(tp2Par) = "ProductDocument" Then Exit Do
+                                    tp2Cur.Position.GetComponents tp2M
+                                    For tp2Kk = 0 To 11: tp2Chain(tp2Depth, tp2Kk) = tp2M(tp2Kk): Next tp2Kk
+                                    tp2Depth = tp2Depth + 1
+                                    Set tp2Cur = tp2Par.Parent
+                                Loop
+                                Dim tp2ii As Integer
+                                Dim tp2Off0 As Double, tp2Off1 As Double, tp2Off2 As Double
+                                Dim tp2Ax As Double, tp2Ay As Double, tp2Az As Double
+                                For tp2ii = tp2Depth - 1 To 0 Step -1
+                                    tp2Off0 = pointModeMidPt(0) - tp2Chain(tp2ii, 9)
+                                    tp2Off1 = pointModeMidPt(1) - tp2Chain(tp2ii, 10)
+                                    tp2Off2 = pointModeMidPt(2) - tp2Chain(tp2ii, 11)
+                                    pointModeMidPt(0) = tp2Chain(tp2ii, 0)*tp2Off0 + tp2Chain(tp2ii, 1)*tp2Off1 + tp2Chain(tp2ii, 2)*tp2Off2
+                                    pointModeMidPt(1) = tp2Chain(tp2ii, 3)*tp2Off0 + tp2Chain(tp2ii, 4)*tp2Off1 + tp2Chain(tp2ii, 5)*tp2Off2
+                                    pointModeMidPt(2) = tp2Chain(tp2ii, 6)*tp2Off0 + tp2Chain(tp2ii, 7)*tp2Off1 + tp2Chain(tp2ii, 8)*tp2Off2
+                                    tp2Ax = tp2Chain(tp2ii, 0)*pointModeAxis1(0) + tp2Chain(tp2ii, 1)*pointModeAxis1(1) + tp2Chain(tp2ii, 2)*pointModeAxis1(2)
+                                    tp2Ay = tp2Chain(tp2ii, 3)*pointModeAxis1(0) + tp2Chain(tp2ii, 4)*pointModeAxis1(1) + tp2Chain(tp2ii, 5)*pointModeAxis1(2)
+                                    tp2Az = tp2Chain(tp2ii, 6)*pointModeAxis1(0) + tp2Chain(tp2ii, 7)*pointModeAxis1(1) + tp2Chain(tp2ii, 8)*pointModeAxis1(2)
+                                    pointModeAxis1(0) = tp2Ax: pointModeAxis1(1) = tp2Ay: pointModeAxis1(2) = tp2Az
+                                    tp2Ax = tp2Chain(tp2ii, 0)*pointModeAxis2(0) + tp2Chain(tp2ii, 1)*pointModeAxis2(1) + tp2Chain(tp2ii, 2)*pointModeAxis2(2)
+                                    tp2Ay = tp2Chain(tp2ii, 3)*pointModeAxis2(0) + tp2Chain(tp2ii, 4)*pointModeAxis2(1) + tp2Chain(tp2ii, 5)*pointModeAxis2(2)
+                                    tp2Az = tp2Chain(tp2ii, 6)*pointModeAxis2(0) + tp2Chain(tp2ii, 7)*pointModeAxis2(1) + tp2Chain(tp2ii, 8)*pointModeAxis2(2)
+                                    pointModeAxis2(0) = tp2Ax: pointModeAxis2(1) = tp2Ay: pointModeAxis2(2) = tp2Az
+                                Next tp2ii
+
+                                holePt(0) = pointModeMidPt(0): holePt(1) = pointModeMidPt(1): holePt(2) = pointModeMidPt(2)
+                                holeAxis1(0) = pointModeAxis1(0): holeAxis1(1) = pointModeAxis1(1): holeAxis1(2) = pointModeAxis1(2)
+                                holeAxis2(0) = pointModeAxis2(0): holeAxis2(1) = pointModeAxis2(1): holeAxis2(2) = pointModeAxis2(2)
+                                bHoleGeomOK = True
+                            End If  ' pointModeAxis2Len
+                        End If  ' pointModeAxis1Len
+                    End If  ' bNpLnOK
+                End If  ' bNp2OK
+
+                Else
+                    MsgBox "无法识别所选元素。" & Chr(10) & _
+                           "请选择安装孔的圆形边（圆弧/圆），或选择安装锚点（顶点/点）。", _
+                           vbExclamation, "快速装配托板螺母"
+                    sel.Clear
+                End If  ' bNp1OK
+            End If  ' TryGetCenter+TryGetAxis (arc vs point)
+        End If  ' TryGetMeasurable
+
+        sel.Clear
+
+        If bHoleGeomOK Then
+            ' 写入模块级变量供 PlaceNutPlateAtHole 使用
+            g_holeAxis1X = holeAxis1(0): g_holeAxis1Y = holeAxis1(1): g_holeAxis1Z = holeAxis1(2)
+            g_holeAxis2X = holeAxis2(0): g_holeAxis2Y = holeAxis2(1): g_holeAxis2Z = holeAxis2(2)
+            g_holePtX    = holePt(0):    g_holePtY    = holePt(1):    g_holePtZ    = holePt(2)
+
+            ' ── 调试：孔的几何（叶层零件坐标系 -> 根产品坐标系 -> targetProduct 局部坐标系） ──
+            If DEBUG_MODE Then
+                MsgBox "[DEBUG] 安装孔几何（已变换到 targetProduct 局部坐标系）" & Chr(10) & _
+                       "锚点     = (" & Round(holePt(0), 4) & ", " & Round(holePt(1), 4) & ", " & Round(holePt(2), 4) & ")" & Chr(10) & _
+                       "第一轴线 = (" & Round(holeAxis1(0), 4) & ", " & Round(holeAxis1(1), 4) & ", " & Round(holeAxis1(2), 4) & ")" & Chr(10) & _
+                       "第二轴线 = (" & Round(holeAxis2(0), 4) & ", " & Round(holeAxis2(1), 4) & ", " & Round(holeAxis2(2), 4) & ")", _
+                       vbInformation, "快速装配托板螺母[DEBUG]"
             End If
+
+            ' 6c. 装配并定位托板螺母
+            Call PlaceNutPlateAtHole()
+
+            ' 装配完成后的状态更新在 PlaceNutPlateAtHole 中已完成
+            CATIA.StatusBar = "已装配 " & g_count & " 个 " & g_nutPlatePN & " -> " & g_targetPN & _
+                              "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
+                              "  可翻转/撤销，选下一孔继续"
         End If
 
     Loop
@@ -882,11 +1078,25 @@ Private Function TryGetAxis(meas As Object, axArr) As Boolean
     TryGetAxis = (Err.Number = 0)
 End Function
 
+Private Function TryGetDirection(meas As Object, dirArr) As Boolean
+    On Error Resume Next
+    Err.Clear
+    meas.GetDirection dirArr
+    TryGetDirection = (Err.Number = 0)
+End Function
+
 Private Function TryGetCenter(meas As Object, ptArr) As Boolean
     On Error Resume Next
     Err.Clear
     meas.GetCenter ptArr
     TryGetCenter = (Err.Number = 0)
+End Function
+
+Private Function TryGetPoint(meas As Object, ptArr) As Boolean
+    On Error Resume Next
+    Err.Clear
+    meas.GetPoint ptArr
+    TryGetPoint = (Err.Number = 0)
 End Function
 
 ' spa     : SPAWorkbench 对象
@@ -915,7 +1125,7 @@ End Function
 '
 ' 创建步骤：在 VBA IDE 中，Insert > UserForm。
 '   - 将窗体 (Name) 设为 "FlipForm"，Caption 设为 "装配控制面板"。
-'   - 添加三个 CommandButton（从上到下排列）：
+'   - 添加四个 CommandButton（从上到下排列）：
 '       (Name)   = "btnFlip"
 '       Caption  = "翻转方向: 否"
 '       Width    = 180  Height = 36（可按需调整）
