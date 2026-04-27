@@ -82,9 +82,6 @@ Public g_historyCount As Long      ' 历史记录数量
 ' FlipForm.btnFlip_Click 检查此标志，防止循环结束后残留的 Click 事件切换 g_flipDir。
 Public g_loopActive   As Boolean
 
-' 选取模式：False = 圆弧模式（默认），True = 点+线模式
-Public g_selectMode   As Boolean
-
 ' 装配循环共享状态（供 PlaceFastenerAtHole 及状态栏更新使用）
 Public targetProduct As Object
 Public g_fastenerDoc   As Object
@@ -266,15 +263,14 @@ Public Sub ContinueSelectProduct()
     FlipForm.btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
     FlipForm.btnFlip.Enabled = False  ' 初始禁用，装配后启用
     FlipForm.btnUndo.Enabled = False
-    FlipForm.btnMode.Caption = IIf(g_selectMode, "选取模式: 点+线", "选取模式: 圆弧")
 
+    Dim firstFilter As Variant
+    firstFilter = Array("MonoDim", "Vertex")
     Dim holeFilter As Variant
     holeFilter = Array("MonoDim")
-    Dim ptFilter As Variant
-    ptFilter = Array("Vertex")
 
     Do
-        ' 5a. 选择孔位（根据 g_selectMode 使用不同选取方式）
+        ' 5a. 自动识别选取模式：选择圆形边（圆弧模式）或顶点（点+线模式）
         '     注意：不在此处重置 g_hasLastComp，保留上一个紧固件的翻转重装能力。
         Set sel = CATIA.ActiveDocument.Selection
         sel.Clear
@@ -287,142 +283,37 @@ Public Sub ContinueSelectProduct()
         Dim bHoleGeomOK As Boolean
         bHoleGeomOK = False
 
-        If Not g_selectMode Then
-            ' ── 模式1：选择圆形边（原有方式）─────────────────────────────────
-            status = sel.SelectElement2(holeFilter, _
-                "选择孔的入口圆形边 (" & g_fastenerPN & " -> " & g_targetPN & _
-                "  已装配:" & g_count & ")  点""停止装配""按钮结束", False)
-            If status <> "Normal" Then
-                g_loopActive = False
-                g_hasLastComp = False
-                Exit Do
-            End If
-            ' 检查 g_loopActive：如果用户点击了"停止装配"按钮，应停止循环
-            If Not g_loopActive Then Exit Do
+        ' ── 第一步：选择孔位元素（圆形边 或 锚点顶点）──────────────────────────
+        status = sel.SelectElement2(firstFilter, _
+            "选择孔的圆形边（圆弧模式）或安装锚点顶点（点+线模式） [" & g_fastenerPN & " -> " & g_targetPN & _
+            "  已装配:" & g_count & "]  点""停止装配""按钮结束", False)
+        If status <> "Normal" Then
+            g_loopActive = False
+            g_hasLastComp = False
+            Exit Do
+        End If
+        ' 检查 g_loopActive：如果用户点击了"停止装配"按钮，应停止循环
+        If Not g_loopActive Then Exit Do
 
-            Dim holeRef As Object
-            Set holeRef = sel.Item(1).Reference
-            ' 取当前选中项所属的叶层产品（具体实例）。
-            ' GetMeasurable（不带上下文）在叶层零件自己的坐标系中返回测量值，
-            ' 确保即使同一零件在装配体中存在多个实例，也能正确测量被点击实例的几何。
-            Dim leafProd As Object
-            Set leafProd = sel.Item(1).LeafProduct
-            Dim holeMeas As Object
-            ' 错误处理：若所选几何体不是圆形边（如直线边），GetMeasurable/GetAxis 会报错。
-            ' 使用独立函数隔离错误域，避免某些 CATIA 版本中 On Error Resume Next 在调用层失效。
-            If TryGetMeasurable(spaAssembly, holeRef, holeMeas) Then
-                bHoleGeomOK = TryGetAxis(holeMeas, holeAxis) And TryGetCenter(holeMeas, holePt)
-            End If
+        Dim firstRef As Object
+        Set firstRef = sel.Item(1).Reference
+        Dim firstLeafProd As Object
+        Set firstLeafProd = sel.Item(1).LeafProduct
+        Dim firstMeas As Object
 
-            If Not bHoleGeomOK Then
-                MsgBox "无法获取孔的轴向和圆心。" & Chr(10) & _
-                       "请选择孔入口处的圆或圆弧（而非直线或曲线）。", _
-                       vbExclamation, "快速装配紧固件"
-                sel.Clear
-            Else
-                ' 归一化轴向（GetAxis 不保证返回单位向量）
-                Dim holeAxisLen As Double
-                holeAxisLen = Sqr(holeAxis(0)*holeAxis(0) + holeAxis(1)*holeAxis(1) + holeAxis(2)*holeAxis(2))
-                If holeAxisLen > 0.000000000001 Then
-                    holeAxis(0) = holeAxis(0)/holeAxisLen
-                    holeAxis(1) = holeAxis(1)/holeAxisLen
-                    holeAxis(2) = holeAxis(2)/holeAxisLen
-                End If
-
-                ' 从 leafProd 沿结构树向上推导，得到孔在根产品坐标系中的坐标
-                ' GetMeasurable 返回孔在叶层零件自己坐标系（局部坐标）中的几何值。
-                ' 从 leafProd 向上逐层应用 Position.GetComponents 的正向变换：
-                '   parentPt = R * localPt + T
-                ' 其中矩阵格式：m(0..2)=X轴列, m(3..5)=Y轴列, m(6..8)=Z轴列, m(9..11)=平移T。
-                Dim curProd As Object
-                Set curProd = leafProd
-                Dim holeM(11)           ' Position 矩阵，不能声明 As Double
-                Dim holeParentColl As Object
-                Dim holeTx As Double, holeTy As Double, holeTz As Double
-                Do
-                    Set holeParentColl = curProd.Parent
-                    If TypeName(holeParentColl) = "ProductDocument" Then Exit Do
-                    curProd.Position.GetComponents holeM
-                    holeTx = holeM(0)*holePt(0) + holeM(3)*holePt(1) + holeM(6)*holePt(2) + holeM(9)
-                    holeTy = holeM(1)*holePt(0) + holeM(4)*holePt(1) + holeM(7)*holePt(2) + holeM(10)
-                    holeTz = holeM(2)*holePt(0) + holeM(5)*holePt(1) + holeM(8)*holePt(2) + holeM(11)
-                    holePt(0) = holeTx: holePt(1) = holeTy: holePt(2) = holeTz
-                    holeTx = holeM(0)*holeAxis(0) + holeM(3)*holeAxis(1) + holeM(6)*holeAxis(2)
-                    holeTy = holeM(1)*holeAxis(0) + holeM(4)*holeAxis(1) + holeM(7)*holeAxis(2)
-                    holeTz = holeM(2)*holeAxis(0) + holeM(5)*holeAxis(1) + holeM(8)*holeAxis(2)
-                    holeAxis(0) = holeTx: holeAxis(1) = holeTy: holeAxis(2) = holeTz
-                    Set curProd = holeParentColl.Parent
-                Loop
-
-                ' 收集 targetProduct→根 变换链，逆序施加逆变换到 targetProduct 坐标系
-                ' targetProduct 可能位于结构树的任意层级，因此不能仅用单层 Position 求逆。
-                ' 先从 targetProduct 向上收集各层的 Position 矩阵（tpChain），
-                ' 再从根向下（逆序遍历）依次施加逆变换：local = R^T * (parent - T)。
-                Dim tpChain(49, 11)     ' 最多50层，Variant（不能声明 As Double）
-                Dim tpDepth As Integer
-                tpDepth = 0
-                Set curProd = targetProduct
-                Dim tpParentColl As Object
-                Dim tpM(11)             ' 不能声明 As Double
-                Dim tpKk As Integer
-                Do
-                    Set tpParentColl = curProd.Parent
-                    If TypeName(tpParentColl) = "ProductDocument" Then Exit Do
-                    curProd.Position.GetComponents tpM
-                    For tpKk = 0 To 11: tpChain(tpDepth, tpKk) = tpM(tpKk): Next tpKk
-                    tpDepth = tpDepth + 1
-                    Set curProd = tpParentColl.Parent
-                Loop
-                Dim tpii As Integer
-                Dim tpOff0 As Double, tpOff1 As Double, tpOff2 As Double
-                Dim tpAx As Double, tpAy As Double, tpAz As Double
-                For tpii = tpDepth - 1 To 0 Step -1
-                    tpOff0 = holePt(0) - tpChain(tpii, 9)
-                    tpOff1 = holePt(1) - tpChain(tpii, 10)
-                    tpOff2 = holePt(2) - tpChain(tpii, 11)
-                    holePt(0) = tpChain(tpii, 0)*tpOff0 + tpChain(tpii, 1)*tpOff1 + tpChain(tpii, 2)*tpOff2
-                    holePt(1) = tpChain(tpii, 3)*tpOff0 + tpChain(tpii, 4)*tpOff1 + tpChain(tpii, 5)*tpOff2
-                    holePt(2) = tpChain(tpii, 6)*tpOff0 + tpChain(tpii, 7)*tpOff1 + tpChain(tpii, 8)*tpOff2
-                    tpAx = tpChain(tpii, 0)*holeAxis(0) + tpChain(tpii, 1)*holeAxis(1) + tpChain(tpii, 2)*holeAxis(2)
-                    tpAy = tpChain(tpii, 3)*holeAxis(0) + tpChain(tpii, 4)*holeAxis(1) + tpChain(tpii, 5)*holeAxis(2)
-                    tpAz = tpChain(tpii, 6)*holeAxis(0) + tpChain(tpii, 7)*holeAxis(1) + tpChain(tpii, 8)*holeAxis(2)
-                    holeAxis(0) = tpAx: holeAxis(1) = tpAy: holeAxis(2) = tpAz
-                Next tpii
-            End If  ' bHoleGeomOK (模式1)
-
+        If Not TryGetMeasurable(spaAssembly, firstRef, firstMeas) Then
+            MsgBox "无法测量所选元素，请重新选择。", vbExclamation, "快速装配紧固件"
+            sel.Clear
         Else
-            ' ── 模式2：先选锚点（顶点/点），再选轴线方向（直线/边）──────────
-            ' 步骤1：选择锚点
-            status = sel.SelectElement2(ptFilter, _
-                "【点+线模式】第1步：选择安装锚点（顶点或点）[" & g_fastenerPN & _
-                " -> " & g_targetPN & "  已装配:" & g_count & "]", False)
-            If status <> "Normal" Then
-                g_loopActive = False
-                g_hasLastComp = False
-                Exit Do
-            End If
-            If Not g_loopActive Then Exit Do
-
-            Dim ptRef As Object
-            Set ptRef = sel.Item(1).Reference
-            Dim ptLeafProd As Object
-            Set ptLeafProd = sel.Item(1).LeafProduct
-            Dim ptMeas As Object
+            ' 自动检测：先尝试作为顶点（点+线模式），再尝试作为圆弧（圆弧模式）
             Dim ptCoord(2)
             Dim bPtOK As Boolean
-            bPtOK = False
-            If TryGetMeasurable(spaAssembly, ptRef, ptMeas) Then
-                bPtOK = TryGetPoint(ptMeas, ptCoord)
-            End If
-            If Not bPtOK Then
-                MsgBox "无法获取所选点的坐标。" & Chr(10) & _
-                       "请选择一个顶点或点要素。", _
-                       vbExclamation, "快速装配紧固件"
-                sel.Clear
-            Else
-                ' 将 ptCoord 从 ptLeafProd 正向推导到根产品坐标系
+            bPtOK = TryGetPoint(firstMeas, ptCoord)
+
+            If bPtOK Then
+                ' ── 点+线模式：将 ptCoord 从 firstLeafProd 正向推导到根产品坐标系 ──
                 Dim ptCurProd As Object
-                Set ptCurProd = ptLeafProd
+                Set ptCurProd = firstLeafProd
                 Dim ptM(11)
                 Dim ptParentColl As Object
                 Dim ptTx As Double, ptTy As Double, ptTz As Double
@@ -440,7 +331,7 @@ Public Sub ContinueSelectProduct()
                 ' 步骤2：选择轴线方向
                 sel.Clear
                 status = sel.SelectElement2(holeFilter, _
-                    "【点+线模式】第2步：选择轴线方向（直线或轴线）", False)
+                    "【点+线模式】选择轴线方向（直线或轴线）", False)
                 If status <> "Normal" Then
                     g_loopActive = False
                     g_hasLastComp = False
@@ -529,8 +420,89 @@ Public Sub ContinueSelectProduct()
                     holeAxis(0) = lineDir(0): holeAxis(1) = lineDir(1): holeAxis(2) = lineDir(2)
                     bHoleGeomOK = True
                 End If  ' bLineOK
+
+            Else
+                ' ── 圆弧模式：尝试获取轴线和圆心 ─────────────────────────────────
+                ' 错误处理：若所选几何体不是圆形边（如直线边），GetAxis/GetCenter 会报错。
+                ' 使用独立函数隔离错误域，避免某些 CATIA 版本中 On Error Resume Next 在调用层失效。
+                If TryGetAxis(firstMeas, holeAxis) And TryGetCenter(firstMeas, holePt) Then
+                    ' 归一化轴向（GetAxis 不保证返回单位向量）
+                    Dim holeAxisLen As Double
+                    holeAxisLen = Sqr(holeAxis(0)*holeAxis(0) + holeAxis(1)*holeAxis(1) + holeAxis(2)*holeAxis(2))
+                    If holeAxisLen > 0.000000000001 Then
+                        holeAxis(0) = holeAxis(0)/holeAxisLen
+                        holeAxis(1) = holeAxis(1)/holeAxisLen
+                        holeAxis(2) = holeAxis(2)/holeAxisLen
+                    End If
+
+                    ' 从 firstLeafProd 沿结构树向上推导，得到孔在根产品坐标系中的坐标
+                    ' GetMeasurable 返回孔在叶层零件自己坐标系（局部坐标）中的几何值。
+                    ' 从 firstLeafProd 向上逐层应用 Position.GetComponents 的正向变换：
+                    '   parentPt = R * localPt + T
+                    ' 其中矩阵格式：m(0..2)=X轴列, m(3..5)=Y轴列, m(6..8)=Z轴列, m(9..11)=平移T。
+                    Dim curProd As Object
+                    Set curProd = firstLeafProd
+                    Dim holeM(11)           ' Position 矩阵，不能声明 As Double
+                    Dim holeParentColl As Object
+                    Dim holeTx As Double, holeTy As Double, holeTz As Double
+                    Do
+                        Set holeParentColl = curProd.Parent
+                        If TypeName(holeParentColl) = "ProductDocument" Then Exit Do
+                        curProd.Position.GetComponents holeM
+                        holeTx = holeM(0)*holePt(0) + holeM(3)*holePt(1) + holeM(6)*holePt(2) + holeM(9)
+                        holeTy = holeM(1)*holePt(0) + holeM(4)*holePt(1) + holeM(7)*holePt(2) + holeM(10)
+                        holeTz = holeM(2)*holePt(0) + holeM(5)*holePt(1) + holeM(8)*holePt(2) + holeM(11)
+                        holePt(0) = holeTx: holePt(1) = holeTy: holePt(2) = holeTz
+                        holeTx = holeM(0)*holeAxis(0) + holeM(3)*holeAxis(1) + holeM(6)*holeAxis(2)
+                        holeTy = holeM(1)*holeAxis(0) + holeM(4)*holeAxis(1) + holeM(7)*holeAxis(2)
+                        holeTz = holeM(2)*holeAxis(0) + holeM(5)*holeAxis(1) + holeM(8)*holeAxis(2)
+                        holeAxis(0) = holeTx: holeAxis(1) = holeTy: holeAxis(2) = holeTz
+                        Set curProd = holeParentColl.Parent
+                    Loop
+
+                    ' 收集 targetProduct→根 变换链，逆序施加逆变换到 targetProduct 坐标系
+                    ' targetProduct 可能位于结构树的任意层级，因此不能仅用单层 Position 求逆。
+                    ' 先从 targetProduct 向上收集各层的 Position 矩阵（tpChain），
+                    ' 再从根向下（逆序遍历）依次施加逆变换：local = R^T * (parent - T)。
+                    Dim tpChain(49, 11)     ' 最多50层，Variant（不能声明 As Double）
+                    Dim tpDepth As Integer
+                    tpDepth = 0
+                    Set curProd = targetProduct
+                    Dim tpParentColl As Object
+                    Dim tpM(11)             ' 不能声明 As Double
+                    Dim tpKk As Integer
+                    Do
+                        Set tpParentColl = curProd.Parent
+                        If TypeName(tpParentColl) = "ProductDocument" Then Exit Do
+                        curProd.Position.GetComponents tpM
+                        For tpKk = 0 To 11: tpChain(tpDepth, tpKk) = tpM(tpKk): Next tpKk
+                        tpDepth = tpDepth + 1
+                        Set curProd = tpParentColl.Parent
+                    Loop
+                    Dim tpii As Integer
+                    Dim tpOff0 As Double, tpOff1 As Double, tpOff2 As Double
+                    Dim tpAx As Double, tpAy As Double, tpAz As Double
+                    For tpii = tpDepth - 1 To 0 Step -1
+                        tpOff0 = holePt(0) - tpChain(tpii, 9)
+                        tpOff1 = holePt(1) - tpChain(tpii, 10)
+                        tpOff2 = holePt(2) - tpChain(tpii, 11)
+                        holePt(0) = tpChain(tpii, 0)*tpOff0 + tpChain(tpii, 1)*tpOff1 + tpChain(tpii, 2)*tpOff2
+                        holePt(1) = tpChain(tpii, 3)*tpOff0 + tpChain(tpii, 4)*tpOff1 + tpChain(tpii, 5)*tpOff2
+                        holePt(2) = tpChain(tpii, 6)*tpOff0 + tpChain(tpii, 7)*tpOff1 + tpChain(tpii, 8)*tpOff2
+                        tpAx = tpChain(tpii, 0)*holeAxis(0) + tpChain(tpii, 1)*holeAxis(1) + tpChain(tpii, 2)*holeAxis(2)
+                        tpAy = tpChain(tpii, 3)*holeAxis(0) + tpChain(tpii, 4)*holeAxis(1) + tpChain(tpii, 5)*holeAxis(2)
+                        tpAz = tpChain(tpii, 6)*holeAxis(0) + tpChain(tpii, 7)*holeAxis(1) + tpChain(tpii, 8)*holeAxis(2)
+                        holeAxis(0) = tpAx: holeAxis(1) = tpAy: holeAxis(2) = tpAz
+                    Next tpii
+                    bHoleGeomOK = True
+                Else
+                    MsgBox "无法识别所选元素。" & Chr(10) & _
+                           "请选择孔入口处的圆形边（圆弧/圆），或选择安装锚点（顶点/点）。", _
+                           vbExclamation, "快速装配紧固件"
+                    sel.Clear
+                End If  ' TryGetAxis+TryGetCenter
             End If  ' bPtOK
-        End If  ' g_selectMode
+        End If  ' TryGetMeasurable
 
         sel.Clear
 
@@ -959,10 +931,6 @@ End Function
 '       Caption  = "撤销上一个"
 '       Width    = 180  Height = 36（可按需调整）
 '
-'       (Name)   = "btnMode"
-'       Caption  = "选取模式: 圆弧"
-'       Width    = 180  Height = 36（可按需调整）
-'
 '       (Name)   = "btnStop"
 '       Caption  = "退出（请勿按[ESC]退出）"
 '       Width    = 180  Height = 36（可按需调整）
@@ -1012,11 +980,6 @@ End Function
 '      SendKeys "{ESC}", True
 '      DoEvents
 '      On Error GoTo 0
-'  End Sub
-'
-'  Private Sub btnMode_Click()
-'      g_selectMode = Not g_selectMode
-'      btnMode.Caption = IIf(g_selectMode, "选取模式: 点+线", "选取模式: 圆弧")
 '  End Sub
 '
 ' ---------------------------------------------------------------------------
