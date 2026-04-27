@@ -846,10 +846,9 @@ class BomEditDialog(QDialog):
                     if self._show_filepath_col:
                         value = fp if fp else fn
                     else:
-                        # Show filename+ext when the backing path is known
-                        # (including not-found rows where _filepath stores the
-                        # CATIA reference path even though the file is missing).
-                        # Fall back to the stored stem when nothing is available.
+                        # Always show filename with extension when the backing
+                        # path is known; fall back to the stored stem (which may
+                        # equal FILENAME_NOT_FOUND) when it is not.
                         value = Path(fp).name if fp else fn
                 elif col_name == "Filepath":
                     value = str(row_data.get("_filepath", ""))
@@ -882,7 +881,7 @@ class BomEditDialog(QDialog):
                 item.setData(0, _ITEM_LOCKED_ROLE, False)
             else:
                 grey = QColor(160, 160, 160)
-                bg   = QColor(255, 200, 200) if not_found else QColor(245, 245, 245)
+                bg   = QColor(250, 245, 245) if not_found else QColor(245, 245, 245)
                 item.setData(0, _ITEM_LOCKED_ROLE, True)
                 for ci in range(len(self._columns)):
                     item.setForeground(ci, grey)
@@ -1533,7 +1532,10 @@ class BomEditDialog(QDialog):
 
         # ── 打开路径 ──────────────────────────────────────────────────────────
         act_open_path = menu.addAction("打开路径")
-        act_open_path.setEnabled(bool(fp))
+        path_available = bool(fp) and fp_path is not None and (
+            fp_path.exists() or fp_path.parent.exists()
+        )
+        act_open_path.setEnabled(path_available)
 
         # ── 复制路径 ──────────────────────────────────────────────────────────
         act_copy_path = menu.addAction("复制路径")
@@ -1572,8 +1574,6 @@ class BomEditDialog(QDialog):
 
     def _open_path(self, fp: str) -> None:
         """Open the folder containing *fp* in Windows Explorer, highlighting the file."""
-        if not fp:
-            return
         p = Path(fp).resolve()
         try:
             if p.exists():
@@ -1581,11 +1581,6 @@ class BomEditDialog(QDialog):
                 subprocess.Popen(f'explorer /select,"{p}"', shell=True)
             elif p.parent.exists():
                 subprocess.Popen(f'explorer "{p.parent}"', shell=True)
-            else:
-                QMessageBox.warning(
-                    self, "路径不存在",
-                    f"无法打开路径，该路径不存在于磁盘：\n{fp}",
-                )
         except Exception as exc:
             logger.warning(f"Failed to open path in Explorer: {exc}")
 

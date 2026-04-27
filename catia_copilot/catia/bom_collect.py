@@ -20,23 +20,15 @@ logger = logging.getLogger(__name__)
 def get_product_filepath(product) -> str:
     """返回支持 CATIA 产品 *product* 的文档完整路径。
 
-    使用 ``com_object.ReferenceProduct.Parent.FullName``：
-    - ``.ReferenceProduct`` 得到参考产品（定义）
-    - ``.Parent`` 导航至其支持文档对象（Document）
-    - ``.FullName`` 返回该文档的完整文件路径
-
-    对于**未检索到**（磁盘文件不存在）的零件，CATIA 在内存中仍会为缺失的
-    文件创建一个"ghost"文档，该 ghost 文档的 FullName 保存了存储路径，
-    因此本调用对已解析和未解析的零件均有效。
-    仅对嵌入式部件（无独立文件，无 ReferenceProduct.Parent 链）会抛出异常，
-    此时返回空字符串是正确行为。
+    使用 ``com_object.ReferenceProduct.Parent.FullName`` – 纯 COM 路径，
+    适用于独立产品/零件和嵌入式部件（无自己的文件，返回父级路径）。
+    失败时返回空字符串。
 
     参数：
         product: CATIA 产品对象
 
     返回：
-        文档完整路径（已解析时文件存在，未解析时文件不存在但路径有效），
-        或空字符串（嵌入式部件等无独立文件的情况）
+        文档完整路径，或空字符串（失败时）
     """
     try:
         return product.com_object.ReferenceProduct.Parent.FullName
@@ -130,10 +122,7 @@ def collect_bom_rows(
             pn   = name.rsplit(".", 1)[0] if "." in name else name
 
         filepath  = get_product_filepath(product)
-        # A product is "not found" when CATIA has a stored reference path but
-        # the file no longer exists on disk.  When filepath is empty the
-        # product has no backing file at all (e.g. the root assembly in memory).
-        not_found = bool(filepath) and not Path(filepath).exists()
+        not_found = not bool(filepath)
 
         # Embedded 部件 share the parent product's backing file, so the
         # file-based property cache must NOT be used for them – each 部件
