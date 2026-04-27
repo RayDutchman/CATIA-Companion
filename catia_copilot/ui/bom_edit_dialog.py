@@ -1478,6 +1478,22 @@ class BomEditDialog(QDialog):
             QMessageBox.warning(self, "无数据", "请先加载BOM。")
             return
 
+        # Guard: if there are unsaved edits the table content differs from what
+        # CATIA holds, so we must not export until they are written back.
+        if self._modified_keys:
+            ret = QMessageBox.question(
+                self, "存在未写回的修改",
+                "检测到BOM属性尚未写回CATIA，导出前应保持表格与CATIA一致。\n\n"
+                "是否立即将修改写回CATIA，再继续导出？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return
+            self._write_back(close_on_success=False)
+            # If write-back failed (modified_keys still non-empty), abort export.
+            if self._modified_keys:
+                return
+
         # Suggest a default filename derived from the source file
         initial_name = ""
         if not self._use_active_chk.isChecked():
