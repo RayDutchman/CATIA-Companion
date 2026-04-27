@@ -10,7 +10,7 @@ Public Const DEBUG_MODE As Boolean = False
 '   2. 插入名为 "FlipForm" 的 UserForm（翻转方向浮动面板）：
 '      - 在 VBA IDE 中，点击 Insert > UserForm。
 '      - 将窗体的 (Name) 属性设为 "FlipForm"，Caption 设为 "方向控制"。
-'      - 添加一个 CommandButton：(Name) = "btnFlip"，Caption = "翻转方向: 否"，
+'      - 添加一个 CommandButton：(Name) = "btnFlip"，Caption = "翻转方向"，
 '        Width ≈ 160，Height ≈ 36。
 '      - 将本文件末尾 "FlipForm UserForm 代码" 部分粘贴到窗体的代码模块中。
 '   3. 插入名为 "SwitchToPartForm" 的 UserForm（等待切换到紧固件文档面板）：
@@ -260,7 +260,6 @@ Public Sub ContinueSelectProduct()
     ' 每个历史记录存储：(0)=Products集合, (1)=Index, (2-4)=holeAxis, (5-7)=holePt
     ReDim g_assemblyHistory(0 To 99, 0 To 7)  ' 最多100个紧固件
     FlipForm.Show vbModeless
-    FlipForm.btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
     FlipForm.btnFlip.Enabled = False  ' 初始禁用，装配后启用
     FlipForm.btnUndo.Enabled = False
 
@@ -924,7 +923,7 @@ End Function
 '   - 将窗体 (Name) 设为 "FlipForm"，Caption 设为 "装配控制面板"。
 '   - 添加四个 CommandButton（从上到下排列）：
 '       (Name)   = "btnFlip"
-'       Caption  = "翻转方向: 否"
+'       Caption  = "翻转方向"
 '       Width    = 180  Height = 36（可按需调整）
 '
 '       (Name)   = "btnUndo"
@@ -944,7 +943,6 @@ End Function
 '      btnFlip.Enabled = False
 '
 '      g_flipDir = Not g_flipDir
-'      btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
 '
 '      ' 装配后可翻转重装：直接移动已有紧固件到翻转后的位置
 '      If g_hasLastComp Then
