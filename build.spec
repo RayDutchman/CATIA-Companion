@@ -44,7 +44,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='CATIA Copilot',
+    name='CATIA Copilot 1.4.1',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
