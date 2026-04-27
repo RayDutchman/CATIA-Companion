@@ -52,7 +52,7 @@ Public Const DEBUG_MODE As Boolean = False
 '   5. 装配循环：选择孔口圆形边 -> 添加紧固件实例并定位。
 '      装配完成后可点击浮动面板上的"翻转方向"按钮撤销并重装（方向相反）。
 '      翻转按钮在每次装配后始终有效（包括正在选下一孔时），影响最近一次装配的紧固件。
-'      点""停止装配""按钮结束循环。
+'      点""退出""按钮结束循环。
 '
 ' ----------------------------------------------------------------------------
 
@@ -286,13 +286,13 @@ Public Sub ContinueSelectProduct()
         ' ── 第一步：选择孔位元素（圆形边 或 锚点顶点）──────────────────────────
         status = sel.SelectElement2(firstFilter, _
             "选择孔的圆形边（圆弧模式）或安装锚点顶点（点+线模式） [" & g_fastenerPN & " -> " & g_targetPN & _
-            "  已装配:" & g_count & "]  点""停止装配""按钮结束", False)
+            "  已装配:" & g_count & "]  点""退出""按钮结束", False)
         If status <> "Normal" Then
             g_loopActive = False
             g_hasLastComp = False
             Exit Do
         End If
-        ' 检查 g_loopActive：如果用户点击了"停止装配"按钮，应停止循环
+        ' 检查 g_loopActive：如果用户点击了"退出"按钮，应停止循环
         If Not g_loopActive Then Exit Do
 
         Dim firstRef As Object
