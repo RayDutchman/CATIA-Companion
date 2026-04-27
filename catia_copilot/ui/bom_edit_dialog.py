@@ -23,6 +23,7 @@ from PySide6.QtCore import Qt, QSettings
 
 from catia_copilot.constants import (
     PRESET_USER_REF_PROPERTIES,
+    PRESET_USER_REF_PROPERTY_OPTIONS,
     BOM_EDIT_COLUMN_ORDER,
     BOM_COLUMN_DISPLAY_NAMES,
     BOM_READONLY_COLUMNS,
@@ -735,6 +736,37 @@ class BomEditDialog(QDialog):
                     self._table.setItemWidget(item, col_idx, combo)
                     continue
 
+                # User-defined property with constrained options → QComboBox
+                opts = PRESET_USER_REF_PROPERTY_OPTIONS.get(col_name)
+                if opts is not None:
+                    pn_val = self._canonical_data.get(pn, {}).get(
+                        col_name, str(row_data.get(col_name, ""))
+                    )
+                    # Build the effective item list:
+                    #   • always prepend "" so an unset property shows as blank
+                    #   • if the stored value is not in the allowed list AND is
+                    #     non-empty, append it so the real value remains visible
+                    display_opts = [""] + list(opts)
+                    if pn_val and pn_val not in opts:
+                        logger.debug(
+                            "属性 '%s' 的值 '%s' 不在可选列表中，将以原始值显示（零件编号: %s）",
+                            col_name, pn_val, pn,
+                        )
+                        display_opts.append(pn_val)
+                    combo = QComboBox()
+                    combo.blockSignals(True)
+                    combo.addItems(display_opts)
+                    combo.setCurrentText(pn_val)
+                    combo.blockSignals(False)
+                    if row_locked:
+                        combo.setEnabled(False)
+                    else:
+                        combo.currentTextChanged.connect(
+                            lambda text, r=row_idx, c=col_name: self._on_option_col_changed(r, c, text)
+                        )
+                    self._table.setItemWidget(item, col_idx, combo)
+                    continue
+
                 # All other columns → item text
                 if col_name == BOM_ROW_NUMBER_COLUMN:
                     value = str(row_idx + 1)
@@ -849,6 +881,45 @@ class BomEditDialog(QDialog):
                         combo.blockSignals(False)
         self._is_updating = False
 
+    # ── User-defined option column combo change ───────────────────────────────
+
+    def _on_option_col_changed(self, row_idx: int, col_name: str, text: str) -> None:
+        if self._is_updating:
+            return
+        if col_name not in self._columns:
+            return
+        col_idx = self._columns.index(col_name)
+
+        selected_row_indices = {
+            it.data(0, Qt.ItemDataRole.UserRole)
+            for it in self._table.selectedItems()
+            if it.data(0, Qt.ItemDataRole.UserRole) is not None
+        }
+        direct_rows = selected_row_indices if row_idx in selected_row_indices else {row_idx}
+
+        pns_to_update: set[str] = set()
+        for r in direct_rows:
+            pn = str(self._rows[r].get("Part Number", ""))
+            if pn:
+                pns_to_update.add(pn)
+
+        for pn in pns_to_update:
+            if pn in self._canonical_data:
+                self._canonical_data[pn][col_name] = text
+                self._modified_keys.setdefault(pn, set()).add(col_name)
+
+        # Performance optimization: use PN→Item index instead of full tree traversal
+        self._is_updating = True
+        for pn in pns_to_update:
+            if pn in self._pn_to_items:
+                for other_item in self._pn_to_items[pn]:
+                    combo = self._table.itemWidget(other_item, col_idx)
+                    if isinstance(combo, QComboBox) and combo.currentText() != text:
+                        combo.blockSignals(True)
+                        combo.setCurrentText(text)
+                        combo.blockSignals(False)
+        self._is_updating = False
+
     # ── Regular cell edit ─────────────────────────────────────────────────────
 
     def _on_item_changed(self, item: QTreeWidgetItem, col_idx: int) -> None:
@@ -859,7 +930,7 @@ class BomEditDialog(QDialog):
             return
         col_name = self._columns[col_idx]
 
-        if col_name in BOM_READONLY_COLUMNS or col_name == "Source":
+        if col_name in BOM_READONLY_COLUMNS or col_name == "Source" or col_name in PRESET_USER_REF_PROPERTY_OPTIONS:
             return
 
         new_value = item.text(col_idx)
