@@ -1593,18 +1593,25 @@ class BomEditDialog(QDialog):
     ) -> None:
         """Write *rows* to an .xlsx workbook at *dest*."""
         import openpyxl
-        from openpyxl.styles import Font, Alignment
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "BOM汇总" if self._summarize else "BOM"
 
-        center = Alignment(horizontal="center")
+        center      = Alignment(horizontal="center", vertical="center")
+        header_fill = PatternFill(fill_type="solid", fgColor="D9D9D9")
+        thin_side   = Side(style="thin")
+        thin_border = Border(
+            left=thin_side, right=thin_side, top=thin_side, bottom=thin_side
+        )
 
         # Header row
         for col_idx, col_name in enumerate(cols, start=1):
-            cell = ws.cell(row=1, column=col_idx, value=self._export_header(col_name))
-            cell.font = Font(bold=True)
+            cell        = ws.cell(row=1, column=col_idx, value=self._export_header(col_name))
+            cell.font   = Font(bold=True)
+            cell.fill   = header_fill
+            cell.border = thin_border
 
         # Data rows
         for row_idx, row in enumerate(rows, start=2):
@@ -1621,9 +1628,14 @@ class BomEditDialog(QDialog):
                         value = raw_val
                 else:
                     value = raw_val
-                cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                cell        = ws.cell(row=row_idx, column=col_idx, value=value)
+                cell.border = thin_border
                 if col_name in ("Level", "Quantity", "Type"):
                     cell.alignment = center
+
+        # Freeze header row and enable auto-filter
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
 
         # Column widths: convert pixel widths → Excel character units
         # Calibri 11pt default: ~7 px per character unit is a reasonable approximation

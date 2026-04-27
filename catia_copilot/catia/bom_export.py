@@ -1,8 +1,8 @@
 """
-BOM Excel export.
+BOM export.
 
 Provides:
-- export_bom_to_excel() – export a hierarchical or summarised BOM to an .xlsx file
+- export_bom_to_excel() – export a hierarchical or summarised BOM to an .xlsx or .csv file
 """
 
 import logging
@@ -30,8 +30,9 @@ def export_bom_to_excel(
     summarize: bool = False,
     summary_include_assemblies: bool = False,
     summary_sort_column: str | None = None,
+    output_format: str = "xlsx",
 ) -> None:
-    """Export a hierarchical or summarised BOM from CATProduct files to Excel (.xlsx).
+    """Export a hierarchical or summarised BOM from CATProduct files to Excel (.xlsx) or CSV.
 
     Parameters
     ----------
@@ -51,7 +52,7 @@ def export_bom_to_excel(
         of the BOM-load progress callback so both operations can share UI code.
     summarize:
         When ``True`` the hierarchical BOM is collapsed into a flat summary
-        (unique parts with cumulative quantities) before writing to Excel.
+        (unique parts with cumulative quantities) before writing.
         The output filename will have the suffix ``_BOM汇总`` instead of
         ``_BOM``.
     summary_include_assemblies:
@@ -61,9 +62,11 @@ def export_bom_to_excel(
     summary_sort_column:
         Column name to sort the summary by.  Defaults to ``"Part Number"``
         when ``None``.  Only used when *summarize* is ``True``.
+    output_format:
+        ``"xlsx"`` (default) or ``"csv"``.
     """
     import openpyxl
-    from openpyxl.styles import Font, Alignment
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
     from pycatia import catia
     from pycatia.product_structure_interfaces.product_document import ProductDocument
 
@@ -77,20 +80,29 @@ def export_bom_to_excel(
         columns = [c for c in columns if c != "Level"]
 
     bom_suffix = "_BOM汇总" if summarize else "_BOM"
+    use_csv = output_format.lower() == "csv"
 
     caa         = catia()
     application = caa.application
     application.visible = True
     documents   = application.documents
 
-    def _write_sheet(ws, rows: list[dict]) -> None:
-        center = Alignment(horizontal="center")
+    # ── Shared xlsx style objects ────────────────────────────────────────────
+    center       = Alignment(horizontal="center", vertical="center")
+    header_fill  = PatternFill(fill_type="solid", fgColor="D9D9D9")
+    thin_side    = Side(style="thin")
+    thin_border  = Border(
+        left=thin_side, right=thin_side, top=thin_side, bottom=thin_side
+    )
 
+    def _write_sheet(ws, rows: list[dict]) -> None:
         # Header row
         for col_idx, col_name in enumerate(columns, start=1):
             cell       = ws.cell(row=1, column=col_idx,
                                  value=BOM_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
             cell.font  = Font(bold=True)
+            cell.fill  = header_fill
+            cell.border = thin_border
 
         # Data rows
         for row_idx, row in enumerate(rows, start=2):
@@ -109,8 +121,13 @@ def export_bom_to_excel(
                     value = row.get(col_name, "")
 
                 cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                cell.border = thin_border
                 if col_name in ("Level", "Quantity", "Type"):
                     cell.alignment = center
+
+        # Freeze header row and enable auto-filter
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
 
         # Auto-width columns
         for col_idx, col_name in enumerate(columns, start=1):
@@ -123,6 +140,15 @@ def export_bom_to_excel(
                 if cell_val is not None:
                     max_width = max(max_width, estimate_column_width(str(cell_val)))
             ws.column_dimensions[col_letter].width = max_width + 2
+
+    def _write_csv_file(dest: Path, rows: list[dict]) -> None:
+        import csv
+        headers = [BOM_COLUMN_DISPLAY_NAMES.get(c, c) for c in columns]
+        with open(dest, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            for row in rows:
+                writer.writerow([row.get(c, "") for c in columns])
 
     total_files = len(file_paths)
     for file_idx, path in enumerate(file_paths, start=1):
@@ -137,7 +163,8 @@ def export_bom_to_excel(
             src_name = Path(active_full)
             dest_dir = Path(output_folder).resolve() if output_folder else src_name.parent
             dest_dir.mkdir(parents=True, exist_ok=True)
-            dest = dest_dir / f"{src_name.stem}{bom_suffix}.xlsx"
+            file_ext = ".csv" if use_csv else ".xlsx"
+            dest = dest_dir / f"{src_name.stem}{bom_suffix}{file_ext}"
 
             rows = collect_bom_rows(None, columns, custom_columns,
                                      row_progress_callback)
@@ -147,11 +174,14 @@ def export_bom_to_excel(
                     include_assemblies=summary_include_assemblies,
                     sort_column=summary_sort_column,
                 )
-            wb   = openpyxl.Workbook()
-            ws   = wb.active
-            ws.title = "BOM汇总" if summarize else "BOM"
-            _write_sheet(ws, rows)
-            wb.save(str(dest))
+            if use_csv:
+                _write_csv_file(dest, rows)
+            else:
+                wb   = openpyxl.Workbook()
+                ws   = wb.active
+                ws.title = "BOM汇总" if summarize else "BOM"
+                _write_sheet(ws, rows)
+                wb.save(str(dest))
             logger.info(f"  BOM exported -> {dest}")
             logger.info("Done: active document\n")
             continue
@@ -159,9 +189,10 @@ def export_bom_to_excel(
         src      = Path(path).resolve()
         dest_dir = Path(output_folder).resolve() if output_folder else src.parent
         dest_dir.mkdir(parents=True, exist_ok=True)
-        dest     = dest_dir / f"{src.stem}{bom_suffix}.xlsx"
+        file_ext = ".csv" if use_csv else ".xlsx"
+        dest     = dest_dir / f"{src.stem}{bom_suffix}{file_ext}"
 
-        if dest.exists():
+        if dest.exists() and not use_csv:
             try:
                 with open(dest, "a+b"):
                     pass
@@ -203,11 +234,14 @@ def export_bom_to_excel(
                 sort_column=summary_sort_column,
             )
 
-        wb       = openpyxl.Workbook()
-        ws       = wb.active
-        ws.title = "BOM汇总" if summarize else "BOM"
-        _write_sheet(ws, rows)
-        wb.save(str(dest))
+        if use_csv:
+            _write_csv_file(dest, rows)
+        else:
+            wb       = openpyxl.Workbook()
+            ws       = wb.active
+            ws.title = "BOM汇总" if summarize else "BOM"
+            _write_sheet(ws, rows)
+            wb.save(str(dest))
         logger.info(f"  BOM exported -> {dest}")
 
         # Close the document only if we were the one who opened it

@@ -51,6 +51,7 @@ class ExportBomDialog(QDialog):
         self._summary_sort_column: str = self._settings.value(
             "summary_sort_column", "Part Number"
         )
+        self._output_format: str = self._settings.value("output_format", "xlsx")
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -154,6 +155,25 @@ class ExportBomDialog(QDialog):
         bom_type_row.addStretch()
         bom_opts_layout.addLayout(bom_type_row)
         layout.addWidget(bom_opts_group)
+
+        # ── Output format ────────────────────────────────────────────────────
+        fmt_group  = QGroupBox("输出格式")
+        fmt_layout = QHBoxLayout(fmt_group)
+        self._fmt_btn_group  = QButtonGroup(self)
+        self._radio_xlsx     = QRadioButton("Excel工作簿 (.xlsx)")
+        self._radio_csv      = QRadioButton("CSV文件 (.csv)")
+        self._fmt_btn_group.addButton(self._radio_xlsx)
+        self._fmt_btn_group.addButton(self._radio_csv)
+        if self._output_format == "csv":
+            self._radio_csv.setChecked(True)
+        else:
+            self._radio_xlsx.setChecked(True)
+        self._radio_xlsx.toggled.connect(self._on_format_changed)
+        fmt_layout.addWidget(self._radio_xlsx)
+        fmt_layout.addWidget(self._radio_csv)
+        fmt_layout.addStretch()
+        layout.addWidget(fmt_group)
+
         col_group  = QGroupBox("导出列（拖动以排序）")
         col_outer  = QVBoxLayout(col_group)
         col_layout = QHBoxLayout()
@@ -333,6 +353,10 @@ class ExportBomDialog(QDialog):
             self._summary_sort_column = col
             self._settings.setValue("summary_sort_column", col)
 
+    def _on_format_changed(self, xlsx_checked: bool) -> None:
+        self._output_format = "xlsx" if xlsx_checked else "csv"
+        self._settings.setValue("output_format", self._output_format)
+
     def _confirm(self) -> None:
         use_active = self._radio_active.isChecked()
         if use_active:
@@ -386,6 +410,7 @@ class ExportBomDialog(QDialog):
                 summarize=summarize,
                 summary_include_assemblies=self._summary_include_assemblies,
                 summary_sort_column=self._summary_sort_column or None,
+                output_format=self._output_format,
             )
         except Exception as e:
             progress.close()
@@ -394,5 +419,6 @@ class ExportBomDialog(QDialog):
         finally:
             progress.close()
 
-        QMessageBox.information(self, "导出成功", "BOM已成功导出为Excel文件。")
+        fmt_label = "CSV文件" if self._output_format == "csv" else "Excel文件"
+        QMessageBox.information(self, "导出成功", f"BOM已成功导出为{fmt_label}。")
         self.accept()
