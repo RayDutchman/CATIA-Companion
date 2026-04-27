@@ -20,18 +20,26 @@ logger = logging.getLogger(__name__)
 def get_product_filepath(product) -> str:
     """返回支持 CATIA 产品 *product* 的文档完整路径。
 
-    使用 ``com_object.ReferenceProduct.Parent.FullName`` – 纯 COM 路径，
-    适用于独立产品/零件和嵌入式部件（无自己的文件，返回父级路径）。
-    失败时返回空字符串。
+    首选 ``com_object.ReferenceProduct.Parent.FullName``（适用于已加载的文档）。
+    当文件不存在于磁盘时，文档对象的 Parent 链可能抛出异常；此时尝试
+    ``com_object.FullName``，它直接从实例的参考链接读取存储的完整路径，
+    即使文件已丢失也可返回路径字符串。
+    两者均失败时返回空字符串。
 
     参数：
         product: CATIA 产品对象
 
     返回：
-        文档完整路径，或空字符串（失败时）
+        文档完整路径（可能指向不存在的文件），或空字符串（完全无法读取时）
     """
     try:
         return product.com_object.ReferenceProduct.Parent.FullName
+    except Exception:
+        pass
+    # Fallback: for unresolved references the instance link still stores the
+    # intended path even though the file is missing on disk.
+    try:
+        return product.com_object.FullName
     except Exception as e:
         logger.debug(f"无法获取产品文件路径: {e}")
         return ""
@@ -122,7 +130,10 @@ def collect_bom_rows(
             pn   = name.rsplit(".", 1)[0] if "." in name else name
 
         filepath  = get_product_filepath(product)
-        not_found = not bool(filepath)
+        # A product is "not found" when CATIA has a stored reference path but
+        # the file no longer exists on disk.  When filepath is empty the
+        # product has no backing file at all (e.g. the root assembly in memory).
+        not_found = bool(filepath) and not Path(filepath).exists()
 
         # Embedded 部件 share the parent product's backing file, so the
         # file-based property cache must NOT be used for them – each 部件
@@ -172,22 +183,6 @@ def collect_bom_rows(
             "_not_found":   not_found,
             "_unreadable":  not is_readable,
         }
-
-        # For unresolved (not-found) products the primary COM call returned "".
-        # Try to obtain any reference name or path that CATIA still has stored,
-        # so the UI can show something useful instead of "未检索到".
-        if not_found:
-            catia_ref_path = ""
-            try:
-                catia_ref_path = str(product.com_object.ReferenceProduct.Name or "")
-            except Exception:
-                pass
-            if not catia_ref_path:
-                try:
-                    catia_ref_path = product.name or ""
-                except Exception:
-                    pass
-            row["_catia_ref_path"] = catia_ref_path
 
         try:
             child_count = product.products.count

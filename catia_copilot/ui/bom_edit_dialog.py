@@ -843,19 +843,14 @@ class BomEditDialog(QDialog):
                 elif col_name == "Filename":
                     fp = str(row_data.get("_filepath", ""))
                     fn = str(row_data.get("Filename", ""))
-                    catia_ref = str(row_data.get("_catia_ref_path", ""))
                     if self._show_filepath_col:
-                        value = fp if fp else (catia_ref or fn)
+                        value = fp if fp else fn
                     else:
-                        # Show filename+ext when the backing path is known;
-                        # for not-found rows show the CATIA reference name/path
-                        # as a hint instead of "未检索到".
-                        if fp:
-                            value = Path(fp).name
-                        elif catia_ref:
-                            value = catia_ref
-                        else:
-                            value = fn
+                        # Show filename+ext when the backing path is known
+                        # (including not-found rows where _filepath stores the
+                        # CATIA reference path even though the file is missing).
+                        # Fall back to the stored stem when nothing is available.
+                        value = Path(fp).name if fp else fn
                 elif col_name == "Filepath":
                     value = str(row_data.get("_filepath", ""))
                 elif col_name in BOM_READONLY_COLUMNS:
@@ -1499,11 +1494,6 @@ class BomEditDialog(QDialog):
         not_found    = bool(row_data.get("_not_found"))
         unreadable   = bool(row_data.get("_unreadable"))
         pn           = str(row_data.get("Part Number", ""))
-        catia_ref    = str(row_data.get("_catia_ref_path", ""))
-        # For not-found rows, use _catia_ref_path as the effective path when
-        # it looks like an absolute filesystem path (contains a separator).
-        eff_fp       = fp or (catia_ref if catia_ref and Path(catia_ref).is_absolute() else "")
-        eff_fp_path  = Path(eff_fp) if eff_fp else None
 
         # Ensure the right-clicked row is selected so that the downstream
         # helpers (_rename_selected_file etc.) can find it.
@@ -1543,11 +1533,11 @@ class BomEditDialog(QDialog):
 
         # ── 打开路径 ──────────────────────────────────────────────────────────
         act_open_path = menu.addAction("打开路径")
-        act_open_path.setEnabled(bool(eff_fp))
+        act_open_path.setEnabled(bool(fp))
 
         # ── 复制路径 ──────────────────────────────────────────────────────────
         act_copy_path = menu.addAction("复制路径")
-        act_copy_path.setEnabled(bool(fp or catia_ref))
+        act_copy_path.setEnabled(bool(fp))
 
         # ── 在CATIA中打开 ─────────────────────────────────────────────────────
         # Enabled only when the file exists on disk and is not a broken/unreadable
@@ -1572,9 +1562,9 @@ class BomEditDialog(QDialog):
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
 
         if action == act_open_path:
-            self._open_path(eff_fp)
+            self._open_path(fp)
         elif action == act_copy_path:
-            QApplication.clipboard().setText(fp or catia_ref)
+            QApplication.clipboard().setText(fp)
         elif action == act_open_catia:
             self._open_in_catia(fp)
         elif action == act_edit_path:
