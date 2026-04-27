@@ -379,5 +379,12 @@ def flatten_bom_to_summary(
     # ── Step 3: sort and return ───────────────────────────────────────────────
     result    = [summary[k] for k in seen_order]
     sort_key  = sort_column if sort_column else "Part Number"
-    result.sort(key=lambda r: str(r.get(sort_key, "")).lower())
+    def _sort_key(r: dict) -> tuple:
+        val = r.get(sort_key, "")
+        try:
+            return (0, float(val), "")
+        except (TypeError, ValueError):
+            return (1, 0.0, str(val).lower())
+
+    result.sort(key=_sort_key)
     return result
