@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "catia-copilot"
-version = "1.4.0"
+version = "1.4.1"
 description = "A lightweight internal tool to streamline common CATIA V5 workflows."
 authors = [
     { name = "CHEN Weibo", email = "thucwb@gmail.com" }
