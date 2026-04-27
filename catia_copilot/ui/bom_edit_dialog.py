@@ -344,6 +344,12 @@ class BomEditDialog(QDialog):
         btn_row.addWidget(self._rename_file_btn)
         btn_row.addStretch()
 
+        self._export_btn = QPushButton("导出表格")
+        self._export_btn.setToolTip("将当前表格导出为 Excel（.xlsx）或 CSV 文件")
+        self._export_btn.setEnabled(False)
+        self._export_btn.clicked.connect(self._export_table)
+        btn_row.addWidget(self._export_btn)
+
         self._save_btn   = QPushButton("应用")
         self._save_btn.setEnabled(False)
         self._save_btn.clicked.connect(self._apply_changes)
@@ -729,6 +735,7 @@ class BomEditDialog(QDialog):
         self._finish_btn.setEnabled(True)
         self._rename_btn.setEnabled(True)
         self._rename_file_btn.setEnabled(True)
+        self._export_btn.setEnabled(True)
 
     def _populate_table(self) -> None:
         self._is_updating = True
@@ -1463,10 +1470,176 @@ class BomEditDialog(QDialog):
                 "BOM属性已成功写回CATIA，请在CATIA中手动保存文件。",
             )
 
+    # ── Export table ──────────────────────────────────────────────────────────
+
+    def _export_table(self) -> None:
+        """Export the currently displayed BOM table to an Excel or CSV file."""
+        if not self._bom_loaded or not self._rows:
+            QMessageBox.warning(self, "无数据", "请先加载BOM。")
+            return
+
+        # Suggest a default filename derived from the source file
+        initial_name = ""
+        if not self._use_active_chk.isChecked():
+            fp_src = self._file_edit.text().strip()
+            if fp_src:
+                suffix_hint = "_BOM汇总" if self._summarize else "_BOM"
+                initial_name = str(Path(fp_src).with_name(Path(fp_src).stem + suffix_hint))
+
+        dest, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "导出BOM表格",
+            initial_name,
+            "Excel工作簿 (*.xlsx);;CSV文件 (*.csv)",
+        )
+        if not dest:
+            return
+
+        dest_path = Path(dest)
+        # Infer format from extension; fall back to xlsx when ambiguous
+        suffix = dest_path.suffix.lower()
+        if suffix not in (".xlsx", ".csv"):
+            dest_path = dest_path.with_suffix(".xlsx")
+            suffix = ".xlsx"
+
+        # Columns to export: current visible columns, excluding the row-number "#" column
+        export_cols = [c for c in self._columns if c != BOM_ROW_NUMBER_COLUMN]
+
+        # Snapshot current column widths from the live table (pixels)
+        col_px_widths: dict[str, int] = {}
+        for col_idx, col_name in enumerate(self._columns):
+            if col_name != BOM_ROW_NUMBER_COLUMN:
+                col_px_widths[col_name] = self._table.columnWidth(col_idx)
+
+        # Collect row data using the same value-resolution logic as _populate_table
+        rows_data: list[dict] = []
+        for row_data in self._rows:
+            pn = str(row_data.get("Part Number", ""))
+            row_out: dict = {}
+            for col_name in export_cols:
+                if col_name == "Source":
+                    raw = str(row_data.get("Source", ""))
+                    val = self._canonical_data.get(pn, {}).get(
+                        "Source", SOURCE_TO_DISPLAY.get(raw, raw)
+                    )
+                elif col_name in PRESET_USER_REF_PROPERTY_OPTIONS:
+                    val = self._canonical_data.get(pn, {}).get(
+                        col_name, str(row_data.get(col_name, ""))
+                    )
+                elif col_name == "Filename":
+                    fp_val = str(row_data.get("_filepath", ""))
+                    fn_val = str(row_data.get("Filename", ""))
+                    if self._show_filepath_col:
+                        val = fp_val if fp_val else fn_val
+                    else:
+                        val = Path(fp_val).name if fp_val else fn_val
+                elif col_name in BOM_READONLY_COLUMNS:
+                    val = str(row_data.get(col_name, ""))
+                else:
+                    val = str(
+                        self._canonical_data.get(pn, {}).get(
+                            col_name, row_data.get(col_name, "")
+                        )
+                    )
+                row_out[col_name] = val
+            rows_data.append(row_out)
+
+        try:
+            if suffix == ".xlsx":
+                self._write_xlsx(dest_path, export_cols, col_px_widths, rows_data)
+            else:
+                self._write_csv(dest_path, export_cols, rows_data)
+        except PermissionError:
+            QMessageBox.critical(
+                self, "导出失败",
+                f"无法写入文件（文件可能已在其他程序中打开）：\n{dest_path}",
+            )
+            return
+        except Exception as e:
+            logger.error(f"BOM table export failed: {e}")
+            QMessageBox.critical(self, "导出失败", f"导出时出错：\n{e}")
+            return
+
+        QMessageBox.information(self, "导出成功", f"BOM已成功导出：\n{dest_path}")
+
+    def _export_header(self, col_name: str) -> str:
+        """Return the display header string for a column, matching the live table."""
+        if col_name == "Filename" and self._show_filepath_col:
+            return "完整路径"
+        return BOM_COLUMN_DISPLAY_NAMES.get(col_name, col_name)
+
+    def _write_xlsx(
+        self,
+        dest: Path,
+        cols: list[str],
+        px_widths: dict[str, int],
+        rows: list[dict],
+    ) -> None:
+        """Write *rows* to an .xlsx workbook at *dest*."""
+        import openpyxl
+        from openpyxl.styles import Font, Alignment
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "BOM汇总" if self._summarize else "BOM"
+
+        center = Alignment(horizontal="center")
+
+        # Header row
+        for col_idx, col_name in enumerate(cols, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=self._export_header(col_name))
+            cell.font = Font(bold=True)
+
+        # Data rows
+        for row_idx, row in enumerate(rows, start=2):
+            for col_idx, col_name in enumerate(cols, start=1):
+                raw_val = row.get(col_name, "")
+                # Store numbers as integers so Excel can sort/filter them
+                if col_name in ("Level", "Quantity"):
+                    try:
+                        value = int(raw_val)
+                    except (ValueError, TypeError):
+                        logger.debug(
+                            "Could not convert %r to int for column '%s'", raw_val, col_name
+                        )
+                        value = raw_val
+                else:
+                    value = raw_val
+                cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                if col_name in ("Level", "Quantity", "Type"):
+                    cell.alignment = center
+
+        # Column widths: convert pixel widths → Excel character units
+        # Calibri 11pt default: ~7 px per character unit is a reasonable approximation
+        PX_PER_CHAR = 7.0
+        for col_idx, col_name in enumerate(cols, start=1):
+            col_letter = ws.cell(row=1, column=col_idx).column_letter
+            px = px_widths.get(col_name, 80)
+            char_width = max(8.0, px / PX_PER_CHAR)
+            ws.column_dimensions[col_letter].width = round(char_width, 1)
+
+        wb.save(str(dest))
+        logger.info(f"BOM table exported (xlsx) -> {dest}")
+
+    def _write_csv(
+        self,
+        dest: Path,
+        cols: list[str],
+        rows: list[dict],
+    ) -> None:
+        """Write *rows* to a UTF-8 CSV file at *dest*."""
+        import csv
+
+        with open(dest, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow([self._export_header(c) for c in cols])
+            for row in rows:
+                writer.writerow([row.get(c, "") for c in cols])
+        logger.info(f"BOM table exported (csv) -> {dest}")
+
     def _apply_changes(self) -> None:
         """Write changes back to CATIA and keep the dialog open."""
         self._write_back(close_on_success=False)
-
     def _finish_and_close(self) -> None:
         """Write changes back to CATIA and close the dialog."""
         self._write_back(close_on_success=True)
