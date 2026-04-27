@@ -431,26 +431,26 @@ Public Sub ContinueSelectProduct()
 
                     ' 计算安装孔的几何（根产品坐标系）
                     ' 锚点 = 两个圆心的中点
-                    Dim tmpPt(2) As Double
-                    tmpPt(0) = (holeCenter1(0) + holeCenter2(0)) / 2
-                    tmpPt(1) = (holeCenter1(1) + holeCenter2(1)) / 2
-                    tmpPt(2) = (holeCenter1(2) + holeCenter2(2)) / 2
+                    Dim circleMidPt(2) As Double
+                    circleMidPt(0) = (holeCenter1(0) + holeCenter2(0)) / 2
+                    circleMidPt(1) = (holeCenter1(1) + holeCenter2(1)) / 2
+                    circleMidPt(2) = (holeCenter1(2) + holeCenter2(2)) / 2
 
                     ' 第一轴线 = 两圆心连线方向（从 holeCenter1 指向 holeCenter2）
-                    Dim tmpAxis1(2) As Double
-                    tmpAxis1(0) = holeCenter2(0) - holeCenter1(0)
-                    tmpAxis1(1) = holeCenter2(1) - holeCenter1(1)
-                    tmpAxis1(2) = holeCenter2(2) - holeCenter1(2)
-                    Dim tmpAxis1Len As Double
-                    tmpAxis1Len = Sqr(tmpAxis1(0)*tmpAxis1(0) + tmpAxis1(1)*tmpAxis1(1) + tmpAxis1(2)*tmpAxis1(2))
-                    If tmpAxis1Len < 0.000000000001 Then
+                    Dim circleAxis1(2) As Double
+                    circleAxis1(0) = holeCenter2(0) - holeCenter1(0)
+                    circleAxis1(1) = holeCenter2(1) - holeCenter1(1)
+                    circleAxis1(2) = holeCenter2(2) - holeCenter1(2)
+                    Dim circleAxis1Len As Double
+                    circleAxis1Len = Sqr(circleAxis1(0)*circleAxis1(0) + circleAxis1(1)*circleAxis1(1) + circleAxis1(2)*circleAxis1(2))
+                    If circleAxis1Len < 0.000000000001 Then
                         MsgBox "两个安装孔的圆心重合，无法确定第一轴线。", vbExclamation, "快速装配托板螺母"
                         sel.Clear
                         bHoleGeomOK = False
                     Else
-                        tmpAxis1(0) = tmpAxis1(0) / tmpAxis1Len
-                        tmpAxis1(1) = tmpAxis1(1) / tmpAxis1Len
-                        tmpAxis1(2) = tmpAxis1(2) / tmpAxis1Len
+                        circleAxis1(0) = circleAxis1(0) / circleAxis1Len
+                        circleAxis1(1) = circleAxis1(1) / circleAxis1Len
+                        circleAxis1(2) = circleAxis1(2) / circleAxis1Len
 
                         ' 第二轴线：axis1Raw 已在根坐标系，归一化后投影到垂直于第一轴线的分量
                         Dim ax1RLen As Double
@@ -461,21 +461,21 @@ Public Sub ContinueSelectProduct()
                             axis1Raw(2) = axis1Raw(2) / ax1RLen
                         End If
                         Dim hDP As Double
-                        hDP = axis1Raw(0)*tmpAxis1(0) + axis1Raw(1)*tmpAxis1(1) + axis1Raw(2)*tmpAxis1(2)
-                        Dim tmpAxis2(2) As Double
-                        tmpAxis2(0) = axis1Raw(0) - hDP * tmpAxis1(0)
-                        tmpAxis2(1) = axis1Raw(1) - hDP * tmpAxis1(1)
-                        tmpAxis2(2) = axis1Raw(2) - hDP * tmpAxis1(2)
-                        Dim tmpAxis2Len As Double
-                        tmpAxis2Len = Sqr(tmpAxis2(0)*tmpAxis2(0) + tmpAxis2(1)*tmpAxis2(1) + tmpAxis2(2)*tmpAxis2(2))
-                        If tmpAxis2Len < 0.000000000001 Then
+                        hDP = axis1Raw(0)*circleAxis1(0) + axis1Raw(1)*circleAxis1(1) + axis1Raw(2)*circleAxis1(2)
+                        Dim circleAxis2(2) As Double
+                        circleAxis2(0) = axis1Raw(0) - hDP * circleAxis1(0)
+                        circleAxis2(1) = axis1Raw(1) - hDP * circleAxis1(1)
+                        circleAxis2(2) = axis1Raw(2) - hDP * circleAxis1(2)
+                        Dim circleAxis2Len As Double
+                        circleAxis2Len = Sqr(circleAxis2(0)*circleAxis2(0) + circleAxis2(1)*circleAxis2(1) + circleAxis2(2)*circleAxis2(2))
+                        If circleAxis2Len < 0.000000000001 Then
                             MsgBox "第一个安装孔的轴线与两圆心连线平行，无法确定第二轴线。", vbExclamation, "快速装配托板螺母"
                             sel.Clear
                             bHoleGeomOK = False
                         Else
-                            tmpAxis2(0) = tmpAxis2(0) / tmpAxis2Len
-                            tmpAxis2(1) = tmpAxis2(1) / tmpAxis2Len
-                            tmpAxis2(2) = tmpAxis2(2) / tmpAxis2Len
+                            circleAxis2(0) = circleAxis2(0) / circleAxis2Len
+                            circleAxis2(1) = circleAxis2(1) / circleAxis2Len
+                            circleAxis2(2) = circleAxis2(2) / circleAxis2Len
 
                             ' 收集 targetProduct→根 变换链，逆序施加逆变换到 targetProduct 坐标系
                             Dim tpChain(49, 11)     ' 最多50层，Variant（不能声明 As Double）
@@ -497,28 +497,28 @@ Public Sub ContinueSelectProduct()
                             Dim tpOff0 As Double, tpOff1 As Double, tpOff2 As Double
                             Dim tpAx As Double, tpAy As Double, tpAz As Double
                             For tpii = tpDepth - 1 To 0 Step -1
-                                tpOff0 = tmpPt(0) - tpChain(tpii, 9)
-                                tpOff1 = tmpPt(1) - tpChain(tpii, 10)
-                                tpOff2 = tmpPt(2) - tpChain(tpii, 11)
-                                tmpPt(0) = tpChain(tpii, 0)*tpOff0 + tpChain(tpii, 1)*tpOff1 + tpChain(tpii, 2)*tpOff2
-                                tmpPt(1) = tpChain(tpii, 3)*tpOff0 + tpChain(tpii, 4)*tpOff1 + tpChain(tpii, 5)*tpOff2
-                                tmpPt(2) = tpChain(tpii, 6)*tpOff0 + tpChain(tpii, 7)*tpOff1 + tpChain(tpii, 8)*tpOff2
-                                tpAx = tpChain(tpii, 0)*tmpAxis1(0) + tpChain(tpii, 1)*tmpAxis1(1) + tpChain(tpii, 2)*tmpAxis1(2)
-                                tpAy = tpChain(tpii, 3)*tmpAxis1(0) + tpChain(tpii, 4)*tmpAxis1(1) + tpChain(tpii, 5)*tmpAxis1(2)
-                                tpAz = tpChain(tpii, 6)*tmpAxis1(0) + tpChain(tpii, 7)*tmpAxis1(1) + tpChain(tpii, 8)*tmpAxis1(2)
-                                tmpAxis1(0) = tpAx: tmpAxis1(1) = tpAy: tmpAxis1(2) = tpAz
-                                tpAx = tpChain(tpii, 0)*tmpAxis2(0) + tpChain(tpii, 1)*tmpAxis2(1) + tpChain(tpii, 2)*tmpAxis2(2)
-                                tpAy = tpChain(tpii, 3)*tmpAxis2(0) + tpChain(tpii, 4)*tmpAxis2(1) + tpChain(tpii, 5)*tmpAxis2(2)
-                                tpAz = tpChain(tpii, 6)*tmpAxis2(0) + tpChain(tpii, 7)*tmpAxis2(1) + tpChain(tpii, 8)*tmpAxis2(2)
-                                tmpAxis2(0) = tpAx: tmpAxis2(1) = tpAy: tmpAxis2(2) = tpAz
+                                tpOff0 = circleMidPt(0) - tpChain(tpii, 9)
+                                tpOff1 = circleMidPt(1) - tpChain(tpii, 10)
+                                tpOff2 = circleMidPt(2) - tpChain(tpii, 11)
+                                circleMidPt(0) = tpChain(tpii, 0)*tpOff0 + tpChain(tpii, 1)*tpOff1 + tpChain(tpii, 2)*tpOff2
+                                circleMidPt(1) = tpChain(tpii, 3)*tpOff0 + tpChain(tpii, 4)*tpOff1 + tpChain(tpii, 5)*tpOff2
+                                circleMidPt(2) = tpChain(tpii, 6)*tpOff0 + tpChain(tpii, 7)*tpOff1 + tpChain(tpii, 8)*tpOff2
+                                tpAx = tpChain(tpii, 0)*circleAxis1(0) + tpChain(tpii, 1)*circleAxis1(1) + tpChain(tpii, 2)*circleAxis1(2)
+                                tpAy = tpChain(tpii, 3)*circleAxis1(0) + tpChain(tpii, 4)*circleAxis1(1) + tpChain(tpii, 5)*circleAxis1(2)
+                                tpAz = tpChain(tpii, 6)*circleAxis1(0) + tpChain(tpii, 7)*circleAxis1(1) + tpChain(tpii, 8)*circleAxis1(2)
+                                circleAxis1(0) = tpAx: circleAxis1(1) = tpAy: circleAxis1(2) = tpAz
+                                tpAx = tpChain(tpii, 0)*circleAxis2(0) + tpChain(tpii, 1)*circleAxis2(1) + tpChain(tpii, 2)*circleAxis2(2)
+                                tpAy = tpChain(tpii, 3)*circleAxis2(0) + tpChain(tpii, 4)*circleAxis2(1) + tpChain(tpii, 5)*circleAxis2(2)
+                                tpAz = tpChain(tpii, 6)*circleAxis2(0) + tpChain(tpii, 7)*circleAxis2(1) + tpChain(tpii, 8)*circleAxis2(2)
+                                circleAxis2(0) = tpAx: circleAxis2(1) = tpAy: circleAxis2(2) = tpAz
                             Next tpii
 
-                            holePt(0) = tmpPt(0): holePt(1) = tmpPt(1): holePt(2) = tmpPt(2)
-                            holeAxis1(0) = tmpAxis1(0): holeAxis1(1) = tmpAxis1(1): holeAxis1(2) = tmpAxis1(2)
-                            holeAxis2(0) = tmpAxis2(0): holeAxis2(1) = tmpAxis2(1): holeAxis2(2) = tmpAxis2(2)
+                            holePt(0) = circleMidPt(0): holePt(1) = circleMidPt(1): holePt(2) = circleMidPt(2)
+                            holeAxis1(0) = circleAxis1(0): holeAxis1(1) = circleAxis1(1): holeAxis1(2) = circleAxis1(2)
+                            holeAxis2(0) = circleAxis2(0): holeAxis2(1) = circleAxis2(1): holeAxis2(2) = circleAxis2(2)
                             bHoleGeomOK = True
-                        End If  ' tmpAxis2Len
-                    End If  ' tmpAxis1Len
+                        End If  ' circleAxis2Len
+                    End If  ' circleAxis1Len
                 End If  ' bHoleGeomOK (second circle)
             End If  ' bHoleGeomOK (first circle)
 
@@ -655,42 +655,42 @@ Public Sub ContinueSelectProduct()
 
                         ' 计算安装孔的几何（根产品坐标系）
                         ' 锚点 = 两点中点
-                        Dim np2tmpPt(2) As Double
-                        np2tmpPt(0) = (np1Coord(0) + np2Coord(0)) / 2
-                        np2tmpPt(1) = (np1Coord(1) + np2Coord(1)) / 2
-                        np2tmpPt(2) = (np1Coord(2) + np2Coord(2)) / 2
+                        Dim pointModeMidPt(2) As Double
+                        pointModeMidPt(0) = (np1Coord(0) + np2Coord(0)) / 2
+                        pointModeMidPt(1) = (np1Coord(1) + np2Coord(1)) / 2
+                        pointModeMidPt(2) = (np1Coord(2) + np2Coord(2)) / 2
 
                         ' 第一轴线 = 两点连线方向（从第一点指向第二点）
-                        Dim np2tmpA1(2) As Double
-                        np2tmpA1(0) = np2Coord(0) - np1Coord(0)
-                        np2tmpA1(1) = np2Coord(1) - np1Coord(1)
-                        np2tmpA1(2) = np2Coord(2) - np1Coord(2)
-                        Dim np2tmpA1Len As Double
-                        np2tmpA1Len = Sqr(np2tmpA1(0)*np2tmpA1(0) + np2tmpA1(1)*np2tmpA1(1) + np2tmpA1(2)*np2tmpA1(2))
-                        If np2tmpA1Len < 0.000000000001 Then
+                        Dim pointModeAxis1(2) As Double
+                        pointModeAxis1(0) = np2Coord(0) - np1Coord(0)
+                        pointModeAxis1(1) = np2Coord(1) - np1Coord(1)
+                        pointModeAxis1(2) = np2Coord(2) - np1Coord(2)
+                        Dim pointModeAxis1Len As Double
+                        pointModeAxis1Len = Sqr(pointModeAxis1(0)*pointModeAxis1(0) + pointModeAxis1(1)*pointModeAxis1(1) + pointModeAxis1(2)*pointModeAxis1(2))
+                        If pointModeAxis1Len < 0.000000000001 Then
                             MsgBox "两个点重合，无法确定第一轴线。", vbExclamation, "快速装配托板螺母"
                             sel.Clear
                         Else
-                            np2tmpA1(0) = np2tmpA1(0) / np2tmpA1Len
-                            np2tmpA1(1) = np2tmpA1(1) / np2tmpA1Len
-                            np2tmpA1(2) = np2tmpA1(2) / np2tmpA1Len
+                            pointModeAxis1(0) = pointModeAxis1(0) / pointModeAxis1Len
+                            pointModeAxis1(1) = pointModeAxis1(1) / pointModeAxis1Len
+                            pointModeAxis1(2) = pointModeAxis1(2) / pointModeAxis1Len
 
                             ' 第二轴线：npLnDir（已在根坐标系），投影到垂直于第一轴线的分量
                             Dim np2DP As Double
-                            np2DP = npLnDir(0)*np2tmpA1(0) + npLnDir(1)*np2tmpA1(1) + npLnDir(2)*np2tmpA1(2)
-                            Dim np2tmpA2(2) As Double
-                            np2tmpA2(0) = npLnDir(0) - np2DP * np2tmpA1(0)
-                            np2tmpA2(1) = npLnDir(1) - np2DP * np2tmpA1(1)
-                            np2tmpA2(2) = npLnDir(2) - np2DP * np2tmpA1(2)
-                            Dim np2tmpA2Len As Double
-                            np2tmpA2Len = Sqr(np2tmpA2(0)*np2tmpA2(0) + np2tmpA2(1)*np2tmpA2(1) + np2tmpA2(2)*np2tmpA2(2))
-                            If np2tmpA2Len < 0.000000000001 Then
+                            np2DP = npLnDir(0)*pointModeAxis1(0) + npLnDir(1)*pointModeAxis1(1) + npLnDir(2)*pointModeAxis1(2)
+                            Dim pointModeAxis2(2) As Double
+                            pointModeAxis2(0) = npLnDir(0) - np2DP * pointModeAxis1(0)
+                            pointModeAxis2(1) = npLnDir(1) - np2DP * pointModeAxis1(1)
+                            pointModeAxis2(2) = npLnDir(2) - np2DP * pointModeAxis1(2)
+                            Dim pointModeAxis2Len As Double
+                            pointModeAxis2Len = Sqr(pointModeAxis2(0)*pointModeAxis2(0) + pointModeAxis2(1)*pointModeAxis2(1) + pointModeAxis2(2)*pointModeAxis2(2))
+                            If pointModeAxis2Len < 0.000000000001 Then
                                 MsgBox "所选轴线方向与两点连线平行，无法确定第二轴线。", vbExclamation, "快速装配托板螺母"
                                 sel.Clear
                             Else
-                                np2tmpA2(0) = np2tmpA2(0) / np2tmpA2Len
-                                np2tmpA2(1) = np2tmpA2(1) / np2tmpA2Len
-                                np2tmpA2(2) = np2tmpA2(2) / np2tmpA2Len
+                                pointModeAxis2(0) = pointModeAxis2(0) / pointModeAxis2Len
+                                pointModeAxis2(1) = pointModeAxis2(1) / pointModeAxis2Len
+                                pointModeAxis2(2) = pointModeAxis2(2) / pointModeAxis2Len
 
                                 ' 收集 targetProduct→根 变换链，逆序施加逆变换到 targetProduct 坐标系
                                 Dim tp2Chain(49, 11)    ' 不能声明 As Double
@@ -711,28 +711,28 @@ Public Sub ContinueSelectProduct()
                                 Dim tp2Off0 As Double, tp2Off1 As Double, tp2Off2 As Double
                                 Dim tp2Ax As Double, tp2Ay As Double, tp2Az As Double
                                 For tp2ii = tp2Depth - 1 To 0 Step -1
-                                    tp2Off0 = np2tmpPt(0) - tp2Chain(tp2ii, 9)
-                                    tp2Off1 = np2tmpPt(1) - tp2Chain(tp2ii, 10)
-                                    tp2Off2 = np2tmpPt(2) - tp2Chain(tp2ii, 11)
-                                    np2tmpPt(0) = tp2Chain(tp2ii, 0)*tp2Off0 + tp2Chain(tp2ii, 1)*tp2Off1 + tp2Chain(tp2ii, 2)*tp2Off2
-                                    np2tmpPt(1) = tp2Chain(tp2ii, 3)*tp2Off0 + tp2Chain(tp2ii, 4)*tp2Off1 + tp2Chain(tp2ii, 5)*tp2Off2
-                                    np2tmpPt(2) = tp2Chain(tp2ii, 6)*tp2Off0 + tp2Chain(tp2ii, 7)*tp2Off1 + tp2Chain(tp2ii, 8)*tp2Off2
-                                    tp2Ax = tp2Chain(tp2ii, 0)*np2tmpA1(0) + tp2Chain(tp2ii, 1)*np2tmpA1(1) + tp2Chain(tp2ii, 2)*np2tmpA1(2)
-                                    tp2Ay = tp2Chain(tp2ii, 3)*np2tmpA1(0) + tp2Chain(tp2ii, 4)*np2tmpA1(1) + tp2Chain(tp2ii, 5)*np2tmpA1(2)
-                                    tp2Az = tp2Chain(tp2ii, 6)*np2tmpA1(0) + tp2Chain(tp2ii, 7)*np2tmpA1(1) + tp2Chain(tp2ii, 8)*np2tmpA1(2)
-                                    np2tmpA1(0) = tp2Ax: np2tmpA1(1) = tp2Ay: np2tmpA1(2) = tp2Az
-                                    tp2Ax = tp2Chain(tp2ii, 0)*np2tmpA2(0) + tp2Chain(tp2ii, 1)*np2tmpA2(1) + tp2Chain(tp2ii, 2)*np2tmpA2(2)
-                                    tp2Ay = tp2Chain(tp2ii, 3)*np2tmpA2(0) + tp2Chain(tp2ii, 4)*np2tmpA2(1) + tp2Chain(tp2ii, 5)*np2tmpA2(2)
-                                    tp2Az = tp2Chain(tp2ii, 6)*np2tmpA2(0) + tp2Chain(tp2ii, 7)*np2tmpA2(1) + tp2Chain(tp2ii, 8)*np2tmpA2(2)
-                                    np2tmpA2(0) = tp2Ax: np2tmpA2(1) = tp2Ay: np2tmpA2(2) = tp2Az
+                                    tp2Off0 = pointModeMidPt(0) - tp2Chain(tp2ii, 9)
+                                    tp2Off1 = pointModeMidPt(1) - tp2Chain(tp2ii, 10)
+                                    tp2Off2 = pointModeMidPt(2) - tp2Chain(tp2ii, 11)
+                                    pointModeMidPt(0) = tp2Chain(tp2ii, 0)*tp2Off0 + tp2Chain(tp2ii, 1)*tp2Off1 + tp2Chain(tp2ii, 2)*tp2Off2
+                                    pointModeMidPt(1) = tp2Chain(tp2ii, 3)*tp2Off0 + tp2Chain(tp2ii, 4)*tp2Off1 + tp2Chain(tp2ii, 5)*tp2Off2
+                                    pointModeMidPt(2) = tp2Chain(tp2ii, 6)*tp2Off0 + tp2Chain(tp2ii, 7)*tp2Off1 + tp2Chain(tp2ii, 8)*tp2Off2
+                                    tp2Ax = tp2Chain(tp2ii, 0)*pointModeAxis1(0) + tp2Chain(tp2ii, 1)*pointModeAxis1(1) + tp2Chain(tp2ii, 2)*pointModeAxis1(2)
+                                    tp2Ay = tp2Chain(tp2ii, 3)*pointModeAxis1(0) + tp2Chain(tp2ii, 4)*pointModeAxis1(1) + tp2Chain(tp2ii, 5)*pointModeAxis1(2)
+                                    tp2Az = tp2Chain(tp2ii, 6)*pointModeAxis1(0) + tp2Chain(tp2ii, 7)*pointModeAxis1(1) + tp2Chain(tp2ii, 8)*pointModeAxis1(2)
+                                    pointModeAxis1(0) = tp2Ax: pointModeAxis1(1) = tp2Ay: pointModeAxis1(2) = tp2Az
+                                    tp2Ax = tp2Chain(tp2ii, 0)*pointModeAxis2(0) + tp2Chain(tp2ii, 1)*pointModeAxis2(1) + tp2Chain(tp2ii, 2)*pointModeAxis2(2)
+                                    tp2Ay = tp2Chain(tp2ii, 3)*pointModeAxis2(0) + tp2Chain(tp2ii, 4)*pointModeAxis2(1) + tp2Chain(tp2ii, 5)*pointModeAxis2(2)
+                                    tp2Az = tp2Chain(tp2ii, 6)*pointModeAxis2(0) + tp2Chain(tp2ii, 7)*pointModeAxis2(1) + tp2Chain(tp2ii, 8)*pointModeAxis2(2)
+                                    pointModeAxis2(0) = tp2Ax: pointModeAxis2(1) = tp2Ay: pointModeAxis2(2) = tp2Az
                                 Next tp2ii
 
-                                holePt(0) = np2tmpPt(0): holePt(1) = np2tmpPt(1): holePt(2) = np2tmpPt(2)
-                                holeAxis1(0) = np2tmpA1(0): holeAxis1(1) = np2tmpA1(1): holeAxis1(2) = np2tmpA1(2)
-                                holeAxis2(0) = np2tmpA2(0): holeAxis2(1) = np2tmpA2(1): holeAxis2(2) = np2tmpA2(2)
+                                holePt(0) = pointModeMidPt(0): holePt(1) = pointModeMidPt(1): holePt(2) = pointModeMidPt(2)
+                                holeAxis1(0) = pointModeAxis1(0): holeAxis1(1) = pointModeAxis1(1): holeAxis1(2) = pointModeAxis1(2)
+                                holeAxis2(0) = pointModeAxis2(0): holeAxis2(1) = pointModeAxis2(1): holeAxis2(2) = pointModeAxis2(2)
                                 bHoleGeomOK = True
-                            End If  ' np2tmpA2Len
-                        End If  ' np2tmpA1Len
+                            End If  ' pointModeAxis2Len
+                        End If  ' pointModeAxis1Len
                     End If  ' bNpLnOK
                 End If  ' bNp2OK
             End If  ' bNp1OK
