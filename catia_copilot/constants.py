@@ -145,6 +145,15 @@ SOURCE_FROM_DISPLAY: dict[str, str] = {"未知": "0", "自制": "1", "外购": "
 SOURCE_OPTIONS: list[str]           = ["未知", "自制", "外购"]
 
 # ---------------------------------------------------------------------------
+# BOM thumbnail display
+# ---------------------------------------------------------------------------
+
+# Maximum width and height (pixels) for the thumbnail shown in the BOM
+# right-click context menu.  Images larger than this are scaled down
+# proportionally; images smaller than this are shown at their original size.
+BOM_THUMBNAIL_MAX_SIZE: int = 130
+
+# ---------------------------------------------------------------------------
 # Part Number validation
 # ---------------------------------------------------------------------------
 
