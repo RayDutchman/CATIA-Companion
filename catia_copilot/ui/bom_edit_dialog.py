@@ -742,17 +742,20 @@ class BomEditDialog(QDialog):
                     pn_val = self._canonical_data.get(pn, {}).get(
                         col_name, str(row_data.get(col_name, ""))
                     )
-                    if pn_val not in opts:
-                        default = opts[0] if opts else ""
-                        if pn_val:
-                            logger.debug(
-                                "属性 '%s' 的值 '%s' 不在可选列表中，已回退到默认值 '%s'（零件编号: %s）",
-                                col_name, pn_val, default, pn,
-                            )
-                        pn_val = default
+                    # Build the effective item list:
+                    #   • always prepend "" so an unset property shows as blank
+                    #   • if the stored value is not in the allowed list AND is
+                    #     non-empty, append it so the real value remains visible
+                    display_opts = [""] + list(opts)
+                    if pn_val and pn_val not in opts:
+                        logger.debug(
+                            "属性 '%s' 的值 '%s' 不在可选列表中，将以原始值显示（零件编号: %s）",
+                            col_name, pn_val, pn,
+                        )
+                        display_opts.append(pn_val)
                     combo = QComboBox()
                     combo.blockSignals(True)
-                    combo.addItems(opts)
+                    combo.addItems(display_opts)
                     combo.setCurrentText(pn_val)
                     combo.blockSignals(False)
                     if row_locked:
