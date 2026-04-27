@@ -469,16 +469,11 @@ class BomEditDialog(QDialog):
                 break
             x += w
 
-        old_col_order = {c: i for i, c in enumerate(old_columns)}
-
         vscroll = self._table.verticalScrollBar().value()
 
         self._columns = self._build_visible_columns()
-        _headers = self._display_headers()
-        self._table.setColumnCount(len(_headers))
-        self._table.setHeaderLabels(_headers)
         if self._rows:
-            self._populate_table()
+            self._populate_table()  # sets column count and headers internally
             # Restore widths from the immutable snapshot; auto-fit only new
             # columns that have never been seen before.
             for col_idx, col_name in enumerate(self._columns):
@@ -504,6 +499,7 @@ class BomEditDialog(QDialog):
                     # Anchor column was hidden; scroll to the first new column
                     # that followed the anchor in the old layout (the next
                     # surviving column to the right of the removed one).
+                    old_col_order = {c: i for i, c in enumerate(old_columns)}
                     anchor_old_idx = old_col_order.get(anchor_col_name, -1)
                     x = 0
                     for col_idx, col_name in enumerate(self._columns):
@@ -519,6 +515,12 @@ class BomEditDialog(QDialog):
             new_hscroll = max(0, min(new_hscroll, self._table.horizontalScrollBar().maximum()))
             self._table.verticalScrollBar().setValue(vscroll)
             self._table.horizontalScrollBar().setValue(new_hscroll)
+        else:
+            # No rows yet: just update the column count and header labels so the
+            # table reflects the new column selection before any BOM is loaded.
+            _headers = self._display_headers()
+            self._table.setColumnCount(len(_headers))
+            self._table.setHeaderLabels(_headers)
 
     # ── Preset column helpers ─────────────────────────────────────────────────
 
