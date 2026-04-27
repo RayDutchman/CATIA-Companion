@@ -435,14 +435,17 @@ class BomEditDialog(QDialog):
         for col_idx, col_name in enumerate(self._columns):
             self._col_widths[col_name] = self._table.columnWidth(col_idx)
 
+        # Save scroll positions BEFORE setColumnCount; Qt may reset the horizontal
+        # scroll bar when the column count changes, so reading it afterwards would
+        # always yield 0 and the view would jump back to the left edge.
+        vscroll = self._table.verticalScrollBar().value()
+        hscroll = self._table.horizontalScrollBar().value()
+
         self._columns = self._build_visible_columns()
         _headers = self._display_headers()
         self._table.setColumnCount(len(_headers))
         self._table.setHeaderLabels(_headers)
         if self._rows:
-            # Preserve the user's current scroll position across the repopulate
-            vscroll = self._table.verticalScrollBar().value()
-            hscroll = self._table.horizontalScrollBar().value()
             self._populate_table()
             # Restore saved widths; auto-fit only columns that have no saved width yet
             for col_idx, col_name in enumerate(self._columns):
