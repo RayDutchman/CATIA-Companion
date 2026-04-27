@@ -744,8 +744,9 @@ Public Sub ContinueSelectProduct()
 
             ' 装配完成后的状态更新在 PlaceNutPlateAtHole 中已完成
             CATIA.StatusBar = "已装配 " & g_count & " 个 " & g_nutPlatePN & " -> " & g_targetPN & _
-                              "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
-                              "  可翻转/撤销，选下一孔继续"
+                              "  [翻转:" & IIf(g_flipDir, "是", "否") & _
+                              "  对调:" & IIf(g_swapHoles, "是", "否") & "]" & _
+                              "  可翻转/对调/撤销，选下一孔继续"
         End If
 
     Loop
@@ -1054,13 +1055,7 @@ Public Sub UndoLastNutPlate()
 
     ' 更新状态：撤销后禁用翻转功能，直到下一次装配
     ' （翻转功能在撤销后的状态管理过于复杂，容易出错，因此撤销后禁用翻转）
-    If g_historyCount > 0 Then
-        ' 仍有组件可以继续撤销
-        FlipForm.btnUndo.Enabled = True
-    Else
-        ' 没有组件可撤销了
-        FlipForm.btnUndo.Enabled = False
-    End If
+    FlipForm.btnUndo.Enabled = (g_historyCount > 0)
 
     ' 撤销后禁用翻转/对调功能（下次装配时会重新启用）
     g_hasLastComp = False
@@ -1087,7 +1082,7 @@ End Function
 
 
 ' ============================================================================
-' TryGetAxis / TryGetCenter / TryGetMeasurable / TryGetMeasurableInContext
+' TryGetAxis / TryGetCenter / TryGetPoint / TryGetDirection / TryGetMeasurable
 ' ============================================================================
 
 Private Function TryGetAxis(meas As Object, axArr) As Boolean
@@ -1128,14 +1123,6 @@ Private Function TryGetMeasurable(spa As Object, ref As Object, _
     Err.Clear
     Set measOut = spa.GetMeasurable(ref)
     TryGetMeasurable = (Err.Number = 0 And Not measOut Is Nothing)
-End Function
-
-Private Function TryGetMeasurableInContext(spa As Object, ref As Object, _
-                                           ctx As Object, ByRef measOut As Object) As Boolean
-    On Error Resume Next
-    Err.Clear
-    Set measOut = spa.GetMeasurableInContext(ref, ctx)
-    TryGetMeasurableInContext = (Err.Number = 0 And Not measOut Is Nothing)
 End Function
 
 
@@ -1205,10 +1192,6 @@ End Function
 '
 '      If g_historyCount > 0 Then
 '          Call UndoLastNutPlate()
-'      End If
-'
-'      If g_historyCount > 0 Then
-'          btnUndo.Enabled = True
 '      End If
 '  End Sub
 '
