@@ -129,6 +129,13 @@ def _read_thumbnail_via_windows_shell(filepath: str, size: int = 256) -> bytes |
     Returns raw BMP bytes or *None* on any failure.
     Only works on Windows.
     """
+    try:
+        return _read_thumbnail_via_windows_shell_inner(filepath, size)
+    except Exception:
+        return None
+
+
+def _read_thumbnail_via_windows_shell_inner(filepath: str, size: int) -> bytes | None:
     # ── COM / GDI structure types ────────────────────────────────────────────
 
     class _GUID(ctypes.Structure):
