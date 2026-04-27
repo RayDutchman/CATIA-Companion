@@ -29,7 +29,7 @@ class LogWindow(QWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent, Qt.WindowType.Window)
-        self.setWindowTitle("CATIA Copilot – Log")
+        self.setWindowTitle("CATIA Copilot 1.4.1 – Log")
         self.resize(660, 420)
 
         layout = QVBoxLayout(self)

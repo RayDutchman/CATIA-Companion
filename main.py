@@ -23,7 +23,7 @@ def main() -> None:
     初始化 Qt 应用程序，加载样式表和图标，显示主窗口。
     """
     app = QApplication(sys.argv)
-    app.setApplicationName("CATIA Copilot")
+    app.setApplicationName("CATIA Copilot 1.4.1")
 
     # 应用统一的 QSS 样式表
     qss_path = resource_path(STYLESHEET_RELATIVE_PATH)
