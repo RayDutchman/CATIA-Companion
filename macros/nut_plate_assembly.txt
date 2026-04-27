@@ -7,11 +7,14 @@ Public Const DEBUG_MODE As Boolean = False
 ' 使用前准备（需要在 VBA 编辑器中完成以下步骤）：
 '   1. 将本文件的全部内容粘贴到一个 MODULE 中
 '      （Tools > Macro > Macros... > Edit，或插入新模块）。
-'   2. 插入名为 "FlipForm" 的 UserForm（翻转方向浮动面板）：
+'   2. 插入名为 "FlipForm" 的 UserForm（装配控制面板）：
 '      - 在 VBA IDE 中，点击 Insert > UserForm。
-'      - 将窗体的 (Name) 属性设为 "FlipForm"，Caption 设为 "方向控制"。
-'      - 添加一个 CommandButton：(Name) = "btnFlip"，Caption = "翻转方向: 否"，
-'        Width ≈ 160，Height ≈ 36。
+'      - 将窗体的 (Name) 属性设为 "FlipForm"，Caption 设为 "装配控制面板"。
+'      - 添加五个 CommandButton（从上到下排列）：
+'          (Name) = "btnFlip"，Caption = "翻转方向: 否"，Width ≈ 180，Height ≈ 36
+'          (Name) = "btnSwap"，Caption = "对调铆钉孔: 否"，Width ≈ 180，Height ≈ 36
+'          (Name) = "btnUndo"，Caption = "撤销上一个"，Width ≈ 180，Height ≈ 36
+'          (Name) = "btnStop"，Caption = "退出（请勿按[ESC]退出）"，Width ≈ 180，Height ≈ 36
 '      - 将本文件末尾 "FlipForm UserForm 代码" 部分粘贴到窗体的代码模块中。
 '   3. 插入名为 "SwitchToPartForm" 的 UserForm（等待切换到托板螺母文档面板）：
 '      - Insert > UserForm，(Name) = "SwitchToPartForm"，Caption = "选择托板螺母文档"。
@@ -50,14 +53,19 @@ Public Const DEBUG_MODE As Boolean = False
 '      此方式不依赖 GetMeasurableInContext，可避免同一零件存在多个实例时测量到
 '      错误实例的问题。
 '   5. 装配循环：选择安装孔的两个圆形边 -> 添加托板螺母实例并定位。
-'      装配完成后可点击浮动面板上的"翻转方向"按钮撤销并重装（方向相反）。
-'      翻转按钮在每次装配后始终有效（包括正在选下一孔时），影响最近一次装配的托板螺母。
-'      按""退出""按钮结束循环。
+'      装配完成后可点击浮动面板上的"翻转方向"按钮重装（第二轴线方向相反）。
+'      或点击"对调铆钉孔"按钮重装（第一轴线反向，即 hole1↔hole2 互换）。
+'      两个按钮均在每次装配后启用，影响最近一次装配的托板螺母，可同时使用。
+'      按"退出"按钮结束循环。
 '
 ' ----------------------------------------------------------------------------
 
 ' 翻转方向标志；由 FlipForm 按钮切换，跨次运行保持状态：
 Public g_flipDir As Boolean
+
+' 对调铆钉孔标志；由 FlipForm 按钮切换，跨次运行保持状态：
+' True = 对调，即将第一轴线反向（hole1↔hole2 互换），False = 不对调。
+Public g_swapHoles As Boolean
 
 '托板螺母参考几何（由 CATMain 读取一次，PlaceNutPlateAtHole 使用）
 Public g_bnAxis1(2)         ' 第一轴线（两个铆钉孔圆心连线方向）
@@ -307,6 +315,8 @@ Public Sub ContinueSelectProduct()
     FlipForm.Show vbModeless
     FlipForm.btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
     FlipForm.btnFlip.Enabled = False  ' 初始禁用，装配后启用
+    FlipForm.btnSwap.Caption = IIf(g_swapHoles, "对调铆钉孔: 是", "对调铆钉孔: 否")
+    FlipForm.btnSwap.Enabled = False  ' 初始禁用，装配后启用
     FlipForm.btnUndo.Enabled = False
 
     Dim firstFilter As Variant
@@ -779,8 +789,13 @@ Public Sub PlaceNutPlateAtHole()
     Dim holeCenterLocal(2) As Double
     holeCenterLocal(0) = g_holePtX: holeCenterLocal(1) = g_holePtY: holeCenterLocal(2) = g_holePtZ
 
+    ' 对调铆钉孔：将第一轴线反向（hole1↔hole2 互换），锚点（中点）不变
     Dim holeAxis1Local(2) As Double
-    holeAxis1Local(0) = g_holeAxis1X: holeAxis1Local(1) = g_holeAxis1Y: holeAxis1Local(2) = g_holeAxis1Z
+    If g_swapHoles Then
+        holeAxis1Local(0) = -g_holeAxis1X: holeAxis1Local(1) = -g_holeAxis1Y: holeAxis1Local(2) = -g_holeAxis1Z
+    Else
+        holeAxis1Local(0) = g_holeAxis1X: holeAxis1Local(1) = g_holeAxis1Y: holeAxis1Local(2) = g_holeAxis1Z
+    End If
 
     ' ── 计算旋转矩阵 R：使托板螺母的两个轴线与安装孔的两个轴线对齐 ─────────
     ' 构建托板螺母的坐标系 F1：X = g_bnAxis1, Y = g_bnAxis2, Z = cross(X, Y)
@@ -893,9 +908,10 @@ Public Sub PlaceNutPlateAtHole()
     g_lastCompIdx = products.Count
     g_count = g_count + 1
 
-    ' 新装配后启用翻转按钮
+    ' 新装配后启用翻转/对调按钮
     g_hasLastComp = True
     FlipForm.btnFlip.Enabled = True
+    FlipForm.btnSwap.Enabled = True
 
     ' ── 记录到装配历史（供撤销使用） ──────────────────────────────────────
     If g_historyCount < 100 Then
@@ -944,9 +960,13 @@ Public Sub MoveLastNutPlate()
     Dim holeCenterLocal(2) As Double
     holeCenterLocal(0) = g_holePtX: holeCenterLocal(1) = g_holePtY: holeCenterLocal(2) = g_holePtZ
 
+    ' 对调铆钉孔：将第一轴线反向（hole1↔hole2 互换），锚点（中点）不变
     Dim holeAxis1Local(2) As Double
-    holeAxis1Local(0) = g_holeAxis1X: holeAxis1Local(1) = g_holeAxis1Y: holeAxis1Local(2) = g_holeAxis1Z
-
+    If g_swapHoles Then
+        holeAxis1Local(0) = -g_holeAxis1X: holeAxis1Local(1) = -g_holeAxis1Y: holeAxis1Local(2) = -g_holeAxis1Z
+    Else
+        holeAxis1Local(0) = g_holeAxis1X: holeAxis1Local(1) = g_holeAxis1Y: holeAxis1Local(2) = g_holeAxis1Z
+    End If
     ' 构建托板螺母的坐标系 F1
     Dim f1x(2) As Double, f1y(2) As Double, f1z(2) As Double
     f1x(0) = g_bnAxis1(0): f1x(1) = g_bnAxis1(1): f1x(2) = g_bnAxis1(2)
@@ -1044,9 +1064,10 @@ Public Sub UndoLastNutPlate()
         FlipForm.btnUndo.Enabled = False
     End If
 
-    ' 撤销后禁用翻转功能（下次装配时会重新启用）
+    ' 撤销后禁用翻转/对调功能（下次装配时会重新启用）
     g_hasLastComp = False
     FlipForm.btnFlip.Enabled = False
+    FlipForm.btnSwap.Enabled = False
 
     ' 更新状态栏
     CATIA.StatusBar = "已撤销上一个托板螺母。当前已装配: " & g_count & " 个 " & g_nutPlatePN
@@ -1125,9 +1146,13 @@ End Function
 '
 ' 创建步骤：在 VBA IDE 中，Insert > UserForm。
 '   - 将窗体 (Name) 设为 "FlipForm"，Caption 设为 "装配控制面板"。
-'   - 添加四个 CommandButton（从上到下排列）：
+'   - 添加五个 CommandButton（从上到下排列）：
 '       (Name)   = "btnFlip"
 '       Caption  = "翻转方向: 否"
+'       Width    = 180  Height = 36（可按需调整）
+'
+'       (Name)   = "btnSwap"
+'       Caption  = "对调铆钉孔: 否"
 '       Width    = 180  Height = 36（可按需调整）
 '
 '       (Name)   = "btnUndo"
@@ -1158,6 +1183,24 @@ End Function
 '      End If
 '
 '      btnFlip.Enabled = True
+'  End Sub
+'
+'  Private Sub btnSwap_Click()
+'      If Not g_loopActive Then Exit Sub
+'      btnSwap.Enabled = False
+'
+'      g_swapHoles = Not g_swapHoles
+'      btnSwap.Caption = IIf(g_swapHoles, "对调铆钉孔: 是", "对调铆钉孔: 否")
+'
+'      ' 装配后可对调铆钉孔重装：直接移动已有托板螺母到对调后的位置
+'      If g_hasLastComp Then
+'          Call MoveLastNutPlate()
+'          CATIA.StatusBar = "已重新定向（对调铆钉孔）" & g_count & " 个 " & g_nutPlatePN & _
+'                            "  [对调:" & IIf(g_swapHoles, "是", "否") & "]" & _
+'                            "  选下一孔继续"
+'      End If
+'
+'      btnSwap.Enabled = True
 '  End Sub
 '
 '  Private Sub btnUndo_Click()
