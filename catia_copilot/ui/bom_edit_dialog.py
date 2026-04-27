@@ -435,11 +435,34 @@ class BomEditDialog(QDialog):
         for col_idx, col_name in enumerate(self._columns):
             self._col_widths[col_name] = self._table.columnWidth(col_idx)
 
-        # Save scroll positions BEFORE setColumnCount; Qt may reset the horizontal
-        # scroll bar when the column count changes, so reading it afterwards would
-        # always yield 0 and the view would jump back to the left edge.
+        # --- Anchor-column horizontal scroll bookkeeping ---
+        # We want the leftmost visible column to stay on screen after columns are
+        # added/removed.  A raw pixel hscroll value is not stable across column
+        # count changes because Qt may reset the scroll bar, and because removing
+        # columns to the LEFT of the viewport shifts the pixel positions of all
+        # remaining visible columns.
+        #
+        # Strategy: identify which column name sits at the left viewport edge
+        # (and how many pixels into that column) BEFORE the rebuild, then
+        # recompute the target hscroll from column widths AFTER the rebuild.
+        old_columns = list(self._columns)
+        old_hscroll = self._table.horizontalScrollBar().value()
+
+        anchor_col_name: str | None = None  # column at the left viewport edge
+        anchor_offset: int = 0              # pixels into that column
+
+        x = 0
+        for col_idx, col_name in enumerate(old_columns):
+            w = self._table.columnWidth(col_idx)
+            if x + w > old_hscroll:
+                anchor_col_name = col_name
+                anchor_offset = old_hscroll - x
+                break
+            x += w
+
+        old_col_order = {c: i for i, c in enumerate(old_columns)}
+
         vscroll = self._table.verticalScrollBar().value()
-        hscroll = self._table.horizontalScrollBar().value()
 
         self._columns = self._build_visible_columns()
         _headers = self._display_headers()
@@ -453,9 +476,39 @@ class BomEditDialog(QDialog):
                     self._table.setColumnWidth(col_idx, self._col_widths[col_name])
                 else:
                     self._table.resizeColumnToContents(col_idx)
-            # Restore scroll position
+
+            # Compute new hscroll using the anchor column's new pixel position.
+            new_hscroll = 0
+            if anchor_col_name is not None:
+                # Try to find the anchor column in the new layout
+                x = 0
+                found = False
+                for col_idx, col_name in enumerate(self._columns):
+                    if col_name == anchor_col_name:
+                        new_hscroll = x + anchor_offset
+                        found = True
+                        break
+                    x += self._table.columnWidth(col_idx)
+
+                if not found:
+                    # Anchor column was hidden; scroll to the first new column
+                    # that followed the anchor in the old layout (the next
+                    # surviving column to the right of the removed one).
+                    anchor_old_idx = old_col_order.get(anchor_col_name, -1)
+                    x = 0
+                    for col_idx, col_name in enumerate(self._columns):
+                        if old_col_order.get(col_name, -1) > anchor_old_idx:
+                            new_hscroll = x
+                            break
+                        x += self._table.columnWidth(col_idx)
+                    else:
+                        # All remaining columns are to the left of where the
+                        # anchor was; scroll to the end.
+                        new_hscroll = self._table.horizontalScrollBar().maximum()
+
+            new_hscroll = max(0, min(new_hscroll, self._table.horizontalScrollBar().maximum()))
             self._table.verticalScrollBar().setValue(vscroll)
-            self._table.horizontalScrollBar().setValue(hscroll)
+            self._table.horizontalScrollBar().setValue(new_hscroll)
 
     # ── Preset column helpers ─────────────────────────────────────────────────
 
