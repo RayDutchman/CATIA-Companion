@@ -1537,6 +1537,10 @@ class BomEditDialog(QDialog):
         )
         act_open_path.setEnabled(path_available)
 
+        # ── 复制路径 ──────────────────────────────────────────────────────────
+        act_copy_path = menu.addAction("复制路径")
+        act_copy_path.setEnabled(bool(fp))
+
         # ── 在CATIA中打开 ─────────────────────────────────────────────────────
         # Enabled only when the file exists on disk and is not a broken/unreadable
         # reference.  Component rows share the parent product's filepath so are
@@ -1561,6 +1565,8 @@ class BomEditDialog(QDialog):
 
         if action == act_open_path:
             self._open_path(fp)
+        elif action == act_copy_path:
+            QApplication.clipboard().setText(fp)
         elif action == act_open_catia:
             self._open_in_catia(fp)
         elif action == act_edit_path:
