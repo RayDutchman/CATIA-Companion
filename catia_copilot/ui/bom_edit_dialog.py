@@ -881,7 +881,7 @@ class BomEditDialog(QDialog):
                 item.setData(0, _ITEM_LOCKED_ROLE, False)
             else:
                 grey = QColor(160, 160, 160)
-                bg   = QColor(250, 245, 245) if not_found else QColor(245, 245, 245)
+                bg   = QColor(255, 205, 205) if not_found else QColor(245, 245, 245)
                 item.setData(0, _ITEM_LOCKED_ROLE, True)
                 for ci in range(len(self._columns)):
                     item.setForeground(ci, grey)
