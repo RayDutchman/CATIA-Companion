@@ -621,7 +621,7 @@ Public Sub ContinueSelectProduct()
                     Dim npLnDir(2)
                     Dim bNpLnOK As Boolean: bNpLnOK = False
                     If TryGetMeasurable(spaAssembly, npLnRef, npLnMeas) Then
-                        bNpLnOK = TryGetAxis(npLnMeas, npLnDir)
+                        bNpLnOK = TryGetDirection(npLnMeas, npLnDir)
                     End If
                     If Not bNpLnOK Then
                         MsgBox "无法获取所选直线的方向。" & Chr(10) & _
@@ -1100,6 +1100,13 @@ Private Function TryGetAxis(meas As Object, axArr) As Boolean
     Err.Clear
     meas.GetAxis axArr
     TryGetAxis = (Err.Number = 0)
+End Function
+
+Private Function TryGetDirection(meas As Object, dirArr) As Boolean
+    On Error Resume Next
+    Err.Clear
+    meas.GetDirection dirArr
+    TryGetDirection = (Err.Number = 0)
 End Function
 
 Private Function TryGetCenter(meas As Object, ptArr) As Boolean
