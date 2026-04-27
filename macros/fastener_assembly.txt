@@ -305,12 +305,86 @@ Public Sub ContinueSelectProduct()
             MsgBox "无法测量所选元素，请重新选择。", vbExclamation, "快速装配紧固件"
             sel.Clear
         Else
-            ' 自动检测：先尝试作为顶点（点+线模式），再尝试作为圆弧（圆弧模式）
-            Dim ptCoord(2)
-            Dim bPtOK As Boolean
-            bPtOK = TryGetPoint(firstMeas, ptCoord)
+            ' 自动检测：先尝试作为圆弧（圆弧模式），再尝试作为顶点（点+线模式）
+            ' 注意：圆弧的 GetPoint 也会成功（返回圆心），因此必须先检测圆弧，否则会误判为点。
+            If TryGetAxis(firstMeas, holeAxis) And TryGetCenter(firstMeas, holePt) Then
+                ' ── 圆弧模式：归一化轴向并变换到 targetProduct 坐标系 ──────────────
+                Dim holeAxisLen As Double
+                holeAxisLen = Sqr(holeAxis(0)*holeAxis(0) + holeAxis(1)*holeAxis(1) + holeAxis(2)*holeAxis(2))
+                If holeAxisLen > 0.000000000001 Then
+                    holeAxis(0) = holeAxis(0)/holeAxisLen
+                    holeAxis(1) = holeAxis(1)/holeAxisLen
+                    holeAxis(2) = holeAxis(2)/holeAxisLen
+                End If
 
-            If bPtOK Then
+                ' 从 firstLeafProd 沿结构树向上推导，得到孔在根产品坐标系中的坐标
+                ' GetMeasurable 返回孔在叶层零件自己坐标系（局部坐标）中的几何值。
+                ' 从 firstLeafProd 向上逐层应用 Position.GetComponents 的正向变换：
+                '   parentPt = R * localPt + T
+                ' 其中矩阵格式：m(0..2)=X轴列, m(3..5)=Y轴列, m(6..8)=Z轴列, m(9..11)=平移T。
+                Dim curProd As Object
+                Set curProd = firstLeafProd
+                Dim holeM(11)           ' Position 矩阵，不能声明 As Double
+                Dim holeParentColl As Object
+                Dim holeTx As Double, holeTy As Double, holeTz As Double
+                Do
+                    Set holeParentColl = curProd.Parent
+                    If TypeName(holeParentColl) = "ProductDocument" Then Exit Do
+                    curProd.Position.GetComponents holeM
+                    holeTx = holeM(0)*holePt(0) + holeM(3)*holePt(1) + holeM(6)*holePt(2) + holeM(9)
+                    holeTy = holeM(1)*holePt(0) + holeM(4)*holePt(1) + holeM(7)*holePt(2) + holeM(10)
+                    holeTz = holeM(2)*holePt(0) + holeM(5)*holePt(1) + holeM(8)*holePt(2) + holeM(11)
+                    holePt(0) = holeTx: holePt(1) = holeTy: holePt(2) = holeTz
+                    holeTx = holeM(0)*holeAxis(0) + holeM(3)*holeAxis(1) + holeM(6)*holeAxis(2)
+                    holeTy = holeM(1)*holeAxis(0) + holeM(4)*holeAxis(1) + holeM(7)*holeAxis(2)
+                    holeTz = holeM(2)*holeAxis(0) + holeM(5)*holeAxis(1) + holeM(8)*holeAxis(2)
+                    holeAxis(0) = holeTx: holeAxis(1) = holeTy: holeAxis(2) = holeTz
+                    Set curProd = holeParentColl.Parent
+                Loop
+
+                ' 收集 targetProduct→根 变换链，逆序施加逆变换到 targetProduct 坐标系
+                ' targetProduct 可能位于结构树的任意层级，因此不能仅用单层 Position 求逆。
+                ' 先从 targetProduct 向上收集各层的 Position 矩阵（tpChain），
+                ' 再从根向下（逆序遍历）依次施加逆变换：local = R^T * (parent - T)。
+                Dim tpChain(49, 11)     ' 最多50层，Variant（不能声明 As Double）
+                Dim tpDepth As Integer
+                tpDepth = 0
+                Set curProd = targetProduct
+                Dim tpParentColl As Object
+                Dim tpM(11)             ' 不能声明 As Double
+                Dim tpKk As Integer
+                Do
+                    Set tpParentColl = curProd.Parent
+                    If TypeName(tpParentColl) = "ProductDocument" Then Exit Do
+                    curProd.Position.GetComponents tpM
+                    For tpKk = 0 To 11: tpChain(tpDepth, tpKk) = tpM(tpKk): Next tpKk
+                    tpDepth = tpDepth + 1
+                    Set curProd = tpParentColl.Parent
+                Loop
+                Dim tpii As Integer
+                Dim tpOff0 As Double, tpOff1 As Double, tpOff2 As Double
+                Dim tpAx As Double, tpAy As Double, tpAz As Double
+                For tpii = tpDepth - 1 To 0 Step -1
+                    tpOff0 = holePt(0) - tpChain(tpii, 9)
+                    tpOff1 = holePt(1) - tpChain(tpii, 10)
+                    tpOff2 = holePt(2) - tpChain(tpii, 11)
+                    holePt(0) = tpChain(tpii, 0)*tpOff0 + tpChain(tpii, 1)*tpOff1 + tpChain(tpii, 2)*tpOff2
+                    holePt(1) = tpChain(tpii, 3)*tpOff0 + tpChain(tpii, 4)*tpOff1 + tpChain(tpii, 5)*tpOff2
+                    holePt(2) = tpChain(tpii, 6)*tpOff0 + tpChain(tpii, 7)*tpOff1 + tpChain(tpii, 8)*tpOff2
+                    tpAx = tpChain(tpii, 0)*holeAxis(0) + tpChain(tpii, 1)*holeAxis(1) + tpChain(tpii, 2)*holeAxis(2)
+                    tpAy = tpChain(tpii, 3)*holeAxis(0) + tpChain(tpii, 4)*holeAxis(1) + tpChain(tpii, 5)*holeAxis(2)
+                    tpAz = tpChain(tpii, 6)*holeAxis(0) + tpChain(tpii, 7)*holeAxis(1) + tpChain(tpii, 8)*holeAxis(2)
+                    holeAxis(0) = tpAx: holeAxis(1) = tpAy: holeAxis(2) = tpAz
+                Next tpii
+                bHoleGeomOK = True
+
+            Else
+                ' ── 点+线模式（圆弧检测失败，尝试作为顶点） ──────────────────────
+                Dim ptCoord(2)
+                Dim bPtOK As Boolean
+                bPtOK = TryGetPoint(firstMeas, ptCoord)
+
+                If bPtOK Then
                 ' ── 点+线模式：将 ptCoord 从 firstLeafProd 正向推导到根产品坐标系 ──
                 Dim ptCurProd As Object
                 Set ptCurProd = firstLeafProd
@@ -421,87 +495,13 @@ Public Sub ContinueSelectProduct()
                     bHoleGeomOK = True
                 End If  ' bLineOK
 
-            Else
-                ' ── 圆弧模式：尝试获取轴线和圆心 ─────────────────────────────────
-                ' 错误处理：若所选几何体不是圆形边（如直线边），GetAxis/GetCenter 会报错。
-                ' 使用独立函数隔离错误域，避免某些 CATIA 版本中 On Error Resume Next 在调用层失效。
-                If TryGetAxis(firstMeas, holeAxis) And TryGetCenter(firstMeas, holePt) Then
-                    ' 归一化轴向（GetAxis 不保证返回单位向量）
-                    Dim holeAxisLen As Double
-                    holeAxisLen = Sqr(holeAxis(0)*holeAxis(0) + holeAxis(1)*holeAxis(1) + holeAxis(2)*holeAxis(2))
-                    If holeAxisLen > 0.000000000001 Then
-                        holeAxis(0) = holeAxis(0)/holeAxisLen
-                        holeAxis(1) = holeAxis(1)/holeAxisLen
-                        holeAxis(2) = holeAxis(2)/holeAxisLen
-                    End If
-
-                    ' 从 firstLeafProd 沿结构树向上推导，得到孔在根产品坐标系中的坐标
-                    ' GetMeasurable 返回孔在叶层零件自己坐标系（局部坐标）中的几何值。
-                    ' 从 firstLeafProd 向上逐层应用 Position.GetComponents 的正向变换：
-                    '   parentPt = R * localPt + T
-                    ' 其中矩阵格式：m(0..2)=X轴列, m(3..5)=Y轴列, m(6..8)=Z轴列, m(9..11)=平移T。
-                    Dim curProd As Object
-                    Set curProd = firstLeafProd
-                    Dim holeM(11)           ' Position 矩阵，不能声明 As Double
-                    Dim holeParentColl As Object
-                    Dim holeTx As Double, holeTy As Double, holeTz As Double
-                    Do
-                        Set holeParentColl = curProd.Parent
-                        If TypeName(holeParentColl) = "ProductDocument" Then Exit Do
-                        curProd.Position.GetComponents holeM
-                        holeTx = holeM(0)*holePt(0) + holeM(3)*holePt(1) + holeM(6)*holePt(2) + holeM(9)
-                        holeTy = holeM(1)*holePt(0) + holeM(4)*holePt(1) + holeM(7)*holePt(2) + holeM(10)
-                        holeTz = holeM(2)*holePt(0) + holeM(5)*holePt(1) + holeM(8)*holePt(2) + holeM(11)
-                        holePt(0) = holeTx: holePt(1) = holeTy: holePt(2) = holeTz
-                        holeTx = holeM(0)*holeAxis(0) + holeM(3)*holeAxis(1) + holeM(6)*holeAxis(2)
-                        holeTy = holeM(1)*holeAxis(0) + holeM(4)*holeAxis(1) + holeM(7)*holeAxis(2)
-                        holeTz = holeM(2)*holeAxis(0) + holeM(5)*holeAxis(1) + holeM(8)*holeAxis(2)
-                        holeAxis(0) = holeTx: holeAxis(1) = holeTy: holeAxis(2) = holeTz
-                        Set curProd = holeParentColl.Parent
-                    Loop
-
-                    ' 收集 targetProduct→根 变换链，逆序施加逆变换到 targetProduct 坐标系
-                    ' targetProduct 可能位于结构树的任意层级，因此不能仅用单层 Position 求逆。
-                    ' 先从 targetProduct 向上收集各层的 Position 矩阵（tpChain），
-                    ' 再从根向下（逆序遍历）依次施加逆变换：local = R^T * (parent - T)。
-                    Dim tpChain(49, 11)     ' 最多50层，Variant（不能声明 As Double）
-                    Dim tpDepth As Integer
-                    tpDepth = 0
-                    Set curProd = targetProduct
-                    Dim tpParentColl As Object
-                    Dim tpM(11)             ' 不能声明 As Double
-                    Dim tpKk As Integer
-                    Do
-                        Set tpParentColl = curProd.Parent
-                        If TypeName(tpParentColl) = "ProductDocument" Then Exit Do
-                        curProd.Position.GetComponents tpM
-                        For tpKk = 0 To 11: tpChain(tpDepth, tpKk) = tpM(tpKk): Next tpKk
-                        tpDepth = tpDepth + 1
-                        Set curProd = tpParentColl.Parent
-                    Loop
-                    Dim tpii As Integer
-                    Dim tpOff0 As Double, tpOff1 As Double, tpOff2 As Double
-                    Dim tpAx As Double, tpAy As Double, tpAz As Double
-                    For tpii = tpDepth - 1 To 0 Step -1
-                        tpOff0 = holePt(0) - tpChain(tpii, 9)
-                        tpOff1 = holePt(1) - tpChain(tpii, 10)
-                        tpOff2 = holePt(2) - tpChain(tpii, 11)
-                        holePt(0) = tpChain(tpii, 0)*tpOff0 + tpChain(tpii, 1)*tpOff1 + tpChain(tpii, 2)*tpOff2
-                        holePt(1) = tpChain(tpii, 3)*tpOff0 + tpChain(tpii, 4)*tpOff1 + tpChain(tpii, 5)*tpOff2
-                        holePt(2) = tpChain(tpii, 6)*tpOff0 + tpChain(tpii, 7)*tpOff1 + tpChain(tpii, 8)*tpOff2
-                        tpAx = tpChain(tpii, 0)*holeAxis(0) + tpChain(tpii, 1)*holeAxis(1) + tpChain(tpii, 2)*holeAxis(2)
-                        tpAy = tpChain(tpii, 3)*holeAxis(0) + tpChain(tpii, 4)*holeAxis(1) + tpChain(tpii, 5)*holeAxis(2)
-                        tpAz = tpChain(tpii, 6)*holeAxis(0) + tpChain(tpii, 7)*holeAxis(1) + tpChain(tpii, 8)*holeAxis(2)
-                        holeAxis(0) = tpAx: holeAxis(1) = tpAy: holeAxis(2) = tpAz
-                    Next tpii
-                    bHoleGeomOK = True
                 Else
                     MsgBox "无法识别所选元素。" & Chr(10) & _
                            "请选择孔入口处的圆形边（圆弧/圆），或选择安装锚点（顶点/点）。", _
                            vbExclamation, "快速装配紧固件"
                     sel.Clear
-                End If  ' TryGetAxis+TryGetCenter
-            End If  ' bPtOK
+                End If  ' bPtOK
+            End If  ' TryGetAxis+TryGetCenter (arc vs point)
         End If  ' TryGetMeasurable
 
         sel.Clear
