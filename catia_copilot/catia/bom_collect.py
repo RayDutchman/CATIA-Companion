@@ -136,7 +136,13 @@ def collect_bom_rows(
                   and bool(filepath) and filepath in _props_cache)
         is_readable = True
 
-        if not cached:
+        if not_found:
+            # No backing file: skip all property reads to avoid redundant
+            # DEBUG messages.  Properties will be empty; mark as unreadable.
+            props = {col: "" for col in columns}
+            props["_is_readable"] = False
+            is_readable = False
+        elif not cached:
             # Performance optimization: Check current work mode before switching
             # to avoid unnecessary DESIGN_MODE transitions (costly COM calls)
             try:
