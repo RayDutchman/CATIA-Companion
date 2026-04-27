@@ -173,6 +173,22 @@ def collect_bom_rows(
             "_unreadable":  not is_readable,
         }
 
+        # For unresolved (not-found) products the primary COM call returned "".
+        # Try to obtain any reference name or path that CATIA still has stored,
+        # so the UI can show something useful instead of "未检索到".
+        if not_found:
+            catia_ref_path = ""
+            try:
+                catia_ref_path = str(product.com_object.ReferenceProduct.Name or "")
+            except Exception:
+                pass
+            if not catia_ref_path:
+                try:
+                    catia_ref_path = product.name or ""
+                except Exception:
+                    pass
+            row["_catia_ref_path"] = catia_ref_path
+
         try:
             child_count = product.products.count
             if filepath and filepath == parent_filepath:

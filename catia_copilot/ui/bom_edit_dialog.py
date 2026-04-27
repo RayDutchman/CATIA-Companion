@@ -843,13 +843,19 @@ class BomEditDialog(QDialog):
                 elif col_name == "Filename":
                     fp = str(row_data.get("_filepath", ""))
                     fn = str(row_data.get("Filename", ""))
+                    catia_ref = str(row_data.get("_catia_ref_path", ""))
                     if self._show_filepath_col:
-                        value = fp if fp else fn
+                        value = fp if fp else (catia_ref or fn)
                     else:
-                        # Always show filename with extension when the backing
-                        # path is known; fall back to the stored stem (which may
-                        # equal FILENAME_NOT_FOUND) when it is not.
-                        value = Path(fp).name if fp else fn
+                        # Show filename+ext when the backing path is known;
+                        # for not-found rows show the CATIA reference name/path
+                        # as a hint instead of "未检索到".
+                        if fp:
+                            value = Path(fp).name
+                        elif catia_ref:
+                            value = catia_ref
+                        else:
+                            value = fn
                 elif col_name == "Filepath":
                     value = str(row_data.get("_filepath", ""))
                 elif col_name in BOM_READONLY_COLUMNS:
@@ -881,7 +887,7 @@ class BomEditDialog(QDialog):
                 item.setData(0, _ITEM_LOCKED_ROLE, False)
             else:
                 grey = QColor(160, 160, 160)
-                bg   = QColor(250, 245, 245) if not_found else QColor(245, 245, 245)
+                bg   = QColor(255, 200, 200) if not_found else QColor(245, 245, 245)
                 item.setData(0, _ITEM_LOCKED_ROLE, True)
                 for ci in range(len(self._columns)):
                     item.setForeground(ci, grey)
@@ -1493,6 +1499,11 @@ class BomEditDialog(QDialog):
         not_found    = bool(row_data.get("_not_found"))
         unreadable   = bool(row_data.get("_unreadable"))
         pn           = str(row_data.get("Part Number", ""))
+        catia_ref    = str(row_data.get("_catia_ref_path", ""))
+        # For not-found rows, use _catia_ref_path as the effective path when
+        # it looks like an absolute filesystem path (contains a separator).
+        eff_fp       = fp or (catia_ref if catia_ref and Path(catia_ref).is_absolute() else "")
+        eff_fp_path  = Path(eff_fp) if eff_fp else None
 
         # Ensure the right-clicked row is selected so that the downstream
         # helpers (_rename_selected_file etc.) can find it.
@@ -1532,14 +1543,11 @@ class BomEditDialog(QDialog):
 
         # ── 打开路径 ──────────────────────────────────────────────────────────
         act_open_path = menu.addAction("打开路径")
-        path_available = bool(fp) and fp_path is not None and (
-            fp_path.exists() or fp_path.parent.exists()
-        )
-        act_open_path.setEnabled(path_available)
+        act_open_path.setEnabled(bool(eff_fp))
 
         # ── 复制路径 ──────────────────────────────────────────────────────────
         act_copy_path = menu.addAction("复制路径")
-        act_copy_path.setEnabled(bool(fp))
+        act_copy_path.setEnabled(bool(fp or catia_ref))
 
         # ── 在CATIA中打开 ─────────────────────────────────────────────────────
         # Enabled only when the file exists on disk and is not a broken/unreadable
@@ -1564,9 +1572,9 @@ class BomEditDialog(QDialog):
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
 
         if action == act_open_path:
-            self._open_path(fp)
+            self._open_path(eff_fp)
         elif action == act_copy_path:
-            QApplication.clipboard().setText(fp)
+            QApplication.clipboard().setText(fp or catia_ref)
         elif action == act_open_catia:
             self._open_in_catia(fp)
         elif action == act_edit_path:
@@ -1574,6 +1582,8 @@ class BomEditDialog(QDialog):
 
     def _open_path(self, fp: str) -> None:
         """Open the folder containing *fp* in Windows Explorer, highlighting the file."""
+        if not fp:
+            return
         p = Path(fp).resolve()
         try:
             if p.exists():
@@ -1581,6 +1591,11 @@ class BomEditDialog(QDialog):
                 subprocess.Popen(f'explorer /select,"{p}"', shell=True)
             elif p.parent.exists():
                 subprocess.Popen(f'explorer "{p.parent}"', shell=True)
+            else:
+                QMessageBox.warning(
+                    self, "路径不存在",
+                    f"无法打开路径，该路径不存在于磁盘：\n{fp}",
+                )
         except Exception as exc:
             logger.warning(f"Failed to open path in Explorer: {exc}")
 
