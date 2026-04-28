@@ -1313,9 +1313,8 @@ class BomEditDialog(QDialog):
         if not fp or row_data.get("_not_found"):
             QMessageBox.warning(self, "无有效路径", "该行没有可用的文件路径，无法执行重命名/移动。")
             return
-        if not Path(fp).exists():
-            QMessageBox.warning(self, "文件不存在", f"文件不存在：\n{fp}")
-            return
+        # 注意：此处不检查 Path(fp).exists()；
+        # 未保存过的零件（文件尚不在磁盘上但在CATIA内存中打开）同样允许另存为。
 
         # 改名前要求先写回属性，以确保文件内容与表格一致
         orig_pn = str(row_data.get("Part Number", ""))
@@ -1342,7 +1341,9 @@ class BomEditDialog(QDialog):
         new_fp                = dlg.new_path
         target_existed_before = Path(new_fp).exists()
 
-        delete_old = (
+        # 仅当旧文件实际存在于磁盘时才询问是否删除，否则无从删除
+        file_on_disk = Path(fp).exists()
+        delete_old = file_on_disk and (
             QMessageBox.question(
                 self, "是否删除旧文件",
                 f"另存为完成后，是否删除旧文件？\n\n旧文件：{fp}",
@@ -1361,7 +1362,9 @@ class BomEditDialog(QDialog):
             src         = Path(fp).resolve()
 
             target_doc = _find_catia_doc_by_path(documents, src)
-            if target_doc is None:
+            # 仅当文件在磁盘上存在时才尝试打开；
+            # 未保存过的零件只能通过已打开的文档缓存找到。
+            if target_doc is None and file_on_disk:
                 documents.open(str(src))
                 candidate  = documents.item(documents.count)
                 target_doc = (
@@ -1373,7 +1376,8 @@ class BomEditDialog(QDialog):
             if target_doc is None:
                 QMessageBox.warning(
                     self, "无法找到文档",
-                    f"无法在CATIA中找到或打开文档：\n{fp}",
+                    f"无法在CATIA中找到或打开文档：\n{fp}\n\n"
+                    "请确认该零件已在CATIA中打开。",
                 )
                 return
 
@@ -1405,11 +1409,12 @@ class BomEditDialog(QDialog):
             #   1. 异常来自CATIA COM层（pywintypes.com_error）——
             #      这是用户在CATIA自身另存为对话框中点击"取消"或"否"时抛出的，
             #      而非操作系统级别的失败。
-            #   2. 源文件仍然完好。
+            #   2. 源文件仍然完好（或本来就未在磁盘上）。
             #   3. 目标文件要么在操作前就已存在，要么从未被创建。
             # 其他任何异常（OSError、PermissionError、磁盘空间不足等非COM错误）
             # 均应作为真正的失败弹出提示。
-            if _is_catia_com_error(e) and Path(fp).exists() and (
+            source_intact = not file_on_disk or Path(fp).exists()
+            if _is_catia_com_error(e) and source_intact and (
                 target_existed_before or not Path(new_fp).exists()
             ):
                 # 用户很可能在CATIA另存为对话框中点击了"取消"或"否"——
@@ -1502,8 +1507,8 @@ class BomEditDialog(QDialog):
             fp_i = str(row.get("_filepath", ""))
             if not fp_i or fp_i in seen_fps:
                 continue
-            if not Path(fp_i).exists():
-                continue
+            # 包含未保存过的零件（文件不在磁盘上但在CATIA内存中）；
+            # 仅排除完全没有路径的节点。
             # 如果文件已经在目标目录下，跳过（另存为到同目录会触发覆盖提示）
             if Path(fp_i).resolve().parent == target_dir.resolve():
                 continue
@@ -1591,11 +1596,14 @@ class BomEditDialog(QDialog):
         for _row_i, fp_i in to_save:  # _row_i reserved for future logging
             new_fp                = str(target_dir / Path(fp_i).name)
             target_existed_before = Path(new_fp).exists()
+            fp_i_on_disk          = Path(fp_i).exists()
 
             try:
                 src        = Path(fp_i).resolve()
                 target_doc = doc_cache.get(src)
-                if target_doc is None:
+                # 仅当文件在磁盘上存在时才尝试打开；
+                # 未保存过的零件只能通过已打开的文档缓存找到。
+                if target_doc is None and fp_i_on_disk:
                     documents.open(str(src))
                     candidate  = documents.item(documents.count)
                     target_doc = (
@@ -1609,7 +1617,8 @@ class BomEditDialog(QDialog):
                 if target_doc is None:
                     QMessageBox.warning(
                         self, "无法找到文档",
-                        f"无法在CATIA中找到或打开文档：\n{fp_i}",
+                        f"无法在CATIA中找到或打开文档：\n{fp_i}\n\n"
+                        "请确认该零件已在CATIA中打开。",
                     )
                     continue
 
@@ -1626,7 +1635,9 @@ class BomEditDialog(QDialog):
                 finally:
                     stop_event.set()  # 无论是否弹窗均通知线程退出
 
-                if delete_old and Path(fp_i).resolve() != Path(new_fp).resolve():
+                if delete_old and fp_i_on_disk and Path(fp_i).resolve() != Path(new_fp).resolve():
+                    # 未保存过的零件（fp_i_on_disk=False）本来就不在磁盘上，无需删除；
+                    # 已存在于磁盘的旧文件，在另存为成功后才删除。
                     if Path(new_fp).exists() and Path(new_fp).stat().st_size > 0:
                         try:
                             os.remove(fp_i)
@@ -1654,7 +1665,8 @@ class BomEditDialog(QDialog):
                 saved_count += 1
 
             except Exception as e:
-                if _is_catia_com_error(e) and Path(fp_i).exists() and (
+                source_intact = not fp_i_on_disk or Path(fp_i).exists()
+                if _is_catia_com_error(e) and source_intact and (
                     target_existed_before or not Path(new_fp).exists()
                 ):
                     logger.info(
@@ -2054,10 +2066,9 @@ class BomEditDialog(QDialog):
 
         # ── 另存为 ────────────────────────────────────────────────────────────
         act_edit_path = menu.addAction("另存为")
-        act_edit_path.setEnabled(
-            bool(fp) and not not_found
-            and fp_path is not None and fp_path.exists()
-        )
+        # 允许对未保存过的零件（文件不在磁盘上但在CATIA内存中）执行另存为；
+        # 仅排除没有路径或CATIA无法找到的节点。
+        act_edit_path.setEnabled(bool(fp) and not is_component and not not_found)
 
         # ── 扩展目录（仅层级BOM + 产品节点）─────────────────────────────────────
         is_product = row_data.get("Type") == "产品"
