@@ -100,7 +100,7 @@ def _auto_click_catia_saveas_yes(stop_event: threading.Event) -> None:
             return
 
 
-
+class BomEditDialog(QDialog):
     """可编辑BOM表格，用于补全产品属性并通过COM写回CATIA。
 
     - 文件名 / 层级 / 类型 / 数量 为只读结构属性。
@@ -1411,7 +1411,7 @@ def _auto_click_catia_saveas_yes(stop_event: threading.Event) -> None:
                 return
             QMessageBox.warning(self, "另存为失败", f"文件操作失败：\n{e}")
 
-    def _expand_directory(self, row_idx: int) -> None:
+    def _propagate_directory(self, row_idx: int) -> None:
         """将选中产品子树下的所有产品和零件另存为到选中产品所在目录。
 
         仅在层级BOM模式下对产品节点生效：
@@ -1517,6 +1517,9 @@ def _auto_click_catia_saveas_yes(stop_event: threading.Event) -> None:
             if not fp_i or fp_i in seen_fps:
                 continue
             if not Path(fp_i).exists():
+                continue
+            # 如果文件已经在目标目录下，跳过（另存为到同目录会触发覆盖提示）
+            if Path(fp_i).resolve().parent == target_dir.resolve():
                 continue
             seen_fps.add(fp_i)
             to_save.append((i, fp_i))
@@ -2006,7 +2009,7 @@ def _auto_click_catia_saveas_yes(stop_event: threading.Event) -> None:
         elif action == act_edit_path:
             self._rename_selected_file()
         elif action == act_expand_dir:
-            self._expand_directory(row_idx)
+            self._propagate_directory(row_idx)
 
     def _open_path(self, fp: str) -> None:
         """在 Windows 资源管理器中打开包含 *fp* 的文件夹，并高亮选中该文件。"""
