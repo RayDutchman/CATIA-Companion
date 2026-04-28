@@ -1224,7 +1224,12 @@ class BomEditDialog(QDialog):
                 target_doc = doc_cache.get(src)
                 if target_doc is None:
                     documents.open(str(src))
-                    target_doc = _find_catia_doc_by_path(documents, src)
+                    candidate = documents.item(documents.count)
+                    target_doc = (
+                        candidate
+                        if Path(candidate.full_name).resolve() == src
+                        else _find_catia_doc_by_path(documents, src)
+                    )
                     if target_doc:
                         doc_cache[src] = target_doc
 
@@ -1358,7 +1363,12 @@ class BomEditDialog(QDialog):
             target_doc = _find_catia_doc_by_path(documents, src)
             if target_doc is None:
                 documents.open(str(src))
-                target_doc = _find_catia_doc_by_path(documents, src)
+                candidate  = documents.item(documents.count)
+                target_doc = (
+                    candidate
+                    if Path(candidate.full_name).resolve() == src
+                    else _find_catia_doc_by_path(documents, src)
+                )
 
             if target_doc is None:
                 QMessageBox.warning(
@@ -1587,7 +1597,12 @@ class BomEditDialog(QDialog):
                 target_doc = doc_cache.get(src)
                 if target_doc is None:
                     documents.open(str(src))
-                    target_doc = _find_catia_doc_by_path(documents, src)
+                    candidate  = documents.item(documents.count)
+                    target_doc = (
+                        candidate
+                        if Path(candidate.full_name).resolve() == src
+                        else _find_catia_doc_by_path(documents, src)
+                    )
                     if target_doc:
                         doc_cache[src] = target_doc
 
