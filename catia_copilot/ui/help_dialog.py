@@ -23,8 +23,7 @@ _HELP_HTML = f"""\
 <h3>运行环境要求</h3>
 <ul>
   <li>操作系统：Windows 10 / 11</li>
-  <li>Python 3.10 或更高版本</li>
-  <li>已安装 CATIA V5（文件导出等功能需要 CATIA 处于运行状态）</li>
+  <li>已安装 CATIA V5 R28（文件导出等功能需要 CATIA 处于运行状态）</li>
 </ul>
 
 <hr/>
