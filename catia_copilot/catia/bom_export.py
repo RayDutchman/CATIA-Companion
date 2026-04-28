@@ -31,7 +31,6 @@ def export_bom_to_excel(
     summary_include_assemblies: bool = False,
     summary_sort_column: str | None = None,
     output_format: str = "xlsx",
-    output_path: str | None = None,
 ) -> None:
     """Export a hierarchical or summarised BOM from CATProduct files to Excel (.xlsx) or CSV.
 
@@ -42,7 +41,6 @@ def export_bom_to_excel(
         currently active CATIA document" (no file is opened or closed).
     output_folder:
         Destination directory.  Defaults to each source file's parent.
-        Ignored when *output_path* is provided.
     columns:
         Internal column names to include.  Defaults to
         :data:`~catia_copilot.constants.BOM_DEFAULT_COLUMNS`.
@@ -65,13 +63,7 @@ def export_bom_to_excel(
         Column name to sort the summary by.  Defaults to ``"Part Number"``
         when ``None``.  Only used when *summarize* is ``True``.
     output_format:
-        ``"xlsx"`` (default) or ``"csv"``.  Ignored when *output_path* is
-        provided (the format is inferred from the path's extension instead).
-    output_path:
-        Full path (including filename and extension) to write the output file.
-        When provided, *output_folder* and the auto-naming logic are bypassed
-        and the format is inferred from the extension (``.xlsx`` or ``.csv``).
-        Only meaningful when *file_paths* contains a single entry.
+        ``"xlsx"`` (default) or ``"csv"``.
     """
     import openpyxl
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -83,16 +75,12 @@ def export_bom_to_excel(
     if custom_columns is None:
         custom_columns = []
 
-    # 汇总模式下"层级"列没有意义，去掉
+    # In summary mode the "Level" column carries no useful information.
     if summarize:
         columns = [c for c in columns if c != "Level"]
 
     bom_suffix = "_BOM汇总" if summarize else "_BOM"
     use_csv = output_format.lower() == "csv"
-
-    # 当调用方提供了完整输出路径时，从扩展名推断格式，忽略 output_format
-    if output_path is not None:
-        use_csv = Path(output_path).suffix.lower() == ".csv"
 
     caa         = catia()
     application = caa.application
@@ -165,7 +153,7 @@ def export_bom_to_excel(
     total_files = len(file_paths)
     for file_idx, path in enumerate(file_paths, start=1):
         if path is None:
-            # 使用活动文档，不打开也不关闭任何文件
+            # Use the active document without opening or closing
             try:
                 active_full = application.active_document.full_name
             except Exception as e:
@@ -173,14 +161,10 @@ def export_bom_to_excel(
                     "无法获取当前CATIA活动文档，请确保CATIA已打开CATProduct。"
                 ) from e
             src_name = Path(active_full)
-            if output_path is not None:
-                dest = Path(output_path)
-            else:
-                dest_dir = Path(output_folder).resolve() if output_folder else src_name.parent
-                dest_dir.mkdir(parents=True, exist_ok=True)
-                file_ext = ".csv" if use_csv else ".xlsx"
-                dest = dest_dir / f"{src_name.stem}{bom_suffix}{file_ext}"
-            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest_dir = Path(output_folder).resolve() if output_folder else src_name.parent
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            file_ext = ".csv" if use_csv else ".xlsx"
+            dest = dest_dir / f"{src_name.stem}{bom_suffix}{file_ext}"
 
             rows = collect_bom_rows(None, columns, custom_columns,
                                      row_progress_callback)
@@ -202,15 +186,11 @@ def export_bom_to_excel(
             logger.info("Done: active document\n")
             continue
 
-        src = Path(path).resolve()
-        if output_path is not None:
-            dest = Path(output_path)
-        else:
-            dest_dir = Path(output_folder).resolve() if output_folder else src.parent
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            file_ext = ".csv" if use_csv else ".xlsx"
-            dest = dest_dir / f"{src.stem}{bom_suffix}{file_ext}"
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        src      = Path(path).resolve()
+        dest_dir = Path(output_folder).resolve() if output_folder else src.parent
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        file_ext = ".csv" if use_csv else ".xlsx"
+        dest     = dest_dir / f"{src.stem}{bom_suffix}{file_ext}"
 
         if dest.exists() and not use_csv:
             try:
