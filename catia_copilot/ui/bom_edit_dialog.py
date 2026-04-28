@@ -1509,7 +1509,23 @@ class BomEditDialog(QDialog):
             )
             return
 
-        # ── 检测目标文件名冲突（不同来源目录中存在同名文件）───────────────────
+        # ── 检测目标文件夹中已有的同名文件冲突（非本节点文件）─────────────────
+        # 已在目标目录中的节点文件已被上方过滤掉，此处出现的同名文件一定是不同文件
+        ext_conflict_msgs: list[str] = []
+        for _ri, fp_i in to_save:
+            new_fp_check = target_dir / Path(fp_i).name
+            if new_fp_check.exists():
+                ext_conflict_msgs.append(f"  • {fp_i}\n    → {new_fp_check}")
+        if ext_conflict_msgs:
+            detail = "\n\n".join(ext_conflict_msgs)
+            QMessageBox.warning(
+                self, "目标文件夹存在同名文件",
+                f"目标文件夹中已存在以下同名文件（与子树节点文件不同），"
+                f"请先处理冲突再执行扩展目录：\n\n{detail}",
+            )
+            return
+
+        # ── 检测子树内部文件名冲突（不同来源目录中存在同名文件）─────────────────
         target_names: dict[str, str] = {}  # target filename → first source path
         collision_msgs: list[str] = []
         for _ri, fp_i in to_save:
@@ -1522,14 +1538,12 @@ class BomEditDialog(QDialog):
                 target_names[name] = fp_i
         if collision_msgs:
             detail = "\n\n".join(collision_msgs)
-            ret = QMessageBox.question(
-                self, "存在目标文件名冲突",
-                f"子树中以下文件来自不同目录但文件名相同，另存为到同一目录时后者会覆盖前者：\n\n"
-                f"{detail}\n\n是否仍然继续？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.warning(
+                self, "子树内存在文件名冲突",
+                f"子树中以下文件来自不同目录但文件名相同，无法同时另存为到同一目录，"
+                f"请先处理冲突再执行扩展目录：\n\n{detail}",
             )
-            if ret != QMessageBox.StandardButton.Yes:
-                return
+            return
 
         # ── 询问是否删除旧文件（一次，对所有后续文件有效）─────────────────────
         delete_old = (
@@ -1539,8 +1553,6 @@ class BomEditDialog(QDialog):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             ) == QMessageBox.StandardButton.Yes
         )
-
-        QMessageBox.information(self, "请在CATIA中继续操作", "准备就绪，请在CATIA中确认后续操作。")
 
         # ── 建立CATIA连接并缓存已打开文档 ─────────────────────────────────────
         try:
@@ -1600,10 +1612,15 @@ class BomEditDialog(QDialog):
                     stop_event.set()  # 无论是否弹窗均通知线程退出
 
                 if delete_old and Path(fp_i).resolve() != Path(new_fp).resolve():
-                    try:
-                        os.remove(fp_i)
-                    except Exception as del_err:
-                        logger.warning(f"Failed to delete old file {fp_i}: {del_err}")
+                    if Path(new_fp).exists() and Path(new_fp).stat().st_size > 0:
+                        try:
+                            os.remove(fp_i)
+                        except Exception as del_err:
+                            logger.warning(f"Failed to delete old file {fp_i}: {del_err}")
+                    else:
+                        logger.warning(
+                            f"SaveAs result not confirmed for {fp_i}, skipping delete"
+                        )
 
                 new_stem = Path(new_fp).stem
                 for row in self._rows:
@@ -1640,7 +1657,9 @@ class BomEditDialog(QDialog):
                 self, "扩展目录完成",
                 f"已成功将 {saved_count} 个文件另存为到目录：\n{target_dir}",
             )
+            vscroll = self._table.verticalScrollBar().value()
             self._populate_table()
+            self._table.verticalScrollBar().setValue(vscroll)
 
     def _write_back(self, *, close_on_success: bool) -> None:
         """仅将已变更的字段写回CATIA。"""
