@@ -7,7 +7,7 @@ Public Const DEBUG_MODE As Boolean = False
 ' 使用前准备（需要在 VBA 编辑器中完成以下步骤）：
 '   1. 将本文件的全部内容粘贴到一个 MODULE 中
 '      （Tools > Macro > Macros... > Edit，或插入新模块）。
-'   2. 插入名为 "FlipForm" 的 UserForm（翻转方向浮动面板）：
+'   2. 插入名为 "FlipForm" 的 UserForm（装配控制面板）：
 '      - 在 VBA IDE 中，点击 Insert > UserForm。
 '      - 将窗体的 (Name) 属性设为 "FlipForm"，Caption 设为 "方向控制"。
 '      - 添加一个 CommandButton：(Name) = "btnFlip"，Caption = "翻转方向"，
@@ -925,11 +925,12 @@ End Function
 '      btnFlip.Enabled = False
 '
 '      g_flipDir = Not g_flipDir
+'      ' btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
 '
 '      ' 装配后可翻转重装：直接移动已有紧固件到翻转后的位置
 '      If g_hasLastComp Then
 '          Call MoveLastFastener()
-'          CATIA.StatusBar = "已重新定向（方向翻转）" & g_count & " 个 " & g_fastenerPN & _
+'          CATIA.StatusBar = "已重新定向（翻转方向）" & g_count & " 个 " & g_fastenerPN & _
 '                            "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
 '                            "  选下一孔继续"
 '      End If

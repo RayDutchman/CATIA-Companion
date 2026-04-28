@@ -1161,7 +1161,7 @@ End Function
 '      ' 装配后可翻转重装：直接移动已有托板螺母到翻转后的位置
 '      If g_hasLastComp Then
 '          Call MoveLastNutPlate()
-'          CATIA.StatusBar = "已重新定向（方向翻转）" & g_count & " 个 " & g_nutPlatePN & _
+'          CATIA.StatusBar = "已重新定向（翻转方向）" & g_count & " 个 " & g_nutPlatePN & _
 '                            "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
 '                            "  选下一孔继续"
 '      End If
