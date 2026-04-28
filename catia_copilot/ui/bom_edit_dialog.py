@@ -9,6 +9,8 @@ import copy
 import os
 import logging
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -48,7 +50,57 @@ from catia_copilot.ui.bom_file_rename_dialog import _FileRenameDialog
 logger = logging.getLogger(__name__)
 
 
-class BomEditDialog(QDialog):
+def _auto_click_catia_saveas_yes(stop_event: threading.Event) -> None:
+    """在后台线程中自动点击CATIA"另存为"确认对话框的"是"按钮。
+
+    轮询至多8秒，发现标题为"另存为"的弹窗后找到"是(Y)"按钮并点击。
+    若 *stop_event* 已被设置则提前退出（用于SaveAs未弹出对话框时快速返回）。
+    """
+    try:
+        import win32gui   # noqa: PLC0415
+        import win32api   # noqa: PLC0415
+        import win32con   # noqa: PLC0415
+    except ImportError:
+        return
+
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        if stop_event.is_set():
+            return
+        time.sleep(0.1)
+        try:
+            hwnd = win32gui.FindWindow(None, "另存为")
+        except Exception:
+            continue
+        if not hwnd:
+            continue
+
+        # 查找子控件中含"是"字样的按钮（即"是(Y)"）
+        found: list = []
+
+        def _find_yes_btn(child_hwnd, _):
+            try:
+                if win32gui.GetClassName(child_hwnd) == "Button":
+                    text = win32gui.GetWindowText(child_hwnd)
+                    if "是" in text:
+                        found.append(child_hwnd)
+            except Exception:
+                pass
+
+        try:
+            win32gui.EnumChildWindows(hwnd, _find_yes_btn, None)
+        except Exception:
+            continue
+
+        if found:
+            try:
+                win32api.PostMessage(found[0], win32con.BM_CLICK, 0, 0)
+            except Exception:
+                pass
+            return
+
+
+
     """可编辑BOM表格，用于补全产品属性并通过COM写回CATIA。
 
     - 文件名 / 层级 / 类型 / 数量 为只读结构属性。
@@ -333,8 +385,8 @@ class BomEditDialog(QDialog):
         self._rename_btn.clicked.connect(self._rename_by_part_number)
         btn_row.addWidget(self._rename_btn)
 
-        self._rename_file_btn = QPushButton("编辑选中文件名/路径")
-        self._rename_file_btn.setToolTip("为选中行的文件执行重命名或移动（通过CATIA另存为）")
+        self._rename_file_btn = QPushButton("另存为")
+        self._rename_file_btn.setToolTip("对选中文件执行另存为操作（通过CATIA另存为）")
         self._rename_file_btn.setEnabled(False)
         self._rename_file_btn.clicked.connect(self._rename_selected_file)
         btn_row.addWidget(self._rename_file_btn)
@@ -1359,6 +1411,196 @@ class BomEditDialog(QDialog):
                 return
             QMessageBox.warning(self, "另存为失败", f"文件操作失败：\n{e}")
 
+    def _expand_directory(self, row_idx: int) -> None:
+        """将选中产品子树下的所有产品和零件另存为到选中产品所在目录。
+
+        仅在层级BOM模式下对产品节点生效：
+        1. 检查子树中是否有未检索到的节点；
+        2. 检查子树中是否有未写回的属性修改；
+        3. 询问是否删除旧文件（一次询问对所有文件有效）；
+        4. 对子树中的产品/零件逆序执行另存为，目标目录为选中产品所在目录；
+        5. 自动确认CATIA弹出的"另存为"确认对话框（"是"）；
+        6. 完成后弹窗提示并刷新表格。
+        """
+        row_data = self._rows[row_idx]
+        fp = str(row_data.get("_filepath", ""))
+
+        if not fp or not Path(fp).exists():
+            QMessageBox.warning(self, "无有效路径", "选中行没有可用的文件路径。")
+            return
+
+        target_dir = Path(fp).parent
+
+        # ── 收集子树行索引（不含自身）────────────────────────────────────────
+        level = int(row_data.get("Level", 0))
+        subtree_indices: list[int] = []
+        for i in range(row_idx + 1, len(self._rows)):
+            if int(self._rows[i].get("Level", 0)) <= level:
+                break
+            subtree_indices.append(i)
+
+        if not subtree_indices:
+            QMessageBox.information(self, "无子项", "选中的产品没有子项，无需操作。")
+            return
+
+        # ── 检查是否有未检索到的节点 ─────────────────────────────────────────
+        not_found_pns = [
+            str(self._rows[i].get("Part Number", ""))
+            for i in subtree_indices
+            if self._rows[i].get("_not_found")
+        ]
+        if not_found_pns:
+            pn_list = "、".join(not_found_pns[:5])
+            if len(not_found_pns) > 5:
+                pn_list += f"… 等共 {len(not_found_pns)} 项"
+            QMessageBox.warning(
+                self, "存在未检索到的文件",
+                f"子树中以下零件/产品的文件未被CATIA检索到：\n{pn_list}\n\n"
+                "请先解决未检索到的问题，再执行扩展目录操作。",
+            )
+            return
+
+        # ── 检查是否有未写回的修改 ────────────────────────────────────────────
+        subtree_pns = {str(self._rows[i].get("Part Number", "")) for i in subtree_indices}
+        dirty_pns = subtree_pns & set(self._modified_keys.keys())
+        if dirty_pns:
+            ret = QMessageBox.question(
+                self, "存在未写回的属性修改",
+                f"子树中有 {len(dirty_pns)} 个零件/产品的属性尚未写回CATIA。\n\n"
+                "必须先将修改写回CATIA，才能确保文件内容与表格一致。\n\n"
+                "是否立即执行写回？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return
+            self._write_back(close_on_success=False)
+            # 若写回后仍有子树零件未清除，则停止
+            if self._modified_keys and (subtree_pns & set(self._modified_keys.keys())):
+                return
+
+        # ── 询问是否删除旧文件（一次，对所有后续文件有效）─────────────────────
+        delete_old = (
+            QMessageBox.question(
+                self, "是否删除旧文件",
+                "另存为完成后，是否删除旧文件？\n（对子树中所有文件有效）",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            ) == QMessageBox.StandardButton.Yes
+        )
+
+        QMessageBox.information(self, "请在CATIA中继续操作", "准备就绪，请在CATIA中确认后续操作。")
+
+        # ── 建立CATIA连接并缓存已打开文档 ─────────────────────────────────────
+        from pycatia import catia as _pycatia  # noqa: PLC0415
+        caa         = _pycatia()
+        application = caa.application
+        application.visible = True
+        documents   = application.documents
+
+        doc_cache: dict[Path, object] = {}
+        for i in range(1, documents.count + 1):
+            try:
+                doc = documents.item(i)
+                doc_cache[Path(doc.full_name).resolve()] = doc
+            except Exception:
+                pass
+
+        # ── 收集待另存为的文件（去重，跳过部件和不可用文件），逆序处理 ──────────
+        to_save: list[tuple[int, str]] = []
+        seen_fps: set[str] = set()
+        for i in subtree_indices:
+            row = self._rows[i]
+            if row.get("Type") == "部件":
+                continue
+            if row.get("_not_found") or row.get("_unreadable"):
+                continue
+            fp_i = str(row.get("_filepath", ""))
+            if not fp_i or fp_i in seen_fps:
+                continue
+            if not Path(fp_i).exists():
+                continue
+            seen_fps.add(fp_i)
+            to_save.append((i, fp_i))
+
+        to_save.reverse()  # 逆序：子节点先于父节点另存为
+
+        saved_count = 0
+
+        for _row_i, fp_i in to_save:  # _row_i reserved for future logging
+            new_fp                = str(target_dir / Path(fp_i).name)
+            target_existed_before = Path(new_fp).exists()
+
+            try:
+                src        = Path(fp_i).resolve()
+                target_doc = doc_cache.get(src)
+                if target_doc is None:
+                    documents.open(str(src))
+                    target_doc = _find_catia_doc_by_path(documents, src)
+                    if target_doc:
+                        doc_cache[src] = target_doc
+
+                if target_doc is None:
+                    QMessageBox.warning(
+                        self, "无法找到文档",
+                        f"无法在CATIA中找到或打开文档：\n{fp_i}",
+                    )
+                    continue
+
+                # 在后台线程中自动确认CATIA"另存为"确认弹窗
+                stop_event = threading.Event()
+                t = threading.Thread(
+                    target=_auto_click_catia_saveas_yes,
+                    args=(stop_event,),
+                    daemon=True,
+                )
+                t.start()
+                try:
+                    target_doc.com_object.SaveAs(new_fp)
+                finally:
+                    stop_event.set()  # 无论是否弹窗均通知线程退出
+
+                if delete_old and Path(fp_i).resolve() != Path(new_fp).resolve():
+                    try:
+                        os.remove(fp_i)
+                    except Exception as del_err:
+                        logger.warning(f"Failed to delete old file {fp_i}: {del_err}")
+
+                new_stem = Path(new_fp).stem
+                for row in self._rows:
+                    if str(row.get("_filepath", "")) == fp_i:
+                        row["_filepath"] = new_fp
+                        row["Filename"]  = new_stem
+                for row in self._raw_rows:
+                    if str(row.get("_filepath", "")) == fp_i:
+                        row["_filepath"] = new_fp
+                        row["Filename"]  = new_stem
+
+                if Path(new_fp).resolve() != src:
+                    doc_cache[Path(new_fp).resolve()] = target_doc
+                    doc_cache.pop(src, None)
+
+                saved_count += 1
+
+            except Exception as e:
+                if _is_catia_com_error(e) and Path(fp_i).exists() and (
+                    target_existed_before or not Path(new_fp).exists()
+                ):
+                    logger.info(
+                        f"SaveAs skipped for {Path(fp_i).name} "
+                        "(user cancelled or declined overwrite in CATIA)"
+                    )
+                    continue
+                QMessageBox.warning(
+                    self, "另存为失败",
+                    f"文件「{Path(fp_i).name}」另存为失败：\n{e}",
+                )
+
+        if saved_count > 0:
+            QMessageBox.information(
+                self, "扩展目录完成",
+                f"已成功将 {saved_count} 个文件另存为到目录：\n{target_dir}",
+            )
+            self._populate_table()
+
     def _write_back(self, *, close_on_success: bool) -> None:
         """仅将已变更的字段写回CATIA。"""
         if self._use_active_chk.isChecked():
@@ -1735,12 +1977,23 @@ class BomEditDialog(QDialog):
 
         menu.addSeparator()
 
-        # ── 编辑文件名/路径 ───────────────────────────────────────────────────
-        act_edit_path = menu.addAction("编辑文件名/路径")
+        # ── 另存为 ────────────────────────────────────────────────────────────
+        act_edit_path = menu.addAction("另存为")
         act_edit_path.setEnabled(
             bool(fp) and not not_found
             and fp_path is not None and fp_path.exists()
         )
+
+        # ── 扩展目录（仅层级BOM + 产品节点）─────────────────────────────────────
+        is_product = row_data.get("Type") == "产品"
+        can_expand_dir = (
+            not self._summarize
+            and is_product
+            and bool(fp) and not not_found
+            and fp_path is not None and fp_path.exists()
+        )
+        act_expand_dir = menu.addAction("扩展目录")
+        act_expand_dir.setEnabled(can_expand_dir)
 
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
 
@@ -1752,6 +2005,8 @@ class BomEditDialog(QDialog):
             self._open_in_catia(fp)
         elif action == act_edit_path:
             self._rename_selected_file()
+        elif action == act_expand_dir:
+            self._expand_directory(row_idx)
 
     def _open_path(self, fp: str) -> None:
         """在 Windows 资源管理器中打开包含 *fp* 的文件夹，并高亮选中该文件。"""
