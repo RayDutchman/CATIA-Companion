@@ -1478,33 +1478,9 @@ class BomEditDialog(QDialog):
             if self._modified_keys and (subtree_pns & set(self._modified_keys.keys())):
                 return
 
-        # ── 询问是否删除旧文件（一次，对所有后续文件有效）─────────────────────
-        delete_old = (
-            QMessageBox.question(
-                self, "是否删除旧文件",
-                "另存为完成后，是否删除旧文件？\n（对子树中所有文件有效）",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            ) == QMessageBox.StandardButton.Yes
-        )
-
-        QMessageBox.information(self, "请在CATIA中继续操作", "准备就绪，请在CATIA中确认后续操作。")
-
-        # ── 建立CATIA连接并缓存已打开文档 ─────────────────────────────────────
-        from pycatia import catia as _pycatia  # noqa: PLC0415
-        caa         = _pycatia()
-        application = caa.application
-        application.visible = True
-        documents   = application.documents
-
-        doc_cache: dict[Path, object] = {}
-        for i in range(1, documents.count + 1):
-            try:
-                doc = documents.item(i)
-                doc_cache[Path(doc.full_name).resolve()] = doc
-            except Exception:
-                pass
-
-        # ── 收集待另存为的文件（去重，跳过部件和不可用文件），逆序处理 ──────────
+        # ── 提前收集待另存为的文件列表（不需要CATIA连接）────────────────────────
+        # 放在询问用户之前，以便在没有任何需要处理的文件时尽早退出，
+        # 避免用户经历多个弹窗后才发现"无事可做"。
         to_save: list[tuple[int, str]] = []
         seen_fps: set[str] = set()
         for i in subtree_indices:
@@ -1525,6 +1501,68 @@ class BomEditDialog(QDialog):
             to_save.append((i, fp_i))
 
         to_save.reverse()  # 逆序：子节点先于父节点另存为
+
+        if not to_save:
+            QMessageBox.information(
+                self, "无需操作",
+                "子树中所有文件均已位于目标目录下，无需另存为。",
+            )
+            return
+
+        # ── 检测目标文件名冲突（不同来源目录中存在同名文件）───────────────────
+        target_names: dict[str, str] = {}  # target filename → first source path
+        collision_msgs: list[str] = []
+        for _ri, fp_i in to_save:
+            name = Path(fp_i).name
+            if name in target_names:
+                collision_msgs.append(
+                    f"  • {target_names[name]}\n  • {fp_i}"
+                )
+            else:
+                target_names[name] = fp_i
+        if collision_msgs:
+            detail = "\n\n".join(collision_msgs)
+            ret = QMessageBox.question(
+                self, "存在目标文件名冲突",
+                f"子树中以下文件来自不同目录但文件名相同，另存为到同一目录时后者会覆盖前者：\n\n"
+                f"{detail}\n\n是否仍然继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return
+
+        # ── 询问是否删除旧文件（一次，对所有后续文件有效）─────────────────────
+        delete_old = (
+            QMessageBox.question(
+                self, "是否删除旧文件",
+                "另存为完成后，是否删除旧文件？\n（对子树中所有文件有效）",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            ) == QMessageBox.StandardButton.Yes
+        )
+
+        QMessageBox.information(self, "请在CATIA中继续操作", "准备就绪，请在CATIA中确认后续操作。")
+
+        # ── 建立CATIA连接并缓存已打开文档 ─────────────────────────────────────
+        try:
+            from pycatia import catia as _pycatia  # noqa: PLC0415
+            caa         = _pycatia()
+            application = caa.application
+            application.visible = True
+            documents   = application.documents
+        except Exception as conn_err:
+            QMessageBox.critical(
+                self, "无法连接CATIA",
+                f"连接CATIA失败，请确认CATIA已启动并处于就绪状态。\n\n详情：{conn_err}",
+            )
+            return
+
+        doc_cache: dict[Path, object] = {}
+        for i in range(1, documents.count + 1):
+            try:
+                doc = documents.item(i)
+                doc_cache[Path(doc.full_name).resolve()] = doc
+            except Exception:
+                pass
 
         saved_count = 0
 
