@@ -112,6 +112,10 @@ BOM_DEFAULT_COLUMNS: list[str] = [
 # cannot be resolved via COM (the product is "not found").
 FILENAME_NOT_FOUND: str = "未检索到"
 
+# Sentinel value displayed in the Filename cell when a product has a backing
+# file path in CATIA memory but the file has never been saved to disk.
+FILENAME_UNSAVED: str = "未保存"
+
 # Sentinel internal column name for the row-number column (always first, read-only)
 BOM_ROW_NUMBER_COLUMN: str = "#"
 

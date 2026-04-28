@@ -12,7 +12,7 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from catia_copilot.constants import FILENAME_NOT_FOUND
+from catia_copilot.constants import FILENAME_NOT_FOUND, FILENAME_UNSAVED
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +123,8 @@ def collect_bom_rows(
 
         filepath  = get_product_filepath(product)
         not_found = not bool(filepath)
+        # 文件路径存在于CATIA内存中，但文件尚未保存到磁盘（从未保存过）
+        no_file   = bool(filepath) and not Path(filepath).exists()
 
         # Embedded 部件 share the parent product's backing file, so the
         # file-based property cache must NOT be used for them – each 部件
@@ -173,9 +175,11 @@ def collect_bom_rows(
         row: dict = {
             "Level":        level,
             "Part Number":  pn,
-            "Filename":     Path(filepath).stem if filepath else FILENAME_NOT_FOUND,
+            "Filename":     (FILENAME_UNSAVED   if no_file   else
+                             Path(filepath).stem if filepath else FILENAME_NOT_FOUND),
             "_filepath":    filepath,
             "_not_found":   not_found,
+            "_no_file":     no_file,
             "_unreadable":  not is_readable,
         }
 

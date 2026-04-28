@@ -35,6 +35,7 @@ from catia_copilot.constants import (
     SOURCE_OPTIONS,
     PART_NUMBER_VALID_PATTERN,
     FILENAME_NOT_FOUND,
+    FILENAME_UNSAVED,
     BOM_THUMBNAIL_MAX_SIZE,
 )
 from catia_copilot.catia.bom_collect import collect_bom_rows, flatten_bom_to_summary
@@ -819,6 +820,7 @@ class BomEditDialog(QDialog):
 
             pn         = str(row_data.get("Part Number", ""))
             not_found  = bool(row_data.get("_not_found"))
+            no_file    = bool(row_data.get("_no_file"))
             unreadable = bool(row_data.get("_unreadable"))
             row_locked = unreadable or not_found
 
@@ -888,7 +890,10 @@ class BomEditDialog(QDialog):
                 elif col_name == "Filename":
                     fp = str(row_data.get("_filepath", ""))
                     fn = str(row_data.get("Filename", ""))
-                    if self._show_filepath_col:
+                    if no_file:
+                        # 文件未保存到磁盘：固定显示哨兵文本
+                        value = FILENAME_UNSAVED
+                    elif self._show_filepath_col:
                         value = fp if fp else fn
                     else:
                         # 已知路径时显示带扩展名的文件名；
@@ -909,7 +914,10 @@ class BomEditDialog(QDialog):
                 if col_name == "Filename":
                     fp = str(row_data.get("_filepath", ""))
                     fn = str(row_data.get("Filename", ""))
-                    if fp:
+                    if no_file:
+                        # 文件未保存：工具提示显示CATIA中的预期路径
+                        item.setToolTip(col_idx, fp)
+                    elif fp:
                         if self._show_filepath_col:
                             # 列显示完整路径；工具提示显示文件名+扩展名
                             name_with_ext = Path(fp).name
@@ -938,6 +946,20 @@ class BomEditDialog(QDialog):
                         "该零件/装配体处于轻量化模式，无法读取属性。"
                     )
                     item.setToolTip(fn_col, tip)
+
+            # _no_file 行（文件未保存到磁盘）：不锁定，但以淡黄背景和专属提示标识
+            if no_file:
+                fn_col = self._columns.index("Filename") if "Filename" in self._columns else -1
+                bg_unsaved = QColor(255, 245, 180)
+                for ci in range(len(self._columns)):
+                    item.setBackground(ci, bg_unsaved)
+                if fn_col >= 0:
+                    _unsaved_tip = (
+                        "该零件尚未保存到磁盘。\n"
+                        "可通过右键菜单\u201c另存为\u201d将其保存。\n"
+                        "预期路径：" + str(row_data.get("_filepath", ""))
+                    )
+                    item.setToolTip(fn_col, _unsaved_tip)
 
         self._table.expandAll()
         self._table.blockSignals(False)
