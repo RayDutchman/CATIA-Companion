@@ -53,7 +53,7 @@ def export_bom_to_excel(
     summarize:
         When ``True`` the hierarchical BOM is collapsed into a flat summary
         (unique parts with cumulative quantities) before writing.
-        The output filename will have the suffix ``_BOM汇总`` instead of
+        The output filename will have the suffix ``_汇总BOM`` instead of
         ``_BOM``.
     summary_include_assemblies:
         Passed to :func:`~catia_copilot.catia.bom_collect.flatten_bom_to_summary`.
@@ -79,7 +79,7 @@ def export_bom_to_excel(
     if summarize:
         columns = [c for c in columns if c != "Level"]
 
-    bom_suffix = "_BOM汇总" if summarize else "_BOM"
+    bom_suffix = "_汇总BOM" if summarize else "_BOM"
     use_csv = output_format.lower() == "csv"
 
     caa         = catia()
@@ -179,11 +179,7 @@ def export_bom_to_excel(
             else:
                 wb   = openpyxl.Workbook()
                 ws   = wb.active
-                ws.title = "BOM汇总" if summarize else "BOM"
-                _write_sheet(ws, rows)
-                wb.save(str(dest))
-            logger.info(f"  BOM exported -> {dest}")
-            logger.info("Done: active document\n")
+                ws.title = "汇总BOM" if summarize else "BOM"
             continue
 
         src      = Path(path).resolve()
@@ -239,10 +235,7 @@ def export_bom_to_excel(
         else:
             wb       = openpyxl.Workbook()
             ws       = wb.active
-            ws.title = "BOM汇总" if summarize else "BOM"
-            _write_sheet(ws, rows)
-            wb.save(str(dest))
-        logger.info(f"  BOM exported -> {dest}")
+            ws.title = "汇总BOM" if summarize else "BOM"
 
         # Close the document only if we were the one who opened it
         if src not in already_open:

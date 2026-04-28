@@ -243,6 +243,10 @@ class ExportBomDialog(QDialog):
             self._sort_col_combo.setCurrentIndex(saved_sort_idx)
         self._sort_col_combo.currentIndexChanged.connect(self._on_sort_col_changed)
 
+        # If opening in summary mode (restored from settings), hide the Level column
+        if self._summarize:
+            self._on_bom_type_changed(True)
+
         # ── Action buttons ──────────────────────────────────────────────────
         action_row  = QHBoxLayout()
         confirm_btn = QPushButton("导出")
@@ -329,7 +333,7 @@ class ExportBomDialog(QDialog):
             self._selected_list.setCurrentRow(row + 1)
 
     def _on_bom_type_changed(self, summary_checked: bool) -> None:
-        """When BOM type switches, move the 'Level' column between the lists."""
+        """When BOM type switches, hide/show the 'Level' column in both lists."""
         self._summarize = summary_checked
         self._settings.setValue("summarize", summary_checked)
 
@@ -337,13 +341,22 @@ class ExportBomDialog(QDialog):
         self._summary_opts_widget.setVisible(summary_checked)
 
         if summary_checked:
-            # Move all "Level" items from selected to available
-            # (iterate in reverse so takeItem indices stay valid)
-            for i in range(self._selected_list.count() - 1, -1, -1):
-                item = self._selected_list.item(i)
-                if self._item_internal(item) == "Level":
-                    self._selected_list.takeItem(i)
-                    self._avail_list.addItem(self._make_col_item("Level"))
+            # Remove "Level" from both lists entirely (meaningless in summary BOM)
+            for lst in (self._selected_list, self._avail_list):
+                for i in range(lst.count() - 1, -1, -1):
+                    if self._item_internal(lst.item(i)) == "Level":
+                        lst.takeItem(i)
+        else:
+            # Restore "Level" to the available list if it is not present anywhere
+            level_present = any(
+                self._item_internal(self._selected_list.item(i)) == "Level"
+                for i in range(self._selected_list.count())
+            ) or any(
+                self._item_internal(self._avail_list.item(i)) == "Level"
+                for i in range(self._avail_list.count())
+            )
+            if not level_present:
+                self._avail_list.addItem(self._make_col_item("Level"))
 
     def _on_include_assemblies_toggled(self, checked: bool) -> None:
         self._summary_include_assemblies = checked
@@ -392,7 +405,7 @@ class ExportBomDialog(QDialog):
         summarize = self._radio_summary.isChecked()
         label_text = "正在导出汇总BOM，请稍候…" if summarize else "正在导出BOM，请稍候…"
         progress = QProgressDialog(label_text, None, 0, 0, self)
-        progress.setWindowTitle("导出BOM汇总" if summarize else "导出BOM")
+        progress.setWindowTitle("导出汇总BOM" if summarize else "导出BOM")
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(300)
         progress.setValue(0)

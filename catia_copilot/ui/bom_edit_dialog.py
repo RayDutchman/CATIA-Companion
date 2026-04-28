@@ -1482,7 +1482,7 @@ class BomEditDialog(QDialog):
         if not self._use_active_chk.isChecked():
             fp_src = self._file_edit.text().strip()
             if fp_src:
-                suffix_hint = "_BOM汇总" if self._summarize else "_BOM"
+                suffix_hint = "_汇总BOM" if self._summarize else "_BOM"
                 initial_name = str(Path(fp_src).with_name(Path(fp_src).stem + suffix_hint))
 
         dest, selected_filter = QFileDialog.getSaveFileName(
@@ -1580,7 +1580,7 @@ class BomEditDialog(QDialog):
 
         wb = openpyxl.Workbook()
         ws = wb.active
-        ws.title = "BOM汇总" if self._summarize else "BOM"
+        ws.title = "汇总BOM" if self._summarize else "BOM"
 
         center      = Alignment(horizontal="center", vertical="center")
         header_fill = PatternFill(fill_type="solid", fgColor="D9D9D9")
