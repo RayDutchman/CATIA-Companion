@@ -7,10 +7,10 @@ Public Const DEBUG_MODE As Boolean = False
 ' 使用前准备（需要在 VBA 编辑器中完成以下步骤）：
 '   1. 将本文件的全部内容粘贴到一个 MODULE 中
 '      （Tools > Macro > Macros... > Edit，或插入新模块）。
-'   2. 插入名为 "FlipForm" 的 UserForm（翻转方向浮动面板）：
+'   2. 插入名为 "FlipForm" 的 UserForm（装配控制面板）：
 '      - 在 VBA IDE 中，点击 Insert > UserForm。
 '      - 将窗体的 (Name) 属性设为 "FlipForm"，Caption 设为 "方向控制"。
-'      - 添加一个 CommandButton：(Name) = "btnFlip"，Caption = "翻转方向: 否"，
+'      - 添加一个 CommandButton：(Name) = "btnFlip"，Caption = "翻转方向"，
 '        Width ≈ 160，Height ≈ 36。
 '      - 将本文件末尾 "FlipForm UserForm 代码" 部分粘贴到窗体的代码模块中。
 '   3. 插入名为 "SwitchToPartForm" 的 UserForm（等待切换到紧固件文档面板）：
@@ -260,7 +260,6 @@ Public Sub ContinueSelectProduct()
     ' 每个历史记录存储：(0)=Products集合, (1)=Index, (2-4)=holeAxis, (5-7)=holePt
     ReDim g_assemblyHistory(0 To 99, 0 To 7)  ' 最多100个紧固件
     FlipForm.Show vbModeless
-    FlipForm.btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
     FlipForm.btnFlip.Enabled = False  ' 初始禁用，装配后启用
     FlipForm.btnUndo.Enabled = False
 
@@ -778,13 +777,7 @@ Public Sub UndoLastFastener()
 
     ' 更新状态：撤销后禁用翻转功能，直到下一次装配
     ' （翻转功能在撤销后的状态管理过于复杂，容易出错，因此撤销后禁用翻转）
-    If g_historyCount > 0 Then
-        ' 仍有组件可以继续撤销
-        FlipForm.btnUndo.Enabled = True
-    Else
-        ' 没有组件可撤销了
-        FlipForm.btnUndo.Enabled = False
-    End If
+    FlipForm.btnUndo.Enabled = (g_historyCount > 0)
 
     ' 撤销后禁用翻转功能（下次装配时会重新启用）
     g_hasLastComp = False
@@ -859,7 +852,7 @@ End Function
 
 
 ' ============================================================================
-' TryGetAxis / TryGetCenter / TryGetMeasurable / TryGetMeasurableInContext
+' TryGetAxis / TryGetCenter / TryGetPoint / TryGetDirection / TryGetMeasurable
 ' 在独立错误处理域中调用 COM 方法，使 On Error Resume Next 在函数边界生效，
 ' 彻底避免某些 CATIA 版本中调用层错误处理失效时弹出 VB 运行时错误对话框。
 ' ============================================================================
@@ -904,18 +897,6 @@ Private Function TryGetMeasurable(spa As Object, ref As Object, _
     TryGetMeasurable = (Err.Number = 0 And Not measOut Is Nothing)
 End Function
 
-' spa   : SPAWorkbench 对象
-' ref   : 待测量的 Reference 对象
-' ctx   : 上下文 Product（传入 rootProduct.Product 以获取根产品坐标系中的测量值）
-' measOut : 输出的 Measurable 对象（通过 ByRef 返回）
-Private Function TryGetMeasurableInContext(spa As Object, ref As Object, _
-                                           ctx As Object, ByRef measOut As Object) As Boolean
-    On Error Resume Next
-    Err.Clear
-    Set measOut = spa.GetMeasurableInContext(ref, ctx)
-    TryGetMeasurableInContext = (Err.Number = 0 And Not measOut Is Nothing)
-End Function
-
 
 ' ============================================================================
 ' ── 装配控制面板 UserForm 代码 ──────────────────────────────────────────────
@@ -924,7 +905,7 @@ End Function
 '   - 将窗体 (Name) 设为 "FlipForm"，Caption 设为 "装配控制面板"。
 '   - 添加四个 CommandButton（从上到下排列）：
 '       (Name)   = "btnFlip"
-'       Caption  = "翻转方向: 否"
+'       Caption  = "翻转方向"
 '       Width    = 180  Height = 36（可按需调整）
 '
 '       (Name)   = "btnUndo"
@@ -944,12 +925,12 @@ End Function
 '      btnFlip.Enabled = False
 '
 '      g_flipDir = Not g_flipDir
-'      btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
+'      ' btnFlip.Caption = IIf(g_flipDir, "翻转方向: 是", "翻转方向: 否")
 '
 '      ' 装配后可翻转重装：直接移动已有紧固件到翻转后的位置
 '      If g_hasLastComp Then
 '          Call MoveLastFastener()
-'          CATIA.StatusBar = "已重新定向（方向翻转）" & g_count & " 个 " & g_fastenerPN & _
+'          CATIA.StatusBar = "已重新定向（翻转方向）" & g_count & " 个 " & g_fastenerPN & _
 '                            "  [翻转:" & IIf(g_flipDir, "是", "否") & "]" & _
 '                            "  选下一孔继续"
 '      End If
@@ -963,10 +944,6 @@ End Function
 '
 '      If g_historyCount > 0 Then
 '          Call UndoLastFastener()
-'      End If
-'
-'      If g_historyCount > 0 Then
-'          btnUndo.Enabled = True
 '      End If
 '  End Sub
 '
