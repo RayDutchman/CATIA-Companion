@@ -38,6 +38,8 @@ class ExportBomDialog(QDialog):
         self._settings        = QSettings("CATIACompanion", "ExportBOMDialog")
         self._last_browse_dir = self._settings.value("last_browse_dir", "")
         self._last_output_dir = self._settings.value("last_output_dir", "")
+        self._use_active_doc: bool = self._settings.value("use_active_doc", False, type=bool)
+        self._use_same_dir: bool = self._settings.value("use_same_dir", True, type=bool)
 
         saved_custom = self._settings.value("custom_columns", [])
         if isinstance(saved_custom, str):
@@ -63,7 +65,10 @@ class ExportBomDialog(QDialog):
         self._src_btn_group = QButtonGroup(self)
         self._radio_active  = QRadioButton("使用当前CATIA活动文档")
         self._radio_file    = QRadioButton("选择文件:")
-        self._radio_file.setChecked(True)
+        if self._use_active_doc:
+            self._radio_active.setChecked(True)
+        else:
+            self._radio_file.setChecked(True)
         self._src_btn_group.addButton(self._radio_active)
         self._src_btn_group.addButton(self._radio_file)
         src_layout.addWidget(self._radio_active)
@@ -78,6 +83,7 @@ class ExportBomDialog(QDialog):
         file_row.addWidget(self._file_edit)
         file_row.addWidget(self._file_browse_btn)
         src_layout.addLayout(file_row)
+        self._radio_active.toggled.connect(self._on_source_changed)
         self._radio_active.toggled.connect(self._toggle_source_row)
         layout.addWidget(src_group)
 
@@ -86,7 +92,10 @@ class ExportBomDialog(QDialog):
         output_layout = QVBoxLayout(output_group)
         self._radio_same   = QRadioButton("与源文件相同目录")
         self._radio_custom = QRadioButton("自定义目录:")
-        self._radio_same.setChecked(True)
+        if self._use_same_dir:
+            self._radio_same.setChecked(True)
+        else:
+            self._radio_custom.setChecked(True)
         _btn_group = QButtonGroup(self)
         _btn_group.addButton(self._radio_same)
         _btn_group.addButton(self._radio_custom)
@@ -104,12 +113,15 @@ class ExportBomDialog(QDialog):
         folder_row.addWidget(self._folder_edit)
         folder_row.addWidget(self._folder_browse_btn)
         output_layout.addLayout(folder_row)
+        self._radio_custom.toggled.connect(self._on_folder_mode_changed)
         self._radio_custom.toggled.connect(self._toggle_folder_row)
         layout.addWidget(output_group)
 
         if self._last_output_dir:
-            self._radio_custom.setChecked(True)
             self._folder_edit.setText(self._last_output_dir)
+        if not self._use_same_dir:
+            self._folder_edit.setEnabled(True)
+            self._folder_browse_btn.setEnabled(True)
 
         # ── BOM type + summary options (combined group) ─────────────────────
         bom_opts_group  = QGroupBox("BOM类型与汇总选项")
@@ -247,6 +259,10 @@ class ExportBomDialog(QDialog):
         if self._summarize:
             self._on_bom_type_changed(True)
 
+        # Apply restored data-source state (disables file controls when active-doc was selected)
+        if self._use_active_doc:
+            self._toggle_source_row(True)
+
         # ── Action buttons ──────────────────────────────────────────────────
         action_row  = QHBoxLayout()
         confirm_btn = QPushButton("导出")
@@ -277,6 +293,14 @@ class ExportBomDialog(QDialog):
     def _toggle_folder_row(self, checked: bool) -> None:
         self._folder_edit.setEnabled(checked)
         self._folder_browse_btn.setEnabled(checked)
+
+    def _on_folder_mode_changed(self, custom_checked: bool) -> None:
+        self._use_same_dir = not custom_checked
+        self._settings.setValue("use_same_dir", self._use_same_dir)
+
+    def _on_source_changed(self, active_checked: bool) -> None:
+        self._use_active_doc = active_checked
+        self._settings.setValue("use_active_doc", active_checked)
 
     def _toggle_source_row(self, active_checked: bool) -> None:
         self._file_edit.setEnabled(not active_checked)
