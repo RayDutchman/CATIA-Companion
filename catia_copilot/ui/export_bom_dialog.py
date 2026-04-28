@@ -356,7 +356,7 @@ class ExportBomDialog(QDialog):
                 for i in range(self._avail_list.count())
             )
             if not level_present:
-                self._avail_list.addItem(self._make_col_item("Level"))
+                self._selected_list.insertItem(0, self._make_col_item("Level"))
 
     def _on_include_assemblies_toggled(self, checked: bool) -> None:
         self._summary_include_assemblies = checked
