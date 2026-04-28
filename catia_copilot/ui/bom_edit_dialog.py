@@ -1452,18 +1452,27 @@ class BomEditDialog(QDialog):
         """将选中产品子树下的所有产品和零件另存为到选中产品所在目录。
 
         仅在层级BOM模式下对产品节点生效：
-        1. 检查子树中是否有未检索到的节点；
-        2. 检查子树中是否有未写回的属性修改；
-        3. 询问是否删除旧文件（一次询问对所有文件有效）；
-        4. 对子树中的产品/零件逆序执行另存为，目标目录为选中产品所在目录；
-        5. 自动确认CATIA弹出的"另存为"确认对话框（"是"）；
-        6. 完成后弹窗提示并刷新表格。
+        1. 若被选产品本身尚未保存到磁盘，弹窗提示并中止；
+        2. 检查子树中是否有未检索到的节点；
+        3. 检查子树中是否有未写回的属性修改；
+        4. 询问是否删除旧文件（一次询问对所有文件有效）；
+        5. 对子树中的产品/零件逆序执行另存为，目标目录为选中产品所在目录；
+        6. 自动确认CATIA弹出的"另存为"确认对话框（"是"）；
+        7. 最后对被选产品调用 Save（非 SaveAs）以持久化链接更新；
+        8. 完成后弹窗提示并刷新表格。
         """
         row_data = self._rows[row_idx]
         fp = str(row_data.get("_filepath", ""))
 
-        if not fp or not Path(fp).exists():
+        if not fp:
             QMessageBox.warning(self, "无有效路径", "选中行没有可用的文件路径。")
+            return
+        if row_data.get("_no_file") or not Path(fp).exists():
+            QMessageBox.warning(
+                self, "产品尚未保存",
+                f"被选产品「{Path(fp).name}」尚未保存到磁盘，\n"
+                "请先在CATIA中保存后再执行扩展目录操作。",
+            )
             return
 
         target_dir = Path(fp).parent
@@ -1700,6 +1709,37 @@ class BomEditDialog(QDialog):
                     self, "另存为失败",
                     f"文件「{Path(fp_i).name}」另存为失败：\n{e}",
                 )
+
+        # ── 保存被选中的产品（Save，而非 SaveAs）────────────────────────────────
+        root_src = Path(fp).resolve()
+        root_doc = doc_cache.get(root_src)
+        if root_doc is None:
+            try:
+                documents.open(str(root_src))
+                candidate = documents.item(documents.count)
+                root_doc = (
+                    candidate
+                    if Path(candidate.full_name).resolve() == root_src
+                    else _find_catia_doc_by_path(documents, root_src)
+                )
+                if root_doc:
+                    doc_cache[root_src] = root_doc
+            except Exception:
+                pass
+        if root_doc is not None:
+            try:
+                root_doc.com_object.Save()
+            except Exception as save_err:
+                QMessageBox.warning(
+                    self, "保存失败",
+                    f"保存被选产品「{Path(fp).name}」失败：\n{save_err}",
+                )
+        else:
+            QMessageBox.warning(
+                self, "未能保存产品",
+                f"无法在CATIA中找到被选产品「{Path(fp).name}」，\n"
+                "请确认该产品已在CATIA中打开。",
+            )
 
         if saved_count > 0:
             QMessageBox.information(
