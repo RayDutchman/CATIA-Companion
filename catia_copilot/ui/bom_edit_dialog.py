@@ -49,13 +49,13 @@ logger = logging.getLogger(__name__)
 
 
 class BomEditDialog(QDialog):
-    """Editable BOM table for completing and writing back product properties.
+    """可编辑BOM表格，用于补全产品属性并通过COM写回CATIA。
 
-    - 文件名 / 层级 / 类型 / 数量 are read-only (structural).
-    - 零件编号 is editable with duplicate-detection.
-    - 源 (Source) uses a QComboBox (未知 / 自制 / 外购).
-    - Rows sharing the same Part Number are linked and update together.
-    - "应用" writes changes back without closing; "完成" writes and closes.
+    - 文件名 / 层级 / 类型 / 数量 为只读结构属性。
+    - 零件编号 可编辑，带重复检测。
+    - 来源（Source）使用下拉框（未知 / 自制 / 外购）。
+    - 共享相同零件编号的行联动更新。
+    - "应用" 写回但不关闭对话框；"完成" 写回后关闭。
     """
 
     def __init__(self, parent=None) -> None:
@@ -69,8 +69,8 @@ class BomEditDialog(QDialog):
             | Qt.WindowType.WindowMinimizeButtonHint
         )
 
-        # ── Settings ─────────────────────────────────────────────────────────
-        # Share ExportBomDialog's custom-column config
+        # ── 配置与持久化设置 ──────────────────────────────────────────────────
+        # 与"导出BOM"对话框共享自定义列配置
         self._export_settings = QSettings("CATIACompanion", "ExportBOMDialog")
         self._last_browse_dir = self._export_settings.value("last_browse_dir", "")
 
@@ -79,7 +79,7 @@ class BomEditDialog(QDialog):
             saved_custom = [saved_custom]
         self._custom_columns: list[str] = list(saved_custom)
 
-        # BomEditDialog-specific settings
+        # BomEditDialog 专用设置
         self._edit_settings  = QSettings("CATIACompanion", "BomEditDialog")
         saved_visible        = self._edit_settings.value("visible_preset_columns", [])
         if isinstance(saved_visible, str):
@@ -88,7 +88,7 @@ class BomEditDialog(QDialog):
             c for c in saved_visible if c in PRESET_USER_REF_PROPERTIES
         ]
 
-        # Visible hideable standard columns (Nomenclature, Revision, Definition, Source)
+        # 可显示/隐藏的标准列（品名、版本、定义、来源）
         saved_hideable = self._edit_settings.value("visible_hideable_columns", BOM_HIDEABLE_COLUMNS)
         if isinstance(saved_hideable, str):
             saved_hideable = [saved_hideable]
@@ -104,8 +104,7 @@ class BomEditDialog(QDialog):
             "summary_sort_column", "Part Number"
         )
 
-        # All custom columns (including all presets) so that pre-loading from
-        # CATIA covers every column regardless of current visibility.
+        # 包含所有预设的完整自定义列列表；从CATIA预读时覆盖所有列，不受当前可见性限制
         self._all_custom_columns: list[str] = list(dict.fromkeys(
             self._custom_columns + list(PRESET_USER_REF_PROPERTIES)
         ))
@@ -119,37 +118,34 @@ class BomEditDialog(QDialog):
 
         self._columns: list[str] = self._build_visible_columns()
 
-        # ── State ─────────────────────────────────────────────────────────────
-        # {original_pn: {col_name: value}}  (canonical data, Source as display label)
+        # ── 内部状态 ──────────────────────────────────────────────────────────
+        # {原始零件编号: {列名: 值}}（规范数据，来源字段用显示标签）
         self._canonical_data: dict[str, dict[str, str]] = {}
-        # Snapshot at last load/apply for dirty-only write-back
+        # 最后一次加载/应用时的快照，用于仅写回变更字段
         self._snapshot_data: dict[str, dict[str, str]] = {}
-        # {original_pn: {col_name, ...}}  – fields changed since last write-back
+        # {原始零件编号: {列名, ...}} — 自上次写回以来已修改的字段
         self._modified_keys: dict[str, set[str]] = {}
-        # All BOM rows in traversal order
+        # 按遍历顺序排列的所有BOM行
         self._rows: list[dict] = []
-        # Guard against re-entrant change handling
+        # 防止变更处理回调重入的标志
         self._is_updating: bool = False
-        # Parallel list: self._item_by_row[i] is the QTreeWidgetItem for self._rows[i]
+        # 与 self._rows 平行的列表：self._item_by_row[i] 对应 self._rows[i] 的树形控件项
         self._item_by_row: list[QTreeWidgetItem] = []
-        # True once BOM has been successfully loaded at least once
+        # BOM成功加载至少一次后置为True
         self._bom_loaded: bool = False
-        # Raw (hierarchical) BOM rows as returned by collect_bom_rows(); used to
-        # reconstruct the display rows when the user toggles the BOM type.
+        # 原始（层级）BOM行，由 collect_bom_rows() 返回；切换显示模式时用于重建行数据
         self._raw_rows: list[dict] = []
-        # PN→Items index for fast linked updates (Performance optimization)
-        # Maps Part Number to list of QTreeWidgetItems with that PN
+        # 零件编号→树形项索引，用于快速联动更新（性能优化）
         self._pn_to_items: dict[str, list[QTreeWidgetItem]] = {}
-        # Column-name → pixel width cache; persists across column visibility toggles
-        # so user-adjusted widths survive adding/removing columns.
+        # 列名→像素宽度缓存；在列可见性切换时保留用户调整的列宽
         self._col_widths: dict[str, int] = {}
 
-        # ── Layout ────────────────────────────────────────────────────────────
+        # ── 界面布局 ──────────────────────────────────────────────────────────
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        # Source selection
+        # 数据来源选择行
         self._use_active_chk = QCheckBox("使用当前CATIA活动文档（不选择文件）")
         self._use_active_chk.toggled.connect(self._toggle_file_row)
         layout.addWidget(self._use_active_chk)
@@ -167,14 +163,14 @@ class BomEditDialog(QDialog):
         file_row.addWidget(self._load_btn)
         layout.addLayout(file_row)
 
-        # ── BOM type + display options (single compact group) ────────────────
+        # ── BOM类型与显示选项（紧凑分组）────────────────────────────────────
         display_group  = QGroupBox("BOM类型与显示选项")
-        display_group.setMinimumHeight(60)  # Prevent height jumping when switching BOM types
+        display_group.setMinimumHeight(60)  # 切换BOM类型时防止高度抖动
         display_layout = QVBoxLayout(display_group)
         display_layout.setSpacing(4)
         display_layout.setContentsMargins(8, 6, 8, 6)
 
-        # Row 1: radio buttons + filepath checkbox on the same line
+        # 第一行：单选按钮 + 汇总选项
         bom_type_row = QHBoxLayout()
         self._bom_type_btn_group = QButtonGroup(self)
         self._radio_hierarchical = QRadioButton("层级BOM")
@@ -234,23 +230,23 @@ class BomEditDialog(QDialog):
         hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(hint)
 
-        # Preset column visibility checkboxes (2 rows layout with grid for alignment)
+        # 预设列可见性复选框（两行网格布局，对齐列）
         preset_group  = QGroupBox("属性列（勾选以显示）")
         preset_main_layout = QVBoxLayout(preset_group)
         preset_main_layout.setSpacing(8)
         preset_main_layout.setContentsMargins(8, 6, 8, 6)
 
-        # Use QGridLayout for proper alignment and even distribution
+        # 使用 QGridLayout 实现对齐与均匀分布
         grid_layout = QGridLayout()
         grid_layout.setSpacing(12)
-        grid_layout.setColumnStretch(100, 1)  # Add stretch at the end
+        grid_layout.setColumnStretch(100, 1)  # 末尾添加弹性空间
 
         self._preset_checkboxes: dict[str, QCheckBox] = {}
 
-        # Row 0: Filename checkbox + 显示完整路径 + hideable standard columns
+        # 第0行：文件名复选框 + 显示完整路径 + 可隐藏标准列
         col = 0
 
-        # "Filename" is a built-in column but can be toggled like a preset
+        # "文件名"是内置列，但可像预设列一样切换可见性
         fn_cb = QCheckBox(BOM_COLUMN_DISPLAY_NAMES.get("Filename", "Filename"))
         fn_cb.setChecked(self._show_filename_col)
         fn_cb.toggled.connect(self._on_preset_col_toggled)
@@ -258,7 +254,7 @@ class BomEditDialog(QDialog):
         self._preset_checkboxes["Filename"] = fn_cb
         col += 1
 
-        # "显示完整路径" follows immediately after the Filename checkbox
+        # "显示完整路径"复选框紧跟文件名复选框之后
         self._filepath_chk = QCheckBox("显示完整路径")
         self._filepath_chk.setToolTip("勾选后文件名列将显示文件完整路径（含目录），而非仅文件名")
         self._filepath_chk.setChecked(self._show_filepath_col)
@@ -266,7 +262,7 @@ class BomEditDialog(QDialog):
         grid_layout.addWidget(self._filepath_chk, 0, col)
         col += 1
 
-        # Hideable standard columns (Nomenclature, Revision, Definition, Source)
+        # 可隐藏标准列（品名、版本、定义、来源）
         for col_name in BOM_HIDEABLE_COLUMNS:
             cb = QCheckBox(BOM_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
             cb.setChecked(col_name in self._visible_hideable_cols)
@@ -275,7 +271,7 @@ class BomEditDialog(QDialog):
             self._preset_checkboxes[col_name] = cb
             col += 1
 
-        # Row 1: Preset user-defined properties (物料编码, 物料名称, etc.)
+        # 第1行：预设用户自定义属性（物料编码、物料名称等）
         col = 0
         for col_name in PRESET_USER_REF_PROPERTIES:
             cb = QCheckBox(col_name)
@@ -288,7 +284,7 @@ class BomEditDialog(QDialog):
         preset_main_layout.addLayout(grid_layout)
         layout.addWidget(preset_group)
 
-        # BOM tree widget (replaces QTableWidget; tree handles expand/collapse natively)
+        # BOM树形控件（替代 QTableWidget，原生支持展开/折叠）
         self._table = _BomTreeWidget()
         _init_headers = self._display_headers()
         self._table.setColumnCount(len(_init_headers))
@@ -314,7 +310,7 @@ class BomEditDialog(QDialog):
         self._table.customContextMenuRequested.connect(self._on_tree_context_menu)
         layout.addWidget(self._table, 1)
 
-        # Bottom buttons
+        # 底部按钮行
         btn_row = QHBoxLayout()
 
         autofit_btn = QPushButton("自适应列宽")
@@ -344,6 +340,12 @@ class BomEditDialog(QDialog):
         btn_row.addWidget(self._rename_file_btn)
         btn_row.addStretch()
 
+        self._export_btn = QPushButton("导出表格")
+        self._export_btn.setToolTip("将当前表格导出为 Excel（.xlsx）或 CSV 文件")
+        self._export_btn.setEnabled(False)
+        self._export_btn.clicked.connect(self._export_table)
+        btn_row.addWidget(self._export_btn)
+
         self._save_btn   = QPushButton("应用")
         self._save_btn.setEnabled(False)
         self._save_btn.clicked.connect(self._apply_changes)
@@ -361,19 +363,19 @@ class BomEditDialog(QDialog):
         btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
 
-    # ── Source toggle ─────────────────────────────────────────────────────────
+    # ── 文件/活动文档切换 ─────────────────────────────────────────────────────
 
     def _toggle_file_row(self, use_active: bool) -> None:
         self._file_edit.setEnabled(not use_active)
         self._file_browse_btn.setEnabled(not use_active)
 
-    # ── BOM type toggle ───────────────────────────────────────────────────────
+    # ── BOM类型切换 ───────────────────────────────────────────────────────────
 
     def _on_bom_type_changed(self, summary_checked: bool) -> None:
         self._summarize = summary_checked
         self._edit_settings.setValue("summarize", summary_checked)
         self._summary_opts_widget.setVisible(summary_checked)
-        # If BOM is already loaded, re-derive display rows from the raw rows and repopulate
+        # 若BOM已加载，则从原始行重新生成显示行并刷新表格
         if self._raw_rows:
             self._rows = (
                 flatten_bom_to_summary(
@@ -388,14 +390,14 @@ class BomEditDialog(QDialog):
     def _on_include_assemblies_toggled(self, checked: bool) -> None:
         self._summary_include_assemblies = checked
         self._edit_settings.setValue("summary_include_assemblies", checked)
-        # Rebuild summary display if BOM is loaded and summary mode is active
+        # 若BOM已加载且汇总模式激活，则重建汇总显示
         if self._summarize and self._raw_rows:
             self._rows = flatten_bom_to_summary(
                 self._raw_rows,
                 include_assemblies=checked,
                 sort_column=self._summary_sort_column or None,
             )
-            # When assemblies are included show the Type column; otherwise hide it
+            # 包含装配体时显示"类型"列；否则隐藏
             self._rebuild_columns_and_repopulate()
 
     def _on_sort_col_changed(self, _index: int) -> None:
@@ -403,7 +405,7 @@ class BomEditDialog(QDialog):
         if col:
             self._summary_sort_column = col
             self._edit_settings.setValue("summary_sort_column", col)
-            # Re-sort the currently displayed summary rows if applicable
+            # 如有必要，对当前显示的汇总行重新排序
             if self._summarize and self._raw_rows:
                 self._rows = flatten_bom_to_summary(
                     self._raw_rows,
@@ -412,58 +414,55 @@ class BomEditDialog(QDialog):
                 )
                 self._populate_table()
 
-    # ── Table helpers ─────────────────────────────────────────────────────────
+    # ── 表格辅助方法 ──────────────────────────────────────────────────────────
 
     def _autofit_columns(self) -> None:
-        """Resize all columns to fit their content, with a minimum width."""
-        # QTreeWidget has resizeColumnToContents(int) not resizeColumnsToContents()
+        """根据内容自动调整所有列宽，设有最小宽度下限。"""
+        # QTreeWidget 使用 resizeColumnToContents(int)，而非 resizeColumnsToContents()
         min_width = 60
         for col_idx, col_name in enumerate(self._columns):
             self._table.resizeColumnToContents(col_idx)
             if self._table.columnWidth(col_idx) < min_width:
                 self._table.setColumnWidth(col_idx, min_width)
-            # Update the cache so subsequent column-visibility toggles keep these widths
+            # 更新缓存，使后续列可见性切换能保留此列宽
             self._col_widths[col_name] = self._table.columnWidth(col_idx)
 
     def _on_section_resized(self, logical_index: int, _old_size: int, new_size: int) -> None:
-        """Cache the new width whenever the user (or code) resizes a column."""
+        """用户或代码调整列宽时，将新宽度写入缓存。"""
         if logical_index < len(self._columns):
             self._col_widths[self._columns[logical_index]] = new_size
 
     def _rebuild_columns_and_repopulate(self) -> None:
-        """Rebuild the visible column list, update headers, and repopulate if rows are loaded."""
-        # --- Immutable width snapshot (used for both anchor and restoration) ---
+        """重建可见列列表，更新表头，若已有行数据则刷新表格。"""
+        # --- 不可变宽度快照（同时用于锚点计算和宽度恢复）---
         #
-        # Take this snapshot before any Qt tree/header operations.  The snapshot
-        # merges the persistent cache (gives widths for previously-hidden columns)
-        # with the live columnWidth() values (authoritative for visible columns),
-        # so both anchor computation and width restoration read from a stable copy
-        # rather than from self._col_widths which may be modified mid-rebuild.
+        # 在任何 Qt 树/表头操作之前先取快照。快照将持久缓存
+        # （为此前隐藏的列提供列宽）与当前 columnWidth() 值
+        # （对可见列具有权威性）合并，使锚点计算和宽度恢复都从
+        # 稳定副本读取，而非从可能在重建过程中被修改的
+        # self._col_widths 读取。
         width_snapshot: dict[str, int] = dict(self._col_widths)
         for col_idx, col_name in enumerate(self._columns):
             w = self._table.columnWidth(col_idx)
             width_snapshot[col_name] = w
             self._col_widths[col_name] = w  # keep persistent cache current
 
-        # --- Anchor-column horizontal scroll bookkeeping ---
-        # We want the leftmost visible column to stay on screen after columns are
-        # added/removed.  A raw pixel hscroll value is not stable across column
-        # count changes because Qt may reset the scroll bar, and because removing
-        # columns to the LEFT of the viewport shifts the pixel positions of all
-        # remaining visible columns.
+        # --- 锚定列水平滚动位置记录 ---
+        # 目标：在添加/删除列后，保持视口最左侧可见列不变。
+        # 跨列数变化的原始像素滚动值并不稳定，因为 Qt 可能重置滚动条，
+        # 且删除视口左侧的列会使所有剩余可见列的像素位置发生偏移。
         #
-        # Strategy: identify which column name sits at the left viewport edge
-        # (and how many pixels into that column) BEFORE the rebuild, then
-        # recompute the target hscroll from column widths AFTER the rebuild.
+        # 策略：在重建前确定视口左边缘所在的列名（及偏入该列的像素数），
+        # 重建后再根据列宽重新计算目标水平滚动值。
         old_columns = list(self._columns)
         old_hscroll = self._table.horizontalScrollBar().value()
 
-        anchor_col_name: str | None = None  # column at the left viewport edge
-        anchor_offset: int = 0              # pixels into that column
+        anchor_col_name: str | None = None  # 视口左边缘所在列名
+        anchor_offset: int = 0              # 偏入该列的像素数
 
         x = 0
         for col_name in old_columns:
-            w = width_snapshot[col_name]    # use snapshot, not live columnWidth
+            w = width_snapshot[col_name]    # 使用快照，而非实时 columnWidth
             if x + w > old_hscroll:
                 anchor_col_name = col_name
                 anchor_offset = old_hscroll - x
@@ -474,19 +473,18 @@ class BomEditDialog(QDialog):
 
         self._columns = self._build_visible_columns()
         if self._rows:
-            self._populate_table()  # sets column count and headers internally
-            # Restore widths from the immutable snapshot; auto-fit only new
-            # columns that have never been seen before.
+            self._populate_table()  # 内部已设置列数和表头
+            # 从不可变快照恢复列宽；对从未出现过的新列执行自适应宽度
             for col_idx, col_name in enumerate(self._columns):
                 if col_name in width_snapshot:
                     self._table.setColumnWidth(col_idx, width_snapshot[col_name])
                 else:
                     self._table.resizeColumnToContents(col_idx)
 
-            # Compute new hscroll using the anchor column's new pixel position.
+            # 根据锚定列的新像素位置计算新的水平滚动值
             new_hscroll = 0
             if anchor_col_name is not None:
-                # Try to find the anchor column in the new layout
+                # 在新布局中查找锚定列
                 x = 0
                 found = False
                 for col_idx, col_name in enumerate(self._columns):
@@ -497,9 +495,8 @@ class BomEditDialog(QDialog):
                     x += self._table.columnWidth(col_idx)
 
                 if not found:
-                    # Anchor column was hidden; scroll to the first new column
-                    # that followed the anchor in the old layout (the next
-                    # surviving column to the right of the removed one).
+                    # 锚定列已被隐藏；滚动到旧布局中锚定列右侧第一个
+                    # 仍存在的列（即被删除列右边第一个幸存列）
                     old_col_order = {c: i for i, c in enumerate(old_columns)}
                     anchor_old_idx = old_col_order.get(anchor_col_name, -1)
                     x = 0
@@ -509,27 +506,25 @@ class BomEditDialog(QDialog):
                             break
                         x += self._table.columnWidth(col_idx)
                     else:
-                        # All remaining columns are to the left of where the
-                        # anchor was; scroll to the end.
+                        # 所有剩余列均在锚定列原位置左侧；滚动到末尾
                         new_hscroll = self._table.horizontalScrollBar().maximum()
 
             new_hscroll = max(0, min(new_hscroll, self._table.horizontalScrollBar().maximum()))
             self._table.verticalScrollBar().setValue(vscroll)
             self._table.horizontalScrollBar().setValue(new_hscroll)
         else:
-            # No rows yet: just update the column count and header labels so the
-            # table reflects the new column selection before any BOM is loaded.
+            # 尚无行数据：仅更新列数和表头，以便在加载BOM前也能反映最新列选择
             _headers = self._display_headers()
             self._table.setColumnCount(len(_headers))
             self._table.setHeaderLabels(_headers)
 
-    # ── Preset column helpers ─────────────────────────────────────────────────
+    # ── 列可见性管理 ──────────────────────────────────────────────────────────
 
     def _display_headers(self) -> list[str]:
-        """Return display header labels for the current column list.
+        """返回当前列列表的显示表头标签。
 
-        When "文件名列显示完整路径" is active the Filename column header is
-        shown as "完整路径" so users can tell what they're looking at.
+        当"显示完整路径"选项激活时，文件名列的表头显示为"完整路径"，
+        以便用户直观区分。
         """
         result = []
         for c in self._columns:
@@ -541,13 +536,13 @@ class BomEditDialog(QDialog):
 
     def _build_visible_columns(self) -> list[str]:
         base = list(BOM_EDIT_COLUMN_ORDER)
-        # Filter out hidden columns (Filename and hideable columns)
+        # 过滤隐藏列（文件名列和可隐藏列）
         if not self._show_filename_col:
             base = [c for c in base if c != "Filename"]
-        # Filter out hidden hideable columns
+        # 过滤已隐藏的可隐藏列
         base = [c for c in base if c not in BOM_HIDEABLE_COLUMNS or c in self._visible_hideable_cols]
         if self._summarize:
-            # In summary mode Level has no meaning; also hide Type unless assemblies shown
+            # 汇总模式下层级列无意义；不含装配体时也隐藏类型列
             cols_to_hide = {"Level"}
             if not self._summary_include_assemblies:
                 cols_to_hide.add("Type")
@@ -559,10 +554,9 @@ class BomEditDialog(QDialog):
             c for c in self._custom_columns
             if c not in BOM_EDIT_COLUMN_ORDER and c not in PRESET_USER_REF_PROPERTIES
         ]
-        # Insert "#" immediately after "Level" (column 0 → Level, column 1 → "#")
-        # so that the QTreeWidget tree-decoration (branch lines) stays in the
-        # Level column (logical index 0).  In summary mode Level is hidden, so
-        # "#" falls to the front (column 0) which is fine.
+        # 将"#"紧插在"Level"之后（逻辑索引0→Level，逻辑索引1→"#"），
+        # 使 QTreeWidget 的树形装饰（分支线）保留在 Level 列（逻辑索引0）。
+        # 汇总模式下 Level 被隐藏，"#"自然落到第0列，无需特殊处理。
         result = base + visible_preset + other_custom
         if "Level" in result:
             level_idx = result.index("Level")
@@ -572,7 +566,7 @@ class BomEditDialog(QDialog):
         return result
 
     def _on_preset_col_toggled(self) -> None:
-        # "Filename" checkbox controls the built-in filename column visibility
+        # "文件名"复选框控制内置文件名列的可见性
         if "Filename" in self._preset_checkboxes:
             new_show_fn = self._preset_checkboxes["Filename"].isChecked()
             if new_show_fn != self._show_filename_col:
@@ -586,7 +580,7 @@ class BomEditDialog(QDialog):
         self._rebuild_columns_and_repopulate()
 
     def _on_hideable_col_toggled(self) -> None:
-        """Handle hideable column checkbox toggle (Nomenclature, Revision, Definition, Source)."""
+        """处理可隐藏列复选框切换（品名、版本、定义、来源）。"""
         self._visible_hideable_cols = [
             name for name, cb in self._preset_checkboxes.items()
             if name in BOM_HIDEABLE_COLUMNS and cb.isChecked()
@@ -599,7 +593,7 @@ class BomEditDialog(QDialog):
         self._edit_settings.setValue("show_filepath_column", checked)
         self._rebuild_columns_and_repopulate()
 
-    # ── File picker ───────────────────────────────────────────────────────────
+    # ── 文件选择 ──────────────────────────────────────────────────────────────
 
     def _browse_file(self) -> None:
         file, _ = QFileDialog.getOpenFileName(
@@ -612,7 +606,7 @@ class BomEditDialog(QDialog):
             self._last_browse_dir = str(Path(file).parent)
             self._export_settings.setValue("last_browse_dir", self._last_browse_dir)
 
-    # ── Load BOM ──────────────────────────────────────────────────────────────
+    # ── 加载BOM ───────────────────────────────────────────────────────────────
 
     def _load_bom(self) -> None:
         if self._use_active_chk.isChecked():
@@ -666,10 +660,10 @@ class BomEditDialog(QDialog):
         self._load_btn.setEnabled(True)
         self._load_btn.setText("重新加载BOM")
 
-        # Always save the raw hierarchical rows so we can switch modes later
+        # 始终保存原始层级行，以便之后切换显示模式
         self._raw_rows = rows
 
-        # In summary mode collapse the hierarchy into unique parts
+        # 汇总模式下将层级折叠为唯一零件
         display_rows = (
             flatten_bom_to_summary(
                 rows,
@@ -681,8 +675,8 @@ class BomEditDialog(QDialog):
 
         self._rows = display_rows
 
-        # Build PN-keyed canonical data from the raw rows (first occurrence wins).
-        # Using raw rows ensures all parts are indexed regardless of current mode.
+        # 以零件编号为键构建规范数据（首次出现者优先），
+        # 使用原始行确保所有零件被索引，不受当前显示模式影响
         all_data_cols = list(dict.fromkeys(
             BOM_EDIT_COLUMN_ORDER
             + [c for c in self._all_custom_columns if c not in BOM_EDIT_COLUMN_ORDER]
@@ -702,15 +696,15 @@ class BomEditDialog(QDialog):
         self._snapshot_data  = copy.deepcopy(self._canonical_data)
         self._modified_keys.clear()
 
-        # Save current widths by column name before repopulating
+        # 刷新前按列名保存当前列宽
         if self._bom_loaded:
             for col_idx, col_name in enumerate(self._columns):
                 self._col_widths[col_name] = self._table.columnWidth(col_idx)
 
         self._populate_table()
         if not self._bom_loaded:
-            # First load: auto-fit all columns and seed the cache; '#' gets a
-            # fixed default of 40 px (resizable afterwards like any other column)
+            # 首次加载：自适应所有列宽并初始化缓存；
+            # "#"行号列固定默认宽度40像素（之后可像其他列一样调整）
             for _c, col_name in enumerate(self._columns):
                 if col_name == BOM_ROW_NUMBER_COLUMN:
                     self._table.setColumnWidth(_c, 40)
@@ -720,7 +714,7 @@ class BomEditDialog(QDialog):
                     self._col_widths[col_name] = self._table.columnWidth(_c)
             self._bom_loaded = True
         else:
-            # Subsequent reloads: restore saved widths by column name
+            # 后续重新加载：按列名恢复已保存的列宽
             for col_idx, col_name in enumerate(self._columns):
                 if col_name in self._col_widths:
                     self._table.setColumnWidth(col_idx, self._col_widths[col_name])
@@ -729,38 +723,38 @@ class BomEditDialog(QDialog):
         self._finish_btn.setEnabled(True)
         self._rename_btn.setEnabled(True)
         self._rename_file_btn.setEnabled(True)
+        self._export_btn.setEnabled(True)
 
     def _populate_table(self) -> None:
         self._is_updating = True
         self._table.blockSignals(True)
 
-        # Summary mode: all rows are flat top-level items with no children.
-        # Keeping setRootIsDecorated(True) reserves space for the expand arrow on
-        # every row, which pushes column-0 content to the right.  Disable it in
-        # summary mode; re-enable it in hierarchical mode so expand arrows show.
+        # 汇总模式：所有行均为无子项的顶层项。
+        # 若保持 setRootIsDecorated(True)，每行都会预留展开箭头的空间，
+        # 使第0列内容向右偏移。汇总模式下禁用，层级模式下重新启用以显示展开箭头。
         self._table.setRootIsDecorated(not self._summarize)
 
-        self._table.clear()                          # removes all items; headers persist
+        self._table.clear()                          # 删除所有项；表头保留
         headers = self._display_headers()
-        self._table.setColumnCount(len(headers))     # Qt never shrinks column count on its own
+        self._table.setColumnCount(len(headers))     # Qt 不会自动缩减列数
         self._table.setHeaderLabels(headers)
         self._item_by_row = []
-        self._pn_to_items.clear()  # Reset PN→Item index
+        self._pn_to_items.clear()  # 重置零件编号→树形项索引
 
-        # parent_stack: list of (level, item_or_None)
-        # The sentinel at position 0 represents the invisible root (level −1).
+        # parent_stack：(层级, 树形项|None) 的列表
+        # 索引0处的哨兵代表不可见根节点（层级为−1）
         parent_stack: list[tuple[int, QTreeWidgetItem | None]] = [(-1, None)]
 
         for row_idx, row_data in enumerate(self._rows):
             level = 0 if self._summarize else int(row_data.get("Level", 0))
 
-            # Pop until the top of the stack has a level strictly below ours
+            # 弹出栈，直到栈顶层级严格低于当前行
             while len(parent_stack) > 1 and parent_stack[-1][0] >= level:
                 parent_stack.pop()
 
             parent_item = parent_stack[-1][1]
             item = QTreeWidgetItem()
-            # Store row_idx in UserRole of column 0 for reverse lookup
+            # 将 row_idx 存入第0列的 UserRole，用于反向查找
             item.setData(0, Qt.ItemDataRole.UserRole, row_idx)
 
             if parent_item is None:
@@ -776,13 +770,13 @@ class BomEditDialog(QDialog):
             unreadable = bool(row_data.get("_unreadable"))
             row_locked = unreadable or not_found
 
-            # Build PN→Item index for fast linked updates
+            # 构建零件编号→树形项索引，用于快速联动更新
             if pn:
                 self._pn_to_items.setdefault(pn, []).append(item)
 
             for col_idx, col_name in enumerate(self._columns):
 
-                # Source → QComboBox (overlay widget; not stored as item text)
+                # 来源列 → QComboBox（覆盖控件；不存储为项文本）
                 if col_name == "Source":
                     raw    = str(row_data.get("Source", ""))
                     pn_val = self._canonical_data.get(pn, {}).get(
@@ -804,16 +798,15 @@ class BomEditDialog(QDialog):
                     self._table.setItemWidget(item, col_idx, combo)
                     continue
 
-                # User-defined property with constrained options → QComboBox
+                # 具有受限选项的用户自定义属性列 → QComboBox
                 opts = PRESET_USER_REF_PROPERTY_OPTIONS.get(col_name)
                 if opts is not None:
                     pn_val = self._canonical_data.get(pn, {}).get(
                         col_name, str(row_data.get(col_name, ""))
                     )
-                    # Build the effective item list:
-                    #   • always prepend "" so an unset property shows as blank
-                    #   • if the stored value is not in the allowed list AND is
-                    #     non-empty, append it so the real value remains visible
+                    # 构建有效选项列表：
+                    #   • 始终在开头插入""，使未设置的属性显示为空白
+                    #   • 若存储值不在允许列表中且非空，则追加以保留原始值可见性
                     display_opts = [""] + list(opts)
                     if pn_val and pn_val not in opts:
                         logger.debug(
@@ -835,7 +828,7 @@ class BomEditDialog(QDialog):
                     self._table.setItemWidget(item, col_idx, combo)
                     continue
 
-                # All other columns → item text
+                # 其他所有列 → 项文本
                 if col_name == BOM_ROW_NUMBER_COLUMN:
                     value = str(row_idx + 1)
                 elif col_name == "Quantity":
@@ -846,9 +839,8 @@ class BomEditDialog(QDialog):
                     if self._show_filepath_col:
                         value = fp if fp else fn
                     else:
-                        # Always show filename with extension when the backing
-                        # path is known; fall back to the stored stem (which may
-                        # equal FILENAME_NOT_FOUND) when it is not.
+                        # 已知路径时显示带扩展名的文件名；
+                        # 未知路径时回退到存储的文件名茎（可能等于 FILENAME_NOT_FOUND）
                         value = Path(fp).name if fp else fn
                 elif col_name == "Filepath":
                     value = str(row_data.get("_filepath", ""))
@@ -867,15 +859,15 @@ class BomEditDialog(QDialog):
                     fn = str(row_data.get("Filename", ""))
                     if fp:
                         if self._show_filepath_col:
-                            # Column shows full path; tooltip shows just name+ext
+                            # 列显示完整路径；工具提示显示文件名+扩展名
                             name_with_ext = Path(fp).name
                             if name_with_ext and name_with_ext != FILENAME_NOT_FOUND:
                                 item.setToolTip(col_idx, name_with_ext)
                         else:
-                            # Column shows name+ext; tooltip shows full path
+                            # 列显示文件名+扩展名；工具提示显示完整路径
                             item.setToolTip(col_idx, fp)
 
-            # Non-locked rows: allow in-place editing (delegate blocks read-only columns)
+            # 未锁定行：允许就地编辑（代理阻止只读列）
             if not row_locked:
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
                 item.setData(0, _ITEM_LOCKED_ROLE, False)
@@ -899,10 +891,10 @@ class BomEditDialog(QDialog):
         self._table.blockSignals(False)
         self._is_updating = False
 
-    # ── Tree helpers ──────────────────────────────────────────────────────────
+    # ── 树形遍历辅助 ──────────────────────────────────────────────────────────
 
     def _iter_all_items(self):
-        """Yield every QTreeWidgetItem in DFS (pre-order) traversal."""
+        """以深度优先前序遍历方式逐个产出所有 QTreeWidgetItem。"""
         def _walk(parent: QTreeWidgetItem):
             yield parent
             for i in range(parent.childCount()):
@@ -910,7 +902,7 @@ class BomEditDialog(QDialog):
         for i in range(self._table.topLevelItemCount()):
             yield from _walk(self._table.topLevelItem(i))
 
-    # ── Source combo change ───────────────────────────────────────────────────
+    # ── "来源"下拉框变更 ──────────────────────────────────────────────────────
 
     def _on_source_changed(self, row_idx: int, text: str) -> None:
         if self._is_updating:
@@ -937,7 +929,7 @@ class BomEditDialog(QDialog):
                 self._canonical_data[pn]["Source"] = text
                 self._modified_keys.setdefault(pn, set()).add("Source")
 
-        # Performance optimization: use PN→Item index instead of full tree traversal
+        # 性能优化：使用零件编号→树形项索引，避免全树遍历
         self._is_updating = True
         for pn in pns_to_update:
             if pn in self._pn_to_items:
@@ -949,7 +941,7 @@ class BomEditDialog(QDialog):
                         combo.blockSignals(False)
         self._is_updating = False
 
-    # ── User-defined option column combo change ───────────────────────────────
+    # ── 用户自定义选项列变更 ──────────────────────────────────────────────────
 
     def _on_option_col_changed(self, row_idx: int, col_name: str, text: str) -> None:
         if self._is_updating:
@@ -976,7 +968,7 @@ class BomEditDialog(QDialog):
                 self._canonical_data[pn][col_name] = text
                 self._modified_keys.setdefault(pn, set()).add(col_name)
 
-        # Performance optimization: use PN→Item index instead of full tree traversal
+        # 性能优化：使用零件编号→树形项索引，避免全树遍历
         self._is_updating = True
         for pn in pns_to_update:
             if pn in self._pn_to_items:
@@ -988,7 +980,7 @@ class BomEditDialog(QDialog):
                         combo.blockSignals(False)
         self._is_updating = False
 
-    # ── Regular cell edit ─────────────────────────────────────────────────────
+    # ── 普通单元格编辑 ────────────────────────────────────────────────────────
 
     def _on_item_changed(self, item: QTreeWidgetItem, col_idx: int) -> None:
         if self._is_updating:
@@ -1005,7 +997,7 @@ class BomEditDialog(QDialog):
         pn        = str(self._rows[row_idx].get("Part Number", ""))
 
         if col_name == "Part Number":
-            # ── Empty / whitespace-only PN ────────────────────────────────────
+            # ── 零件编号为空或仅含空格 ────────────────────────────────────────
             if not new_value.strip():
                 QMessageBox.warning(
                     self, "零件编号不能为空",
@@ -1016,14 +1008,14 @@ class BomEditDialog(QDialog):
                 self._is_updating = False
                 return
 
-            # ── Strip leading/trailing whitespace silently ────────────────────
+            # ── 静默去除首尾空格 ──────────────────────────────────────────────
             if new_value != new_value.strip():
                 new_value = new_value.strip()
                 self._is_updating = True
                 item.setText(col_idx, new_value)
                 self._is_updating = False
 
-            # ── Character validity ────────────────────────────────────────────
+            # ── 字符合法性校验 ────────────────────────────────────────────────
             if not PART_NUMBER_VALID_PATTERN.fullmatch(new_value):
                 QMessageBox.warning(
                     self, "零件编号含非法字符",
@@ -1036,7 +1028,7 @@ class BomEditDialog(QDialog):
                 self._is_updating = False
                 return
 
-            # ── Conflict with current canonical values ────────────────────────
+            # ── 与当前规范值冲突检查 ──────────────────────────────────────────
             for other_pn, data in self._canonical_data.items():
                 if other_pn == pn:
                     continue
@@ -1051,7 +1043,7 @@ class BomEditDialog(QDialog):
                     self._is_updating = False
                     return
 
-            # ── Conflict with snapshot (what CATIA currently holds) ───────────
+            # ── 与快照（CATIA当前值）冲突检查 ───────────────────────────────
             for other_pn, data in self._snapshot_data.items():
                 if other_pn == pn:
                     continue
@@ -1082,7 +1074,7 @@ class BomEditDialog(QDialog):
                     self._canonical_data[r_pn][col_name] = new_value
                     self._modified_keys.setdefault(r_pn, set()).add(col_name)
 
-        # Performance optimization: use PN→Item index instead of full tree traversal
+        # 性能优化：使用零件编号→树形项索引，避免全树遍历
         self._is_updating = True
         for pn in pns_to_update:
             if pn in self._pn_to_items:
@@ -1091,10 +1083,10 @@ class BomEditDialog(QDialog):
                         other_item.setText(col_idx, new_value)
         self._is_updating = False
 
-    # ── Write-back ────────────────────────────────────────────────────────────
+    # ── 写回CATIA ─────────────────────────────────────────────────────────────
 
     def _rename_by_part_number(self) -> None:
-        """SaveAs each CATIA file using its Part Number as the filename."""
+        """通过CATIA另存为功能，将每个CATIA文件按零件编号改名。"""
         if self._modified_keys:
             ret = QMessageBox.question(
                 self, "存在未回传的修改",
@@ -1106,11 +1098,10 @@ class BomEditDialog(QDialog):
             if ret != QMessageBox.StandardButton.Yes:
                 return
             self._write_back(close_on_success=False)
-            # If write-back failed or was only partial, modified_keys is still
-            # non-empty – stop here so the user can fix the issue first.
+            # 若写回失败或仅部分成功，modified_keys 仍非空——在此停止，让用户先修复问题
             if self._modified_keys:
                 return
-            # Write-back cleared all modifications; fall through to rename.
+            # 写回已清除所有修改；继续执行改名
 
         to_rename: list[tuple[str, str]] = []
         seen_fps:  set[str] = set()
@@ -1140,14 +1131,14 @@ class BomEditDialog(QDialog):
 
         renamed_count = 0
 
-        # Performance optimization: Build document cache once to avoid repeated scans
+        # 性能优化：一次性构建文档缓存，避免重复扫描
         from pycatia import catia as _pycatia
         caa         = _pycatia()
         application = caa.application
         application.visible = True
         documents   = application.documents
 
-        # Cache: filepath → document
+        # 缓存：文件路径 → 文档对象
         doc_cache: dict[Path, object] = {}
         for i in range(1, documents.count + 1):
             try:
@@ -1177,7 +1168,7 @@ class BomEditDialog(QDialog):
             try:
                 src = Path(fp).resolve()
 
-                # Use cache for fast lookup
+                # 使用缓存快速查找
                 target_doc = doc_cache.get(src)
                 if target_doc is None:
                     documents.open(str(src))
@@ -1210,21 +1201,21 @@ class BomEditDialog(QDialog):
                         row["Filename"]  = pn
                 renamed_count += 1
 
-                # Update cache with new path
+                # 用新路径更新缓存
                 if Path(new_fp).resolve() != src:
                     doc_cache[Path(new_fp).resolve()] = target_doc
                     if src in doc_cache:
                         del doc_cache[src]
 
             except Exception as e:
-                # Only treat the exception as a user-initiated cancel when:
-                #   1. The exception came from the CATIA COM layer (pywintypes.com_error),
-                #      which is what CATIA raises when the user clicks Cancel or No in
-                #      its own SaveAs dialog – NOT for OS-level failures.
-                #   2. The source file is still intact.
-                #   3. The target file was either pre-existing or was never created.
-                # Any other exception (OSError, PermissionError, non-COM errors like
-                # disk full) must be surfaced to the user as a real failure.
+                # 仅在以下所有条件成立时将异常视为用户主动取消：
+                #   1. 异常来自CATIA COM层（pywintypes.com_error）——
+                #      这是用户在CATIA自身另存为对话框中点击"取消"或"否"时
+                #      CATIA抛出的异常，而非操作系统级别的失败。
+                #   2. 源文件仍然完好。
+                #   3. 目标文件要么在操作前就已存在，要么从未被创建。
+                # 其他任何异常（OSError、PermissionError、磁盘空间不足等非COM错误）
+                # 均应作为真正的失败弹出提示。
                 if _is_catia_com_error(e) and Path(fp).exists() and (
                     target_existed_before or not Path(new_fp).exists()
                 ):
@@ -1245,7 +1236,7 @@ class BomEditDialog(QDialog):
             self._populate_table()
 
     def _rename_selected_file(self) -> None:
-        """Rename or move the file for a single selected BOM row via CATIA SaveAs."""
+        """通过CATIA另存为功能，对选中的单行BOM记录执行重命名或移动操作。"""
         selected_row_indices = {
             it.data(0, Qt.ItemDataRole.UserRole)
             for it in self._table.selectedItems()
@@ -1269,7 +1260,7 @@ class BomEditDialog(QDialog):
             QMessageBox.warning(self, "文件不存在", f"文件不存在：\n{fp}")
             return
 
-        # Require attribute write-back before renaming to keep file content consistent.
+        # 改名前要求先写回属性，以确保文件内容与表格一致
         orig_pn = str(row_data.get("Part Number", ""))
         if orig_pn in self._modified_keys:
             ret = QMessageBox.question(
@@ -1282,8 +1273,8 @@ class BomEditDialog(QDialog):
             if ret != QMessageBox.StandardButton.Yes:
                 return
             self._write_back(close_on_success=False)
-            # Only proceed if write-back actually cleared the modifications;
-            # if it failed (error dialog shown), modified_keys still has the entry.
+            # 仅当写回确实清除了修改才继续；
+            # 若写回失败（弹出错误对话框），modified_keys 中仍保留该条目
             if orig_pn in self._modified_keys:
                 return
 
@@ -1348,19 +1339,19 @@ class BomEditDialog(QDialog):
             )
 
         except Exception as e:
-            # Only treat the exception as a user-initiated cancel when:
-            #   1. The exception came from the CATIA COM layer (pywintypes.com_error),
-            #      which is what CATIA raises when the user clicks Cancel or No in
-            #      its own SaveAs dialog – NOT for OS-level failures.
-            #   2. The source file is still intact.
-            #   3. The target file was either pre-existing or was never created.
-            # Any other exception (OSError, PermissionError, non-COM errors like
-            # disk full) must be surfaced to the user as a real failure.
+            # 仅在以下所有条件成立时将异常视为用户主动取消：
+            #   1. 异常来自CATIA COM层（pywintypes.com_error）——
+            #      这是用户在CATIA自身另存为对话框中点击"取消"或"否"时抛出的，
+            #      而非操作系统级别的失败。
+            #   2. 源文件仍然完好。
+            #   3. 目标文件要么在操作前就已存在，要么从未被创建。
+            # 其他任何异常（OSError、PermissionError、磁盘空间不足等非COM错误）
+            # 均应作为真正的失败弹出提示。
             if _is_catia_com_error(e) and Path(fp).exists() and (
                 target_existed_before or not Path(new_fp).exists()
             ):
-                # Most likely the user clicked Cancel or No in CATIA's own SaveAs
-                # prompt – treat this as a deliberate skip with no error dialog.
+                # 用户很可能在CATIA另存为对话框中点击了"取消"或"否"——
+                # 视为主动跳过，不弹出错误对话框
                 logger.info(
                     f"SaveAs skipped for {Path(fp).name} "
                     f"(user cancelled or declined overwrite in CATIA; exception: {e})"
@@ -1369,7 +1360,7 @@ class BomEditDialog(QDialog):
             QMessageBox.warning(self, "另存为失败", f"文件操作失败：\n{e}")
 
     def _write_back(self, *, close_on_success: bool) -> None:
-        """Write only the changed fields back to CATIA."""
+        """仅将已变更的字段写回CATIA。"""
         if self._use_active_chk.isChecked():
             file_path = None
         else:
@@ -1378,10 +1369,11 @@ class BomEditDialog(QDialog):
                 QMessageBox.warning(self, "未选择文件", "请选择一个CATProduct文件。")
                 return
 
-        # dirty_data must be keyed by the *current* CATIA PN, which may differ
-        # from the internal canonical key (orig_pn) when a PN rename was already
-        # written back in a previous write-back operation.  We keep pn_remap to
-        # go back from current_pn → orig_pn for the post-write snapshot update.
+        # dirty_data 必须以 *当前* CATIA零件编号为键，
+        # 该值可能与内部规范键（orig_pn）不同——当零件编号重命名
+        # 已在上一次写回中完成时会出现此情况。
+        # 保留 pn_remap 以便从 current_pn 反向追溯到 orig_pn，
+        # 用于写回后更新快照。
         dirty_data: dict[str, dict[str, str]] = {}
         pn_remap:   dict[str, str]            = {}  # current_pn → orig_pn
         for pn, dirty_cols in self._modified_keys.items():
@@ -1392,9 +1384,8 @@ class BomEditDialog(QDialog):
                 for col in dirty_cols if col in self._canonical_data[pn]
             }
             if changed:
-                # Use the snapshot PN (= what CATIA currently holds for this
-                # node) as the lookup key for the traversal.  If the PN has
-                # never been written back, the snapshot value equals orig_pn.
+                # 使用快照中的零件编号（即CATIA当前保存的值）作为遍历查找键。
+                # 若该零件编号从未被写回过，快照值等于 orig_pn。
                 current_pn = self._snapshot_data.get(pn, {}).get(
                     "Part Number", pn
                 )
@@ -1463,21 +1454,213 @@ class BomEditDialog(QDialog):
                 "BOM属性已成功写回CATIA，请在CATIA中手动保存文件。",
             )
 
-    def _apply_changes(self) -> None:
-        """Write changes back to CATIA and keep the dialog open."""
-        self._write_back(close_on_success=False)
+    # ── 导出表格 ──────────────────────────────────────────────────────────────
 
+    def _export_table(self) -> None:
+        """将当前显示的BOM表格导出为 Excel 或 CSV 文件。"""
+        if not self._bom_loaded or not self._rows:
+            QMessageBox.warning(self, "无数据", "请先加载BOM。")
+            return
+
+        # 若存在未写回的编辑，表格内容与CATIA不一致，导出前必须先写回
+        if self._modified_keys:
+            ret = QMessageBox.question(
+                self, "存在未写回的修改",
+                "检测到BOM属性尚未写回CATIA，导出前应保持表格与CATIA一致。\n\n"
+                "是否立即将修改写回CATIA，再继续导出？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return
+            self._write_back(close_on_success=False)
+            # 若写回失败（modified_keys 仍非空），中止导出
+            if self._modified_keys:
+                return
+
+        # 根据源文件建议默认文件名
+        initial_name = ""
+        if not self._use_active_chk.isChecked():
+            fp_src = self._file_edit.text().strip()
+            if fp_src:
+                suffix_hint = "_汇总BOM" if self._summarize else "_BOM"
+                initial_name = str(Path(fp_src).with_name(Path(fp_src).stem + suffix_hint))
+
+        dest, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "导出BOM表格",
+            initial_name,
+            "Excel工作簿 (*.xlsx);;CSV文件 (*.csv)",
+        )
+        if not dest:
+            return
+
+        dest_path = Path(dest)
+        # 根据扩展名推断格式；不明确时回退为 xlsx
+        suffix = dest_path.suffix.lower()
+        if suffix not in (".xlsx", ".csv"):
+            dest_path = dest_path.with_suffix(".xlsx")
+            suffix = ".xlsx"
+
+        # 导出列：当前可见列，排除行号"#"列
+        export_cols = [c for c in self._columns if c != BOM_ROW_NUMBER_COLUMN]
+
+        # 从当前表格快照列宽（像素）
+        col_px_widths: dict[str, int] = {}
+        for col_idx, col_name in enumerate(self._columns):
+            if col_name != BOM_ROW_NUMBER_COLUMN:
+                col_px_widths[col_name] = self._table.columnWidth(col_idx)
+
+        # 使用与 _populate_table 相同的取值逻辑收集行数据
+        rows_data: list[dict] = []
+        for row_data in self._rows:
+            pn = str(row_data.get("Part Number", ""))
+            row_out: dict = {}
+            for col_name in export_cols:
+                if col_name == "Source":
+                    raw = str(row_data.get("Source", ""))
+                    val = self._canonical_data.get(pn, {}).get(
+                        "Source", SOURCE_TO_DISPLAY.get(raw, raw)
+                    )
+                elif col_name in PRESET_USER_REF_PROPERTY_OPTIONS:
+                    val = self._canonical_data.get(pn, {}).get(
+                        col_name, str(row_data.get(col_name, ""))
+                    )
+                elif col_name == "Filename":
+                    fp_val = str(row_data.get("_filepath", ""))
+                    fn_val = str(row_data.get("Filename", ""))
+                    if self._show_filepath_col:
+                        val = fp_val if fp_val else fn_val
+                    else:
+                        val = Path(fp_val).name if fp_val else fn_val
+                elif col_name in BOM_READONLY_COLUMNS:
+                    val = str(row_data.get(col_name, ""))
+                else:
+                    val = str(
+                        self._canonical_data.get(pn, {}).get(
+                            col_name, row_data.get(col_name, "")
+                        )
+                    )
+                row_out[col_name] = val
+            rows_data.append(row_out)
+
+        try:
+            if suffix == ".xlsx":
+                self._write_xlsx(dest_path, export_cols, col_px_widths, rows_data)
+            else:
+                self._write_csv(dest_path, export_cols, rows_data)
+        except PermissionError:
+            QMessageBox.critical(
+                self, "导出失败",
+                f"无法写入文件（文件可能已在其他程序中打开）：\n{dest_path}",
+            )
+            return
+        except Exception as e:
+            logger.error(f"BOM table export failed: {e}")
+            QMessageBox.critical(self, "导出失败", f"导出时出错：\n{e}")
+            return
+
+        QMessageBox.information(self, "导出成功", f"BOM已成功导出：\n{dest_path}")
+
+    def _export_header(self, col_name: str) -> str:
+        """返回列的显示表头字符串，与当前表格保持一致。"""
+        if col_name == "Filename" and self._show_filepath_col:
+            return "完整路径"
+        return BOM_COLUMN_DISPLAY_NAMES.get(col_name, col_name)
+
+    def _write_xlsx(
+        self,
+        dest: Path,
+        cols: list[str],
+        px_widths: dict[str, int],
+        rows: list[dict],
+    ) -> None:
+        """将 *rows* 写入 *dest* 路径的 .xlsx 工作簿。"""
+        import openpyxl
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "汇总BOM" if self._summarize else "BOM"
+
+        center      = Alignment(horizontal="center", vertical="center")
+        header_fill = PatternFill(fill_type="solid", fgColor="D9D9D9")
+        thin_side   = Side(style="thin")
+        thin_border = Border(
+            left=thin_side, right=thin_side, top=thin_side, bottom=thin_side
+        )
+
+        # 表头行
+        for col_idx, col_name in enumerate(cols, start=1):
+            cell        = ws.cell(row=1, column=col_idx, value=self._export_header(col_name))
+            cell.font   = Font(bold=True)
+            cell.fill   = header_fill
+            cell.border = thin_border
+
+        # 数据行
+        for row_idx, row in enumerate(rows, start=2):
+            for col_idx, col_name in enumerate(cols, start=1):
+                raw_val = row.get(col_name, "")
+                # 将数字存为整数，以便 Excel 排序/筛选
+                if col_name in ("Level", "Quantity"):
+                    try:
+                        value = int(raw_val)
+                    except (ValueError, TypeError):
+                        logger.debug(
+                            "Could not convert %r to int for column '%s'", raw_val, col_name
+                        )
+                        value = raw_val
+                else:
+                    value = raw_val
+                cell        = ws.cell(row=row_idx, column=col_idx, value=value)
+                cell.border = thin_border
+                if col_name in ("Level", "Quantity", "Type"):
+                    cell.alignment = center
+
+        # 冻结表头行并启用自动筛选
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+
+        # 列宽：像素→Excel字符单位换算
+        # Calibri 11pt 默认字体约为每字符7像素，作为近似换算基准
+        PX_PER_CHAR = 7.0
+        for col_idx, col_name in enumerate(cols, start=1):
+            col_letter = ws.cell(row=1, column=col_idx).column_letter
+            px = px_widths.get(col_name, 80)
+            char_width = max(8.0, px / PX_PER_CHAR)
+            ws.column_dimensions[col_letter].width = round(char_width, 1)
+
+        wb.save(str(dest))
+        logger.info(f"BOM table exported (xlsx) -> {dest}")
+
+    def _write_csv(
+        self,
+        dest: Path,
+        cols: list[str],
+        rows: list[dict],
+    ) -> None:
+        """将 *rows* 写入 *dest* 路径的 UTF-8 CSV 文件（带BOM头）。"""
+        import csv
+
+        with open(dest, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow([self._export_header(c) for c in cols])
+            for row in rows:
+                writer.writerow([row.get(c, "") for c in cols])
+        logger.info(f"BOM table exported (csv) -> {dest}")
+
+    def _apply_changes(self) -> None:
+        """将修改写回CATIA，保持对话框不关闭。"""
+        self._write_back(close_on_success=False)
     def _finish_and_close(self) -> None:
-        """Write changes back to CATIA and close the dialog."""
+        """将修改写回CATIA，然后关闭对话框。"""
         self._write_back(close_on_success=True)
 
-    # ── Right-click context menu ──────────────────────────────────────────────
+    # ── 右键上下文菜单 ────────────────────────────────────────────────────────
 
     def _on_tree_context_menu(self, pos) -> None:
-        """Show a context menu for the right-clicked BOM row.
+        """显示右键点击的BOM行对应的上下文菜单。
 
-        If a thumbnail is embedded in the backing file it is shown at the top
-        of the menu as a non-interactive image widget.
+        若关联文件内嵌了缩略图，则在菜单顶部以非交互式图片控件展示。
         """
         item = self._table.itemAt(pos)
         if item is None:
@@ -1494,19 +1677,18 @@ class BomEditDialog(QDialog):
         unreadable   = bool(row_data.get("_unreadable"))
         pn           = str(row_data.get("Part Number", ""))
 
-        # Ensure the right-clicked row is selected so that the downstream
-        # helpers (_rename_selected_file etc.) can find it.
+        # 确保右键点击的行已被选中，以便下游方法（_rename_selected_file 等）能找到它
         if not item.isSelected():
             self._table.clearSelection()
             item.setSelected(True)
 
         menu = QMenu(self)
 
-        # ── Embedded thumbnail (shown inline at the top when available) ───────
-        # Conditions where we skip thumbnail extraction:
-        #   • 部件: filepath belongs to the parent product, not this component
-        #   • not_found: CATIA couldn't resolve the file
-        #   • file doesn't exist on disk (unsaved or missing)
+        # ── 嵌入缩略图（可用时在菜单顶部内联显示）─────────────────────────────
+        # 以下情况跳过缩略图提取：
+        #   • 部件：文件路径属于父产品，而非此组件
+        #   • not_found：CATIA无法解析该文件
+        #   • 文件在磁盘上不存在（未保存或丢失）
         if fp and not is_component and not not_found and fp_path is not None and fp_path.exists():
             img_bytes = read_catia_thumbnail(fp)
             if img_bytes:
@@ -1542,9 +1724,8 @@ class BomEditDialog(QDialog):
         act_copy_path.setEnabled(bool(fp))
 
         # ── 在CATIA中打开 ─────────────────────────────────────────────────────
-        # Enabled only when the file exists on disk and is not a broken/unreadable
-        # reference.  Component rows share the parent product's filepath so are
-        # excluded as well.
+        # 仅当文件在磁盘上存在且不是损坏/轻量化引用时启用。
+        # 部件行共享父产品的文件路径，因此也排除在外。
         act_open_catia = menu.addAction("在CATIA中打开")
         catia_available = (
             not is_component and not not_found and not unreadable
@@ -1573,11 +1754,11 @@ class BomEditDialog(QDialog):
             self._rename_selected_file()
 
     def _open_path(self, fp: str) -> None:
-        """Open the folder containing *fp* in Windows Explorer, highlighting the file."""
+        """在 Windows 资源管理器中打开包含 *fp* 的文件夹，并高亮选中该文件。"""
         p = Path(fp).resolve()
         try:
             if p.exists():
-                # Quote the path so Explorer handles spaces in directory names.
+                # 对路径加引号，以确保 Explorer 能正确处理含空格的目录名
                 subprocess.Popen(f'explorer /select,"{p}"', shell=True)
             elif p.parent.exists():
                 subprocess.Popen(f'explorer "{p.parent}"', shell=True)
@@ -1585,10 +1766,9 @@ class BomEditDialog(QDialog):
             logger.warning(f"Failed to open path in Explorer: {exc}")
 
     def _open_in_catia(self, fp: str) -> None:
-        """Open the CATIA document at file path *fp* via ``documents.open``.
+        """通过 ``documents.open`` 在CATIA中打开 *fp* 指向的文档。
 
-        After opening, the CATIA V5 main window is brought to the Windows
-        foreground via ``win32gui`` when available.
+        打开后，若 ``win32gui`` 可用，则将CATIA V5主窗口置于Windows前台。
         """
         try:
             from pycatia import catia as _pycatia  # noqa: PLC0415
@@ -1600,7 +1780,7 @@ class BomEditDialog(QDialog):
             fp_resolved = Path(fp).resolve()
             documents.open(str(fp_resolved))
 
-            # ── Bring the CATIA V5 main window to the Windows foreground ──────
+            # ── 将CATIA V5主窗口置于Windows前台 ──────────────────────────────
             try:
                 import win32gui  # noqa: PLC0415
                 import win32con  # noqa: PLC0415
@@ -1609,15 +1789,14 @@ class BomEditDialog(QDialog):
                     if not win32gui.IsWindowVisible(hwnd):
                         return
                     title = win32gui.GetWindowText(hwnd)
-                    # Match only the CATIA V5 application window, not other
-                    # windows that happen to contain the word "CATIA".
+                    # 仅匹配CATIA V5应用程序主窗口，排除其他含"CATIA"字样的窗口
                     if title.startswith("CATIA V5"):
                         try:
                             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
                             win32gui.SetForegroundWindow(hwnd)
                         except Exception:
                             pass
-                        # Stop enumeration after the first CATIA V5 window.
+                        # 找到第一个CATIA V5窗口后停止枚举
                         return False
 
                 win32gui.EnumWindows(_raise_catia_window, None)

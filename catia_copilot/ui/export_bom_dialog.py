@@ -38,6 +38,8 @@ class ExportBomDialog(QDialog):
         self._settings        = QSettings("CATIACompanion", "ExportBOMDialog")
         self._last_browse_dir = self._settings.value("last_browse_dir", "")
         self._last_output_dir = self._settings.value("last_output_dir", "")
+        self._use_active_doc: bool = self._settings.value("use_active_doc", False, type=bool)
+        self._use_same_dir: bool = self._settings.value("use_same_dir", True, type=bool)
 
         saved_custom = self._settings.value("custom_columns", [])
         if isinstance(saved_custom, str):
@@ -51,6 +53,7 @@ class ExportBomDialog(QDialog):
         self._summary_sort_column: str = self._settings.value(
             "summary_sort_column", "Part Number"
         )
+        self._output_format: str = self._settings.value("output_format", "xlsx")
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -62,7 +65,10 @@ class ExportBomDialog(QDialog):
         self._src_btn_group = QButtonGroup(self)
         self._radio_active  = QRadioButton("使用当前CATIA活动文档")
         self._radio_file    = QRadioButton("选择文件:")
-        self._radio_file.setChecked(True)
+        if self._use_active_doc:
+            self._radio_active.setChecked(True)
+        else:
+            self._radio_file.setChecked(True)
         self._src_btn_group.addButton(self._radio_active)
         self._src_btn_group.addButton(self._radio_file)
         src_layout.addWidget(self._radio_active)
@@ -77,6 +83,7 @@ class ExportBomDialog(QDialog):
         file_row.addWidget(self._file_edit)
         file_row.addWidget(self._file_browse_btn)
         src_layout.addLayout(file_row)
+        self._radio_active.toggled.connect(self._on_source_changed)
         self._radio_active.toggled.connect(self._toggle_source_row)
         layout.addWidget(src_group)
 
@@ -85,7 +92,10 @@ class ExportBomDialog(QDialog):
         output_layout = QVBoxLayout(output_group)
         self._radio_same   = QRadioButton("与源文件相同目录")
         self._radio_custom = QRadioButton("自定义目录:")
-        self._radio_same.setChecked(True)
+        if self._use_same_dir:
+            self._radio_same.setChecked(True)
+        else:
+            self._radio_custom.setChecked(True)
         _btn_group = QButtonGroup(self)
         _btn_group.addButton(self._radio_same)
         _btn_group.addButton(self._radio_custom)
@@ -103,12 +113,15 @@ class ExportBomDialog(QDialog):
         folder_row.addWidget(self._folder_edit)
         folder_row.addWidget(self._folder_browse_btn)
         output_layout.addLayout(folder_row)
+        self._radio_custom.toggled.connect(self._on_folder_mode_changed)
         self._radio_custom.toggled.connect(self._toggle_folder_row)
         layout.addWidget(output_group)
 
         if self._last_output_dir:
-            self._radio_custom.setChecked(True)
             self._folder_edit.setText(self._last_output_dir)
+        if not self._use_same_dir:
+            self._folder_edit.setEnabled(True)
+            self._folder_browse_btn.setEnabled(True)
 
         # ── BOM type + summary options (combined group) ─────────────────────
         bom_opts_group  = QGroupBox("BOM类型与汇总选项")
@@ -154,6 +167,25 @@ class ExportBomDialog(QDialog):
         bom_type_row.addStretch()
         bom_opts_layout.addLayout(bom_type_row)
         layout.addWidget(bom_opts_group)
+
+        # ── Output format ────────────────────────────────────────────────────
+        fmt_group  = QGroupBox("输出格式")
+        fmt_layout = QHBoxLayout(fmt_group)
+        self._fmt_btn_group  = QButtonGroup(self)
+        self._radio_xlsx     = QRadioButton("Excel工作簿 (.xlsx)")
+        self._radio_csv      = QRadioButton("CSV文件 (.csv)")
+        self._fmt_btn_group.addButton(self._radio_xlsx)
+        self._fmt_btn_group.addButton(self._radio_csv)
+        if self._output_format == "csv":
+            self._radio_csv.setChecked(True)
+        else:
+            self._radio_xlsx.setChecked(True)
+        self._radio_xlsx.toggled.connect(self._on_format_changed)
+        fmt_layout.addWidget(self._radio_xlsx)
+        fmt_layout.addWidget(self._radio_csv)
+        fmt_layout.addStretch()
+        layout.addWidget(fmt_group)
+
         col_group  = QGroupBox("导出列（拖动以排序）")
         col_outer  = QVBoxLayout(col_group)
         col_layout = QHBoxLayout()
@@ -223,6 +255,14 @@ class ExportBomDialog(QDialog):
             self._sort_col_combo.setCurrentIndex(saved_sort_idx)
         self._sort_col_combo.currentIndexChanged.connect(self._on_sort_col_changed)
 
+        # If opening in summary mode (restored from settings), hide the Level column
+        if self._summarize:
+            self._on_bom_type_changed(True)
+
+        # Apply restored data-source state (disables file controls when active-doc was selected)
+        if self._use_active_doc:
+            self._toggle_source_row(True)
+
         # ── Action buttons ──────────────────────────────────────────────────
         action_row  = QHBoxLayout()
         confirm_btn = QPushButton("导出")
@@ -254,9 +294,19 @@ class ExportBomDialog(QDialog):
         self._folder_edit.setEnabled(checked)
         self._folder_browse_btn.setEnabled(checked)
 
+    def _on_folder_mode_changed(self, custom_checked: bool) -> None:
+        self._use_same_dir = not custom_checked
+        self._settings.setValue("use_same_dir", self._use_same_dir)
+
+    def _on_source_changed(self, active_checked: bool) -> None:
+        self._use_active_doc = active_checked
+        self._settings.setValue("use_active_doc", active_checked)
+
     def _toggle_source_row(self, active_checked: bool) -> None:
         self._file_edit.setEnabled(not active_checked)
         self._file_browse_btn.setEnabled(not active_checked)
+        # 使用活动文档时无法确定源文件路径，禁用"与源文件相同目录"选项
+        self._radio_same.setEnabled(not active_checked)
         if active_checked and self._radio_same.isChecked():
             self._radio_custom.setChecked(True)
 
@@ -307,7 +357,7 @@ class ExportBomDialog(QDialog):
             self._selected_list.setCurrentRow(row + 1)
 
     def _on_bom_type_changed(self, summary_checked: bool) -> None:
-        """When BOM type switches, move the 'Level' column between the lists."""
+        """When BOM type switches, hide/show the 'Level' column in both lists."""
         self._summarize = summary_checked
         self._settings.setValue("summarize", summary_checked)
 
@@ -315,13 +365,22 @@ class ExportBomDialog(QDialog):
         self._summary_opts_widget.setVisible(summary_checked)
 
         if summary_checked:
-            # Move all "Level" items from selected to available
-            # (iterate in reverse so takeItem indices stay valid)
-            for i in range(self._selected_list.count() - 1, -1, -1):
-                item = self._selected_list.item(i)
-                if self._item_internal(item) == "Level":
-                    self._selected_list.takeItem(i)
-                    self._avail_list.addItem(self._make_col_item("Level"))
+            # Remove "Level" from both lists entirely (meaningless in summary BOM)
+            for lst in (self._selected_list, self._avail_list):
+                for i in range(lst.count() - 1, -1, -1):
+                    if self._item_internal(lst.item(i)) == "Level":
+                        lst.takeItem(i)
+        else:
+            # Restore "Level" to the available list if it is not present anywhere
+            level_present = any(
+                self._item_internal(self._selected_list.item(i)) == "Level"
+                for i in range(self._selected_list.count())
+            ) or any(
+                self._item_internal(self._avail_list.item(i)) == "Level"
+                for i in range(self._avail_list.count())
+            )
+            if not level_present:
+                self._selected_list.insertItem(0, self._make_col_item("Level"))
 
     def _on_include_assemblies_toggled(self, checked: bool) -> None:
         self._summary_include_assemblies = checked
@@ -332,6 +391,10 @@ class ExportBomDialog(QDialog):
         if col:
             self._summary_sort_column = col
             self._settings.setValue("summary_sort_column", col)
+
+    def _on_format_changed(self, xlsx_checked: bool) -> None:
+        self._output_format = "xlsx" if xlsx_checked else "csv"
+        self._settings.setValue("output_format", self._output_format)
 
     def _confirm(self) -> None:
         use_active = self._radio_active.isChecked()
@@ -366,7 +429,7 @@ class ExportBomDialog(QDialog):
         summarize = self._radio_summary.isChecked()
         label_text = "正在导出汇总BOM，请稍候…" if summarize else "正在导出BOM，请稍候…"
         progress = QProgressDialog(label_text, None, 0, 0, self)
-        progress.setWindowTitle("导出BOM汇总" if summarize else "导出BOM")
+        progress.setWindowTitle("导出汇总BOM" if summarize else "导出BOM")
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(300)
         progress.setValue(0)
@@ -386,6 +449,7 @@ class ExportBomDialog(QDialog):
                 summarize=summarize,
                 summary_include_assemblies=self._summary_include_assemblies,
                 summary_sort_column=self._summary_sort_column or None,
+                output_format=self._output_format,
             )
         except Exception as e:
             progress.close()
@@ -394,5 +458,6 @@ class ExportBomDialog(QDialog):
         finally:
             progress.close()
 
-        QMessageBox.information(self, "导出成功", "BOM已成功导出为Excel文件。")
+        fmt_label = "CSV文件" if self._output_format == "csv" else "Excel文件"
+        QMessageBox.information(self, "导出成功", f"BOM已成功导出为{fmt_label}。")
         self.accept()
