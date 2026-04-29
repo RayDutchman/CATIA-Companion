@@ -39,79 +39,53 @@ def _mat4_mul(A: list[list[float]], B: list[list[float]]) -> list[list[float]]:
     return C
 
 
-def _position_to_mat4(product_com) -> list[list[float]]:
-    """从 product.com_object.Position.GetComponents() 读取位置，返回 4×4 矩阵。
+def _position_to_mat4(product) -> list[list[float]]:
+    """从 pycatia Product 包装对象的 position.get_components() 读取位置，返回 4×4 矩阵。
 
-    CATIA Position.GetComponents 返回 12 个分量，存储约定（列主序）：
-      [0..2]  = 旋转矩阵第一列 (R[:,0])
-      [3..5]  = 旋转矩阵第二列 (R[:,1])
-      [6..8]  = 旋转矩阵第三列 (R[:,2])
-      [9..11] = 平移向量 T
+    接收 pycatia Product 包装对象（非 com_object），调用
+    ``product.position.get_components(arr)``。
+    pycatia 的 Position 包装器会将 CATIA 返回的 12 个 double 分量原地写入
+    传入的列表，存储约定（列主序）：
+      arr[0..2]  = 旋转矩阵第一列 (R[:,0])
+      arr[3..5]  = 旋转矩阵第二列 (R[:,1])
+      arr[6..8]  = 旋转矩阵第三列 (R[:,2])
+      arr[9..11] = 平移向量 T
 
     变换关系：P_parent = R @ P_local + T
 
-    路径说明（按优先级）：
-      路径 0 — pythoncom.VARIANT(VT_ARRAY|VT_R8, ...)：
-               构造与 CATIA 期望类型完全匹配的 SAFEARRAY(double)，
-               win32com 晚绑定下会将 COM 填写的值回写到 VARIANT.value。
-               这是 win32com 晚绑定下最可靠的方式，可解决 ret=0、
-               传入 list 不被修改的问题。
-      路径 1 — 传入 list 并捕获返回值：
-               部分早绑定或特殊 pycatia 版本会把 ByRef 结果放入返回值；
-               极少数环境会直接原地修改传入 list。
-      路径 2 — 无参调用：
-               极少数 CATIA/pycatia 版本支持直接返回分量序列。
-      兜底   — 返回 4×4 单位矩阵，视作零件位于父坐标系原点。
+    若调用失败，返回 4×4 单位矩阵（视作零件位于父坐标系原点）。
     """
-    components: list[float] | None = None
-
-    # 路径 0：pythoncom.VARIANT 显式指定 SAFEARRAY(double) 类型
-    # win32com 晚绑定下，传 Python list 时 GetComponents 返回 HRESULT(0) 而非数组；
-    # 使用 VT_ARRAY|VT_R8 的 VARIANT 可令 win32com 在调用后正确回写填充结果。
     try:
-        import pythoncom  # pywin32 的一部分，pycatia 已依赖
-        arr_var = pythoncom.VARIANT(
-            pythoncom.VT_ARRAY | pythoncom.VT_R8,
-            [0.0] * 12,
-        )
-        product_com.Position.GetComponents(arr_var)
-        val = arr_var.value
-        if val is not None and hasattr(val, '__len__') and len(val) >= 12:
-            components = list(val)
+        product_name = getattr(product, "name", repr(product))
     except Exception:
-        pass
+        product_name = repr(product)
 
-    # 路径 1：传入 list 并捕获返回值（早绑定/部分环境 ByRef → 返回值）
-    if components is None:
-        try:
-            arr = [0.0] * 12
-            ret = product_com.Position.GetComponents(arr)
-            if ret is not None and hasattr(ret, '__len__') and len(ret) >= 12:
-                components = list(ret)
-            elif any(v != 0.0 for v in arr):
-                # 极少数环境会原地填充传入列表
-                components = list(arr)
-        except Exception:
-            pass
+    logger.debug(f"[MAT4] {product_name}: 调用 product.position.get_components(arr)")
 
-    # 路径 2：无参调用（部分版本的 CATIA/pycatia 直接返回分量序列）
-    if components is None:
-        try:
-            result = product_com.Position.GetComponents()
-            if result is not None and hasattr(result, '__len__') and len(result) >= 12:
-                components = list(result)
-        except Exception:
-            pass
-
-    if components is None:
+    try:
+        arr = [0.0] * 12
+        product.position.get_components(arr)
+        logger.debug(f"[MAT4] {product_name}: get_components 返回 arr={arr}")
+    except Exception as e:
+        logger.debug(f"[MAT4] {product_name}: get_components 失败: {e}，返回单位矩阵")
         return _identity_4x4()
 
-    return [
-        [components[0], components[3], components[6], components[9]],
-        [components[1], components[4], components[7], components[10]],
-        [components[2], components[5], components[8], components[11]],
-        [0.0,           0.0,           0.0,           1.0          ],
+    if not any(v != 0.0 for v in arr):
+        logger.debug(
+            f"[MAT4] {product_name}: arr 全为零（可能调用未生效），返回单位矩阵"
+        )
+        return _identity_4x4()
+
+    mat = [
+        [arr[0], arr[3], arr[6], arr[9]],
+        [arr[1], arr[4], arr[7], arr[10]],
+        [arr[2], arr[5], arr[8], arr[11]],
+        [0.0,    0.0,    0.0,    1.0   ],
     ]
+    logger.debug(
+        f"[MAT4] {product_name}: R[0]={mat[0][:3]}, T={[mat[0][3], mat[1][3], mat[2][3]]}"
+    )
+    return mat
 
 
 # ---------------------------------------------------------------------------
@@ -871,7 +845,7 @@ def collect_mass_props_rows(
                 node_type = "产品"
 
         # 计算本节点到根的累积变换矩阵
-        local_mat4 = _position_to_mat4(product.com_object)
+        local_mat4 = _position_to_mat4(product)
         abs_mat4   = _mat4_mul(parent_mat4, local_mat4)
 
         # 读取属性（仅 Nomenclature 和 Revision）
