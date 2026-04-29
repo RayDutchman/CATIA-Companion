@@ -190,9 +190,32 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
             logger.debug(f"[SPA]   {label} GetVolume() 无参也失败: {e2}")
         return None
 
+    def _read_density(meas, label: str) -> float | None:
+        """从 Measurable 直接读取密度：先 .Density 属性，再 GetDensity() 方法。
+        材质已应用时 SPA 可直接返回密度，无需通过 Mass/Volume 推算。
+        """
+        try:
+            v = meas.Density
+            if v and v > 0.0:
+                logger.debug(f"[SPA]   {label} .Density = {v}")
+                return float(v)
+        except Exception as e1:
+            logger.debug(f"[SPA]   {label} .Density 失败: {e1}，尝试 GetDensity()")
+        try:
+            v = meas.GetDensity()
+            if v and v > 0.0:
+                logger.debug(f"[SPA]   {label} GetDensity() = {v}")
+                return float(v)
+        except Exception as e2:
+            logger.debug(f"[SPA]   {label} GetDensity() 也失败: {e2}")
+        return None
+
     # ── 预推算零件密度（材质定义在 Part 层时 per-body GetMass 失败的备用路径）
-    # 依次尝试：part_com 直接 → 各 Body 直接（取第一个成功的）
-    # density = part_mass / part_volume，单位 kg/mm³
+    # 优先顺序：
+    #   1. meas.Density / GetDensity()  —— SPA 直接返回材质密度
+    #   2. mass / volume 比值            —— 通过质量和体积推算
+    #   3. Part.Analyze                  —— Part 级 Analyze 接口推算
+    # density 单位 kg/mm³
     _part_density: float | None = None
     _density_candidates = [("part_com", part_com)] + [
         (f"Body_{j}", bodies.Item(j)) for j in range(1, body_count + 1)
@@ -202,17 +225,42 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
             _mw, _src = _get_measurable(_dc_obj, f"密度探针({_dc_label})")
             if _mw is None:
                 continue
+            # 路径 1：直接读密度
+            _direct_d = _read_density(_mw, f"密度探针({_dc_label})")
+            if _direct_d and _direct_d > 0.0:
+                _part_density = _direct_d
+                logger.debug(
+                    f"[SPA] 推算零件密度（来源={_dc_label}/{_src}，直接读取）:"
+                    f" {_part_density:.6e} kg/mm³"
+                )
+                break
+            # 路径 2：质量/体积比
             _wm = _read_mass(_mw, f"密度探针({_dc_label})")
             _wv = _read_volume(_mw, f"密度探针({_dc_label})")
             if _wm and _wm > 0.0 and _wv and _wv > 0.0:
                 _part_density = _wm / _wv
                 logger.debug(
-                    f"[SPA] 推算零件密度（来源={_dc_label}/{_src}）:"
+                    f"[SPA] 推算零件密度（来源={_dc_label}/{_src}，质量/体积）:"
                     f" {_part_density:.6e} kg/mm³"
                 )
                 break
         except Exception as _de:
             logger.debug(f"[SPA] 密度探针({_dc_label}) 失败: {_de}")
+
+    # 路径 3：Part.Analyze 接口
+    if _part_density is None:
+        try:
+            _analyze = part_com.Analyze
+            _pa_mass = _analyze.Mass
+            _pa_vol  = _analyze.Volume
+            if _pa_mass and _pa_mass > 0.0 and _pa_vol and _pa_vol > 0.0:
+                _part_density = _pa_mass / _pa_vol
+                logger.debug(
+                    f"[SPA] 推算零件密度（Part.Analyze）: {_part_density:.6e} kg/mm³"
+                )
+        except Exception as _pae:
+            logger.debug(f"[SPA] Part.Analyze 密度推算失败: {_pae}")
+
     if _part_density is None:
         logger.debug("[SPA] 无法推算零件密度，体积法回退将不可用")
 
@@ -299,16 +347,22 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
                 logger.debug(f"[SPA]   {label} 质量获取失败，尝试体积法回退")
                 vol = _read_volume(meas, label)
 
-                if vol is not None and vol > 0.0 and _part_density is not None and _part_density > 0.0:
-                    mass = _part_density * vol
+                # 密度优先使用全局推算值；若仍为 None，尝试从本 Body 的
+                # Measurable 直接读取（材质仅应用于单个 Body 的场景）
+                effective_density = _part_density
+                if effective_density is None:
+                    effective_density = _read_density(meas, label)
+
+                if vol is not None and vol > 0.0 and effective_density is not None and effective_density > 0.0:
+                    mass = effective_density * vol
                     logger.debug(
                         f"[SPA]   {label} 体积法质量"
-                        f" = {_part_density:.6e} × {vol:.6g} = {mass:.6g} kg"
+                        f" = {effective_density:.6e} × {vol:.6g} = {mass:.6g} kg"
                     )
                 else:
                     logger.debug(
                         f"[SPA]   {label} 体积法也无法获取质量"
-                        f"（vol={vol}, density={_part_density}），尝试 GetCOG 诊断探针"
+                        f"（vol={vol}, density={effective_density}），尝试 GetCOG 诊断探针"
                     )
                     # ── GetCOG 诊断探针 ─────────────────────────────────────
                     # GetCOG 是纯几何量（几何重心），不依赖材质定义，可能在
