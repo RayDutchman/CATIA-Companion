@@ -78,20 +78,19 @@ def _position_to_mat4(product_com) -> list[list[float]]:
 def _measure_part_mass_props(doc_com, part_com) -> dict | None:
     """通过 CATIA SPA 工作台逐一测量零件各 Body 的质量特性。
 
-    策略：仅使用 per-body 路径，通过 ``part_com.CreateReferenceFromObject(body)``
-    创建引用后调用 ``spa.GetMeasurable(ref)``。
+    对每个 Body 依次尝试两种路径获取 Measurable：
+      路径 A（首选）：``spa.GetMeasurable(body)`` — 直接传 Body 对象，
+        符合 CATIA V5 脚本推荐方式，能获取全部质量/体积属性。
+      路径 B（回退）：``spa.GetMeasurable(CreateReferenceFromObject(body))`` — 通过
+        拓扑引用，某些安装配置下可能成功。
 
-    当材质定义在零件（Part）层面而非单个 Body 层面时，对 Body 引用调用
-    ``GetMass()`` 会抛出 CATIA COM 错误（body 不拥有材质属性）。
-    此时回退为体积法：
-      1. ``GetVolume(body_ref)``  →  该 Body 的体积（纯几何量，始终可用）
-      2. ``GetCOG(body_ref)``     →  该 Body 的几何中心（等价于质心，密度均匀）
-      3. 由零件整体推算密度：``density = part_mass / part_vol``
-         （密度是材质常量，推算结果精确，与包络体无关）
-      4. ``body_mass = density × body_vol``
+    质量读取顺序：``.Mass`` 属性 → ``GetMass()`` 方法 → 体积法回退。
 
-    如此即可正确排除"包络体"：包络体对应的 Body 不被纳入质量求和，
-    而零件整体数据仅用于推算密度，不直接贡献最终质量。
+    体积法回退（当材质定义在零件层而非 Body 层时）：
+      1. 密度探针：依次对 part_com / 各 Body 直接调用 GetMeasurable，
+         取 mass/volume → 推算 density = mass/vol（kg/mm³）。
+      2. ``GetVolume(body)`` 获取 Body 体积（纯几何量）。
+      3. ``body_mass = density × body_vol``
 
     返回字典：
       {
@@ -134,42 +133,89 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
         logger.debug("[SPA] 没有找到任何 Body，测量中止")
         return None
 
+    # ── 辅助：获取一个 Measurable 对象（直接传对象或通过 Reference）─────────
+    def _get_measurable(obj, obj_label: str):
+        """尝试获取 obj 的 Measurable：先直接传对象，再通过 CreateReferenceFromObject。
+        返回 (measurable, source_label)，失败时返回 (None, None)。
+        """
+        # 路径 A：直接传 Body/Part 对象（CATIA V5 脚本推荐方式）
+        try:
+            m = spa.GetMeasurable(obj)
+            logger.debug(f"[SPA]   {obj_label} GetMeasurable(直接) 成功，类型: {type(m).__name__}")
+            return m, "直接"
+        except Exception as e_direct:
+            logger.debug(f"[SPA]   {obj_label} GetMeasurable(直接) 失败: {e_direct}")
+
+        # 路径 B：通过 CreateReferenceFromObject 创建引用再测量
+        try:
+            ref = part_com.CreateReferenceFromObject(obj)
+            logger.debug(f"[SPA]   {obj_label} CreateReferenceFromObject 成功，类型: {type(ref).__name__}")
+            m = spa.GetMeasurable(ref)
+            logger.debug(f"[SPA]   {obj_label} GetMeasurable(ref) 成功，类型: {type(m).__name__}")
+            return m, "ref"
+        except Exception as e_ref:
+            logger.debug(f"[SPA]   {obj_label} GetMeasurable(ref) 失败: {e_ref}")
+
+        return None, None
+
+    def _read_mass(meas, label: str) -> float | None:
+        """从 Measurable 读取质量：先 .Mass 属性，再 GetMass() 方法。"""
+        try:
+            v = meas.Mass
+            logger.debug(f"[SPA]   {label} .Mass = {v}")
+            return v
+        except Exception as e1:
+            logger.debug(f"[SPA]   {label} .Mass 失败: {e1}，尝试 GetMass()")
+        try:
+            v = meas.GetMass()
+            logger.debug(f"[SPA]   {label} GetMass() = {v}")
+            return v
+        except Exception as e2:
+            logger.debug(f"[SPA]   {label} GetMass() 也失败: {e2}")
+        return None
+
+    def _read_volume(meas, label: str) -> float | None:
+        """从 Measurable 读取体积：先传数组，再无参调用。"""
+        try:
+            arr = [0.0]
+            meas.GetVolume(arr)
+            logger.debug(f"[SPA]   {label} GetVolume(arr) = {arr[0]}")
+            return arr[0]
+        except Exception as e1:
+            logger.debug(f"[SPA]   {label} GetVolume(arr) 失败: {e1}，尝试无参")
+        try:
+            v = meas.GetVolume()
+            logger.debug(f"[SPA]   {label} GetVolume() 无参 = {v}")
+            return v
+        except Exception as e2:
+            logger.debug(f"[SPA]   {label} GetVolume() 无参也失败: {e2}")
+        return None
+
     # ── 预推算零件密度（材质定义在 Part 层时 per-body GetMass 失败的备用路径）
+    # 依次尝试：part_com 直接 → 各 Body 直接（取第一个成功的）
     # density = part_mass / part_volume，单位 kg/mm³
-    # 仅用于推算密度，不直接参与最终质量累加，因此包络体不影响结果。
     _part_density: float | None = None
-    try:
-        meas_whole = spa.GetMeasurable(part_com)
-        logger.debug(f"[SPA] 整体 GetMeasurable(part_com) 成功（仅用于密度推算）")
-        _w_mass: float | None = None
+    _density_candidates = [("part_com", part_com)] + [
+        (f"Body_{j}", bodies.Item(j)) for j in range(1, body_count + 1)
+    ]
+    for _dc_label, _dc_obj in _density_candidates:
         try:
-            _w_mass = meas_whole.Mass
-            logger.debug(f"[SPA] 整体 .Mass = {_w_mass}")
-        except Exception as _me1:
-            logger.debug(f"[SPA] 整体 .Mass 失败: {_me1}，尝试 GetMass()")
-            try:
-                _w_mass = meas_whole.GetMass()
-                logger.debug(f"[SPA] 整体 GetMass() = {_w_mass}")
-            except Exception as _me2:
-                logger.debug(f"[SPA] 整体 GetMass() 也失败: {_me2}")
-        _w_vol: float | None = None
-        try:
-            _w_vol_arr = [0.0]
-            meas_whole.GetVolume(_w_vol_arr)
-            _w_vol = _w_vol_arr[0]
-            logger.debug(f"[SPA] 整体 GetVolume(arr) = {_w_vol}")
-        except Exception as _ve1:
-            logger.debug(f"[SPA] 整体 GetVolume(arr) 失败: {_ve1}，尝试无参")
-            try:
-                _w_vol = meas_whole.GetVolume()
-                logger.debug(f"[SPA] 整体 GetVolume() 无参 = {_w_vol}")
-            except Exception as _ve2:
-                logger.debug(f"[SPA] 整体 GetVolume() 无参也失败: {_ve2}")
-        if _w_mass and _w_mass > 0.0 and _w_vol and _w_vol > 0.0:
-            _part_density = _w_mass / _w_vol
-            logger.debug(f"[SPA] 推算零件密度: {_part_density:.6e} kg/mm³")
-    except Exception as _de:
-        logger.debug(f"[SPA] 整体测量（密度推算）失败: {_de}")
+            _mw, _src = _get_measurable(_dc_obj, f"密度探针({_dc_label})")
+            if _mw is None:
+                continue
+            _wm = _read_mass(_mw, f"密度探针({_dc_label})")
+            _wv = _read_volume(_mw, f"密度探针({_dc_label})")
+            if _wm and _wm > 0.0 and _wv and _wv > 0.0:
+                _part_density = _wm / _wv
+                logger.debug(
+                    f"[SPA] 推算零件密度（来源={_dc_label}/{_src}）:"
+                    f" {_part_density:.6e} kg/mm³"
+                )
+                break
+        except Exception as _de:
+            logger.debug(f"[SPA] 密度探针({_dc_label}) 失败: {_de}")
+    if _part_density is None:
+        logger.debug("[SPA] 无法推算零件密度，体积法回退将不可用")
 
     total_mass = 0.0
     weighted_cog = [0.0, 0.0, 0.0]
@@ -241,58 +287,25 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
             label = f"Body_{i}({body_name})"
             logger.debug(f"[SPA] {label} COM 类型: {type(body).__name__}")
 
-            # 通过 CreateReferenceFromObject 创建正确类型的引用
-            ref = None
-            try:
-                ref = part_com.CreateReferenceFromObject(body)
-                logger.debug(f"[SPA]   {label} CreateReferenceFromObject 成功，类型: {type(ref).__name__}")
-            except Exception as ref_err:
-                logger.debug(f"[SPA]   {label} CreateReferenceFromObject 失败: {ref_err}")
-
-            if ref is None:
-                logger.debug(f"[SPA]   {label} ref 为 None，跳过")
+            meas, meas_src = _get_measurable(body, label)
+            if meas is None:
+                logger.debug(f"[SPA]   {label} 无法获取 Measurable，跳过")
                 continue
 
-            try:
-                meas = spa.GetMeasurable(ref)
-                logger.debug(f"[SPA]   {label} GetMeasurable(ref) 成功，类型: {type(meas).__name__}")
-            except Exception as meas_err:
-                logger.debug(f"[SPA]   {label} GetMeasurable(ref) 失败: {meas_err}")
-                continue
-
-            # ── 尝试直接读取质量（先 .Mass 属性，再 GetMass() 方法）─────
-            mass: float | None = None
-            try:
-                mass = meas.Mass
-                logger.debug(f"[SPA]   {label} .Mass = {mass}")
-            except Exception as ma_err:
-                logger.debug(f"[SPA]   {label} .Mass 失败: {ma_err}，尝试 GetMass()")
-                try:
-                    mass = meas.GetMass()
-                    logger.debug(f"[SPA]   {label} GetMass() = {mass}")
-                except Exception as gm_err:
-                    logger.debug(f"[SPA]   {label} GetMass() 也失败（材质可能定义在 Part 层）: {gm_err}")
+            # ── 读取质量 ─────────────────────────────────────────────
+            mass = _read_mass(meas, label)
 
             if mass is None or mass <= 0.0:
                 # ── 回退：体积 × 密度 ───────────────────────────────────
-                logger.debug(f"[SPA]   {label} 尝试体积法回退")
-                vol: float | None = None
-                try:
-                    vol_arr = [0.0]
-                    meas.GetVolume(vol_arr)
-                    vol = vol_arr[0]
-                    logger.debug(f"[SPA]   {label} GetVolume(arr) = {vol}")
-                except Exception as ve1:
-                    logger.debug(f"[SPA]   {label} GetVolume(arr) 失败: {ve1}，尝试无参")
-                    try:
-                        vol = meas.GetVolume()
-                        logger.debug(f"[SPA]   {label} GetVolume() 无参 = {vol}")
-                    except Exception as ve2:
-                        logger.debug(f"[SPA]   {label} GetVolume() 无参也失败: {ve2}")
+                logger.debug(f"[SPA]   {label} 质量获取失败，尝试体积法回退")
+                vol = _read_volume(meas, label)
 
                 if vol is not None and vol > 0.0 and _part_density is not None and _part_density > 0.0:
                     mass = _part_density * vol
-                    logger.debug(f"[SPA]   {label} 体积法质量 = {_part_density:.6e} × {vol:.6g} = {mass:.6g} kg")
+                    logger.debug(
+                        f"[SPA]   {label} 体积法质量"
+                        f" = {_part_density:.6e} × {vol:.6g} = {mass:.6g} kg"
+                    )
                 else:
                     logger.debug(
                         f"[SPA]   {label} 体积法也无法获取质量"
@@ -304,8 +317,6 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
             cog = _get_cog(meas, label)
 
             # ── 读取转动惯量 ───────────────────────────────────────────
-            # 当材质在 Part 层时，Body ref 的 GetInertiaMatrix 可能也失败；
-            # 此时使用质量 × 零转动惯量（点质量近似）并依赖平行轴定理贡献。
             inertia_9 = _get_inertia_matrix(meas, label)
 
             _accumulate(mass, cog, inertia_9)
