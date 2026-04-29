@@ -716,7 +716,7 @@ class MassPropsDialog(QDialog):
         unreadable  = bool(row_data.get("_unreadable"))
         meas_failed = bool(row_data.get("_meas_failed"))
         node_type   = str(row_data.get("Type", ""))
-        row_locked  = unreadable or not_found
+        row_locked  = unreadable or not_found or meas_failed
 
         if pn:
             self._pn_to_items.setdefault(pn, []).append(item)
@@ -771,16 +771,19 @@ class MassPropsDialog(QDialog):
         fn_col = self._columns.index("Filename") if "Filename" in self._columns else -1
         if row_locked:
             grey = QColor(160, 160, 160)
-            bg   = QColor(255, 205, 205) if not_found else QColor(245, 245, 245)
+            if not_found:
+                bg  = QColor(255, 205, 205)
+                tip = "该零件/装配体的文件未被CATIA检索到，行内容不可编辑。"
+            elif meas_failed:
+                bg  = QColor(255, 210, 160)
+                tip = "该零件的质量特性测量失败，行内容不可编辑。"
+            else:
+                bg  = QColor(245, 245, 245)
+                tip = "该零件/装配体处于轻量化模式，无法读取属性。"
             for ci in range(len(self._columns)):
                 item.setForeground(ci, grey)
                 item.setBackground(ci, bg)
             if fn_col >= 0:
-                tip = (
-                    "该零件/装配体的文件未被CATIA检索到，行内容不可编辑。"
-                    if not_found else
-                    "该零件/装配体处于轻量化模式，无法读取属性。"
-                )
                 item.setToolTip(fn_col, tip)
         elif no_file:
             bg_unsaved = QColor(255, 245, 180)
@@ -788,10 +791,6 @@ class MassPropsDialog(QDialog):
                 item.setBackground(ci, bg_unsaved)
             if fn_col >= 0:
                 item.setToolTip(fn_col, "该零件尚未保存到磁盘，质量特性数据可能不完整。")
-        elif meas_failed and node_type == "零件":
-            bg = QColor(255, 210, 160)
-            for ci in range(len(self._columns)):
-                item.setBackground(ci, bg)
         elif node_type in ("产品", "部件"):
             bg = QColor(240, 242, 245)
             for ci in range(len(self._columns)):
