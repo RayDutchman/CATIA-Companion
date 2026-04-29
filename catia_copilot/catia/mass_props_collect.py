@@ -130,7 +130,7 @@ def _try_mp_params(part_com, label: str = "") -> dict | None:
 
 
 def _run_inertia_vbs_and_read(
-    doc_com, part_com, label: str = "", filepath: str = ""
+    doc_com, part_com, label: str = "", part_number: str = ""
 ) -> dict | None:
     """若 MP_* 参数不存在，自动运行 create_inertia_relations.catvbs，
     再读取写入的 MP_* 参数。
@@ -139,11 +139,12 @@ def _run_inertia_vbs_and_read(
     若零件没有 "惯量包络体.1\\质量"（Keep 测量）参数，脚本会静默退出，不弹框。
 
     参数：
-        doc_com:  COM 对象（PartDocument 层）。
-        part_com: COM 对象（Part 层），用于读取 MP_* 参数。
-        label:    调试标签，用于 debug 日志。
-        filepath: 零件文档的磁盘路径，作为 iParameter[0] 传给 VBS，
-                  VBS 可据此定位并激活目标文档；为空时 VBS 使用当前活动文档。
+        doc_com:     COM 对象（PartDocument 层）。
+        part_com:    COM 对象（Part 层），用于读取 MP_* 参数。
+        label:       调试标签，用于 debug 日志。
+        part_number: 零件号（PartNumber），作为 iParameter[0] 传给 VBS，
+                     VBS 按此在已打开文档中定位并激活目标零件文档。
+                     为空时 VBS 使用当前活动文档。
     """
     tag = f"[MP] {label} " if label else "[MP] "
 
@@ -154,11 +155,12 @@ def _run_inertia_vbs_and_read(
             logger.debug(f"{tag}找不到 VBS 文件: {vbs_path}，跳过")
             return None
 
-        logger.debug(f"{tag}激活零件文档并运行 {vbs_path.name}，filepath={filepath!r}")
+        logger.debug(f"{tag}激活零件文档并运行 {vbs_path.name}，part_number={part_number!r}")
         doc_com.Activate()
-        # 将零件文件路径作为 iParameter 传给 VBS，让脚本可自行定位目标文档
+        # 将零件号作为 iParameter 传给 VBS，让脚本按 PartNumber 定位目标文档。
+        # 使用 PartNumber 而非文件路径，可避免受零件未保存（路径无效）的影响。
         doc_com.Application.SystemService.ExecuteScript(
-            str(vbs_path.parent), 1, vbs_path.name, "CATMain", [filepath]
+            str(vbs_path.parent), 1, vbs_path.name, "CATMain", [part_number]
         )
 
         result = _try_mp_params(part_com, label)
@@ -172,7 +174,7 @@ def _run_inertia_vbs_and_read(
         return None
 
 
-def _measure_part_mass_props(doc_com, part_com, filepath: str = "") -> dict | None:
+def _measure_part_mass_props(doc_com, part_com, part_number: str = "") -> dict | None:
     """测量零件质量特性。
 
     所有返回值均使用 **g / mm / g·mm²** 单位制（与 create_inertia_relations.catvbs 一致）。
@@ -190,9 +192,9 @@ def _measure_part_mass_props(doc_com, part_com, filepath: str = "") -> dict | No
          SPA 返回值（kg/kg·mm²）在返回前统一换算为 g/g·mm²（×1000）。
 
     参数：
-        doc_com:  COM 对象（PartDocument 层）。
-        part_com: COM 对象（Part 层）。
-        filepath: 零件文档的磁盘路径，传给 VBS 脚本以定位目标文档。
+        doc_com:     COM 对象（PartDocument 层）。
+        part_com:    COM 对象（Part 层）。
+        part_number: 零件号（PartNumber），传给 VBS 脚本以定位目标文档。
 
     返回字典：
       {
@@ -217,11 +219,23 @@ def _measure_part_mass_props(doc_com, part_com, filepath: str = "") -> dict | No
     # ── 路径 1：读取 MP_* 用户参数（由 create_inertia_relations.catvbs 写入）──────
     _mp = _try_mp_params(part_com, "直接读取")
     if _mp is not None:
+        logger.debug(
+            f"[MP] 路径1(MP_*参数) 成功: "
+            f"weight={_mp['weight']}g, "
+            f"cog={_mp['cog']}, "
+            f"Ixx={_mp['inertia'][0][0]}g·mm²"
+        )
         return _mp
 
     # ── 路径 2：自动运行 VBS 绑定脚本（要求零件已有 Keep 测量）─────────────────────
-    _mp = _run_inertia_vbs_and_read(doc_com, part_com, "VBS绑定", filepath)
+    _mp = _run_inertia_vbs_and_read(doc_com, part_com, "VBS绑定", part_number)
     if _mp is not None:
+        logger.debug(
+            f"[MP] 路径2(VBS绑定) 成功: "
+            f"weight={_mp['weight']}g, "
+            f"cog={_mp['cog']}, "
+            f"Ixx={_mp['inertia'][0][0]}g·mm²"
+        )
         return _mp
 
     # ── 路径 3：SPA 逐 Body 测量（兜底）─────────────────────────────────────────
@@ -622,6 +636,16 @@ def _post_process_rows(rows: list[dict]) -> None:
             for i in range(3)
         ]
 
+        # ── DEBUG: 记录变换前后值，便于排查根坐标系数据异常 ───────────────
+        logger.debug(
+            f"[POST] {row.get('Part Number', '?')}  "
+            f"weight={mp.get('weight')}g | "
+            f"cog_local={[round(v,3) for v in cog_local]} → "
+            f"cog_root={[round(v,3) for v in cog_root]} | "
+            f"Ixx_local={I_local[0][0]:.3g} → Ixx_root={I_root[0][0]:.3g} | "
+            f"R[0]={[round(v,4) for v in R[0]]} T={[round(v,3) for v in T]}"
+        )
+
         # 更新显示字段为根坐标系值
         row["CogX"] = cog_root[0]
         row["CogY"] = cog_root[1]
@@ -851,11 +875,23 @@ def collect_mass_props_rows(
                         # 尝试获取 Part 对象（PartDocument 接口）
                         part_doc_com  = target_doc.com_object
                         part_com      = part_doc_com.Part
-                        mass_props    = _measure_part_mass_props(part_doc_com, part_com, filepath)
+                        mass_props    = _measure_part_mass_props(part_doc_com, part_com, pn)
                     except Exception as e:
                         logger.debug(f"无法测量零件 {filepath}: {e}")
                         mass_props  = None
                         spa_failed  = True
+
+                    # ── DEBUG: 记录每个零件的测量结果概要 ─────────────────────
+                    if mass_props is not None:
+                        _mp_dbg = mass_props
+                        logger.debug(
+                            f"[TRAV] {pn} 测量成功: "
+                            f"weight={_mp_dbg.get('weight')}g, "
+                            f"cog={[round(v,3) for v in _mp_dbg.get('cog',[0,0,0])]}, "
+                            f"Ixx={_mp_dbg.get('inertia',[[0]])[0][0]:.3g}g·mm²"
+                        )
+                    else:
+                        logger.debug(f"[TRAV] {pn} 所有测量路径均失败")
 
                     _mass_cache[filepath] = mass_props
                 else:

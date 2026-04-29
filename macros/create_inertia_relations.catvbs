@@ -24,9 +24,10 @@ Option Explicit
 '   若该参数不存在，脚本静默退出（不弹对话框），以便外部批量调用。
 '
 ' iParameters 用法（由 SystemService.ExecuteScript 传入）：
-'   iParameters(0) — 目标零件文档的完整磁盘路径（可选）。
-'     · 若提供且非空：脚本自动遍历已打开文档，找到路径匹配的 PartDocument
-'       并激活，再执行绑定；对于批量调用（每次激活不同零件）非常有用。
+'   iParameters(0) — 目标零件的零件号（PartNumber，可选）。
+'     · 若提供且非空：脚本自动遍历已打开的 PartDocument，找到
+'       part.PartNumber 与传入值匹配的文档并激活，再执行绑定。
+'       使用零件号而非文件路径，可避免受零件未保存（路径无效）的影响。
 '     · 若为空或省略：对 CATIA 当前活动文档执行绑定。
 '
 ' 幂等性：
@@ -39,14 +40,14 @@ Sub CATMain(iParameters)
     Dim CATIA As Application
     Set CATIA = GetObject(, "CATIA.Application")
 
-    ' ── 解析 iParameters(0)：目标零件文件路径（可选）───────────────────────
-    Dim targetPath As String
-    targetPath = ""
+    ' ── 解析 iParameters(0)：目标零件的零件号（PartNumber，可选）──────────
+    Dim targetPN As String
+    targetPN = ""
     On Error Resume Next
     If Not IsEmpty(iParameters) And Not IsNull(iParameters) Then
         If IsArray(iParameters) Then
             If UBound(iParameters) >= 0 Then
-                targetPath = CStr(iParameters(0))
+                targetPN = CStr(iParameters(0))
             End If
         End If
     End If
@@ -55,8 +56,9 @@ Sub CATMain(iParameters)
     ' ── 定位目标 PartDocument ──────────────────────────────────────────────
     Dim partDoc As PartDocument
 
-    If targetPath <> "" Then
-        ' 按路径在已打开文档中查找，并激活
+    If targetPN <> "" Then
+        ' 按零件号在已打开文档中查找，并激活。
+        ' 使用 PartNumber 可避免零件未保存时文件路径无效的问题。
         Dim i As Integer
         Dim found As Boolean
         found = False
@@ -65,8 +67,10 @@ Sub CATMain(iParameters)
             Dim doc As Document
             Set doc = CATIA.Documents.Item(i)
             If TypeName(doc) = "PartDocument" Then
-                ' 规范化路径比较（忽略大小写）
-                If LCase(doc.FullName) = LCase(targetPath) Then
+                ' 比较 Part.PartNumber（不区分大小写）
+                Dim pn As String
+                pn = doc.Part.PartNumber
+                If LCase(pn) = LCase(targetPN) Then
                     Set partDoc = doc
                     partDoc.Activate
                     found = True
@@ -76,10 +80,10 @@ Sub CATMain(iParameters)
         Next i
         On Error GoTo 0
 
-        ' 路径对应文档未在 CATIA 中打开，静默退出（外部程序负责打开文档）
+        ' 零件号对应文档未在 CATIA 中打开，静默退出（外部程序负责打开文档）
         If Not found Then Exit Sub
     Else
-        ' 未传入路径，使用当前活动文档
+        ' 未传入零件号，使用当前活动文档
         If CATIA.Documents.Count = 0 Then Exit Sub
         On Error Resume Next
         Dim docType As String
