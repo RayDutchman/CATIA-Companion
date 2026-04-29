@@ -193,14 +193,14 @@ Private Function GetOrCreateReal(params, paramName)
     On Error Resume Next
     Dim p
     Set p = params.Item(paramName)
-    On Error GoTo 0
-
-    If p Is Nothing Then
-        ' 某些环境下 “name” 作为变量名会导致解析/对象模型冲突，改用 paramName
-        On Error Resume Next
+    ' 注意：不在此处 On Error GoTo 0，因为若 Item() 出错 p 仍为 Empty（非 Nothing），
+    ' 对 Empty 变量使用 Is Nothing 会触发“缺少对象”错误 424。
+    ' 用 IsObject 先判断 p 是否为有效对象引用。
+    If Not IsObject(p) Or p Is Nothing Then
         Set p = params.CreateReal(paramName, 0)
-        On Error GoTo 0
     End If
+    Err.Clear
+    On Error GoTo 0
 
     Set GetOrCreateReal = p
 End Function
