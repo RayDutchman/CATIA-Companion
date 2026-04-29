@@ -37,6 +37,7 @@ from catia_copilot.ui.convert_dialog import FileConvertDialog
 from catia_copilot.ui.export_bom_dialog import ExportBomDialog
 from catia_copilot.ui.find_deps_dialog import FindDependenciesDialog
 from catia_copilot.ui.bom_edit_dialog import BomEditDialog
+from catia_copilot.ui.mass_props_dialog import MassPropsDialog
 from catia_copilot.ui.help_dialog import HelpDialog
 
 logger = logging.getLogger(__name__)
@@ -106,7 +107,13 @@ class MainWindow(QMainWindow):
         btn_bom_edit.setToolTip("在表格中编辑 BOM 属性并写回 CATIA")
         btn_bom_edit.clicked.connect(self._open_bom_edit_dialog)
 
-        for btn in (btn_bom_export, btn_bom_edit):
+        btn_mass_props = QPushButton("质量特性汇总")
+        btn_mass_props.setToolTip(
+            "遍历产品树，读取零件质量/重心/转动惯量，计算装配体总质量特性并导出"
+        )
+        btn_mass_props.clicked.connect(self._open_mass_props_dialog)
+
+        for btn in (btn_bom_export, btn_bom_edit, btn_mass_props):
             bom_layout.addWidget(btn)
         layout.addWidget(bom_group)
 
@@ -409,6 +416,9 @@ class MainWindow(QMainWindow):
 
     def _open_bom_edit_dialog(self) -> None:
         BomEditDialog(self).exec()
+
+    def _open_mass_props_dialog(self) -> None:
+        MassPropsDialog(self).exec()
 
     def _open_stamp_part_template_dialog(self) -> None:
         FileConvertDialog(

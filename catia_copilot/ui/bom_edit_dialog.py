@@ -192,7 +192,7 @@ class BomEditDialog(QDialog):
         summary_opts_layout.setContentsMargins(0, 0, 0, 0)
         summary_opts_layout.setSpacing(8)
 
-        self._include_assemblies_chk = QCheckBox("包含产品和部件（子装配体）")
+        self._include_assemblies_chk = QCheckBox("包含产品和部件")
         self._include_assemblies_chk.setToolTip(
             "勾选后，汇总BOM中也会列出产品和部件（子装配体），而不仅限于零件。"
         )
