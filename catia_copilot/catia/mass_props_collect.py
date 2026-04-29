@@ -76,11 +76,11 @@ def _position_to_mat4(product_com) -> list[list[float]]:
 # ---------------------------------------------------------------------------
 
 def _measure_part_mass_props(doc_com, part_com) -> dict | None:
-    """通过 CATIA SPA 工作台测量零件的质量特性。
+    """通过 CATIA SPA 工作台逐一测量零件各 Body 的质量特性。
 
-    策略（按优先级）：
-    1. 直接测量整个 Part（最可靠；适合单体和多体零件）。
-    2. 若整体测量失败，逐一测量各 Body（通过 CreateReferenceFromObject 创建引用）。
+    仅使用 per-body 策略：通过 ``part_com.CreateReferenceFromObject(body)``
+    创建正确类型的引用后再调用 ``spa.GetMeasurable(ref)``，
+    避免直接传入 Body COM 对象导致的类型不匹配错误。
 
     返回字典：
       {
@@ -92,10 +92,37 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
       }
     若测量失败则返回 None。
     """
+    # ── DEBUG: 记录传入对象的 COM 类型名 ─────────────────────────────────
+    try:
+        doc_type_name = type(doc_com).__name__
+        logger.debug(f"[SPA] doc_com 类型: {doc_type_name}")
+    except Exception as e:
+        logger.debug(f"[SPA] 无法获取 doc_com 类型: {e}")
+    try:
+        part_type_name = type(part_com).__name__
+        logger.debug(f"[SPA] part_com 类型: {part_type_name}")
+    except Exception as e:
+        logger.debug(f"[SPA] 无法获取 part_com 类型: {e}")
+
     try:
         spa = doc_com.GetWorkbench("SPAWorkbench")
+        logger.debug(f"[SPA] GetWorkbench('SPAWorkbench') 成功，类型: {type(spa).__name__}")
     except Exception as e:
-        logger.debug(f"无法获取 SPAWorkbench: {e}")
+        logger.debug(f"[SPA] 无法获取 SPAWorkbench: {e}")
+        return None
+
+    # ── 获取 Bodies 集合 ──────────────────────────────────────────────────
+    bodies = None
+    body_count = 0
+    try:
+        bodies = part_com.Bodies
+        body_count = bodies.Count
+        logger.debug(f"[SPA] Bodies.Count = {body_count}")
+    except Exception as e:
+        logger.debug(f"[SPA] 无法访问 Bodies: {e}")
+
+    if body_count == 0 or bodies is None:
+        logger.debug("[SPA] 没有找到任何 Body，测量中止")
         return None
 
     total_mass = 0.0
@@ -103,40 +130,51 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
     # 转动惯量（在零件原点处，零件局部坐标轴）
     I_at_origin = [[0.0] * 3 for _ in range(3)]
 
-    def _accumulate_body(measurable_target):
+    def _accumulate_body(measurable_target, body_label: str):
         nonlocal total_mass
         # 质量
         try:
             mass = measurable_target.GetMass()
-        except Exception:
+            logger.debug(f"[SPA]   {body_label} GetMass() = {mass}")
+        except Exception as e:
+            logger.debug(f"[SPA]   {body_label} GetMass() 失败: {e}")
             return
 
         if mass is None or mass <= 0.0:
+            logger.debug(f"[SPA]   {body_label} mass={mass}，跳过（<=0 或 None）")
             return
 
         # 重心
+        cog = [0.0, 0.0, 0.0]
         try:
             cog_result = [0.0, 0.0, 0.0]
             measurable_target.GetCOG(cog_result)
             cog = cog_result
-        except Exception:
+            logger.debug(f"[SPA]   {body_label} GetCOG() = {cog}")
+        except Exception as e1:
+            logger.debug(f"[SPA]   {body_label} GetCOG(arr) 失败: {e1}，尝试无参调用")
             try:
                 cog_result = measurable_target.GetCOG()
                 cog = list(cog_result) if cog_result else [0.0, 0.0, 0.0]
-            except Exception:
-                cog = [0.0, 0.0, 0.0]
+                logger.debug(f"[SPA]   {body_label} GetCOG() 无参 = {cog}")
+            except Exception as e2:
+                logger.debug(f"[SPA]   {body_label} GetCOG() 无参也失败: {e2}")
 
         # 转动惯量（在重心处，SPA 默认行为）
+        inertia = [0.0] * 9
         try:
             inertia_arr = [0.0] * 9
             measurable_target.GetInertiaMatrix(inertia_arr)
             inertia = inertia_arr
-        except Exception:
+            logger.debug(f"[SPA]   {body_label} GetInertiaMatrix() = {inertia}")
+        except Exception as e1:
+            logger.debug(f"[SPA]   {body_label} GetInertiaMatrix(arr) 失败: {e1}，尝试无参调用")
             try:
                 inertia_result = measurable_target.GetInertiaMatrix()
                 inertia = list(inertia_result) if inertia_result else [0.0] * 9
-            except Exception:
-                inertia = [0.0] * 9
+                logger.debug(f"[SPA]   {body_label} GetInertiaMatrix() 无参 = {inertia}")
+            except Exception as e2:
+                logger.debug(f"[SPA]   {body_label} GetInertiaMatrix() 无参也失败: {e2}")
 
         # 将 9 元素行主序数组转为 3×3 矩阵
         I_cog = [
@@ -159,40 +197,37 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
         for j in range(3):
             weighted_cog[j] += mass * cog[j]
 
-    # ── 策略1：直接测量整个 Part ─────────────────────────────────────────
-    whole_part_ok = False
-    try:
-        meas = spa.GetMeasurable(part_com)
-        _accumulate_body(meas)
-        if total_mass > 0.0:
-            whole_part_ok = True
-    except Exception as e:
-        logger.debug(f"无法直接测量 Part: {e}")
-
-    # ── 策略2：逐一测量 Bodies（整体测量失败时的备用）──────────────────
-    if not whole_part_ok:
-        body_count = 0
-        bodies = None
+    # ── 逐一测量各 Body ───────────────────────────────────────────────────
+    for i in range(1, body_count + 1):
         try:
-            bodies = part_com.Bodies
-            body_count = bodies.Count
-        except Exception as e:
-            logger.debug(f"无法访问 Bodies: {e}")
+            body = bodies.Item(i)
+            try:
+                body_name = body.Name
+            except Exception:
+                body_name = f"Body_{i}"
+            logger.debug(f"[SPA] Body {i} 名称: {body_name}，COM 类型: {type(body).__name__}")
 
-        if body_count > 0 and bodies is not None:
-            for i in range(1, body_count + 1):
+            # 通过 CreateReferenceFromObject 创建正确类型的引用
+            ref = None
+            try:
+                ref = part_com.CreateReferenceFromObject(body)
+                logger.debug(f"[SPA]   CreateReferenceFromObject 成功，类型: {type(ref).__name__}")
+            except Exception as ref_err:
+                logger.debug(f"[SPA]   CreateReferenceFromObject 失败: {ref_err}")
+
+            if ref is not None:
                 try:
-                    body = bodies.Item(i)
-                    # 优先通过 CreateReferenceFromObject 获取正确类型
-                    try:
-                        ref = part_com.CreateReferenceFromObject(body)
-                        meas = spa.GetMeasurable(ref)
-                    except Exception as ref_err:
-                        logger.debug(f"CreateReferenceFromObject/GetMeasurable(ref) 失败: {ref_err}，改用直接传入 Body")
-                        meas = spa.GetMeasurable(body)
-                    _accumulate_body(meas)
-                except Exception as e:
-                    logger.debug(f"无法测量 Body {i}: {e}")
+                    meas = spa.GetMeasurable(ref)
+                    logger.debug(f"[SPA]   GetMeasurable(ref) 成功，类型: {type(meas).__name__}")
+                    _accumulate_body(meas, f"Body_{i}({body_name})[via ref]")
+                except Exception as meas_err:
+                    logger.debug(f"[SPA]   GetMeasurable(ref) 失败: {meas_err}")
+            else:
+                logger.debug(f"[SPA]   ref 为 None，跳过 Body {i}")
+        except Exception as e:
+            logger.debug(f"[SPA] 访问 Body {i} 失败: {e}")
+
+    logger.debug(f"[SPA] 所有 Body 累计质量: {total_mass}")
 
     if total_mass <= 0.0:
         return {
@@ -213,6 +248,7 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
             delta = (1.0 if row == col else 0.0) * r2 - r[row] * r[col]
             I_at_cog[row][col] = I_at_origin[row][col] - total_mass * delta
 
+    logger.debug(f"[SPA] 最终结果: weight={total_mass}, cog={part_cog}")
     return {
         "weight":  total_mass,
         "cog":     part_cog,
@@ -298,22 +334,21 @@ def collect_mass_props_rows(
 
         not_found = not bool(filepath)
 
-        # 判断节点类型
-        try:
-            child_count = product.products.count
-        except Exception:
-            child_count = 0
-
+        # 判断节点类型 —— 依据支持文件扩展名而非子节点数量
+        # （子节点数为0的 CATProduct 也应被识别为"产品"，而非"零件"）
         is_embedded = (bool(filepath) and bool(parent_filepath)
                        and filepath == parent_filepath)
         if not_found:
             node_type = ""
         elif is_embedded:
             node_type = "部件"
-        elif child_count > 0:
-            node_type = "产品"
         else:
-            node_type = "零件"
+            ext = Path(filepath).suffix.lower()
+            if ext == ".catpart":
+                node_type = "零件"
+            else:
+                # .catproduct 或其他未知扩展名统一视为"产品"
+                node_type = "产品"
 
         # 计算本节点到根的累积变换矩阵
         local_mat4 = _position_to_mat4(product.com_object)

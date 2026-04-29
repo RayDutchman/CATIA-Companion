@@ -186,10 +186,17 @@ def collect_bom_rows(
                 # means it is an embedded sub-assembly (部件) rather than a
                 # standalone product (产品) or leaf part (零件).
                 row["Type"] = "部件"
-            elif child_count > 0:
-                row["Type"] = "产品"
+            elif not filepath:
+                row["Type"] = ""
             else:
-                row["Type"] = "零件"
+                # Determine type from file extension so that a CATProduct with
+                # no children is still classified as "产品", not "零件".
+                ext = Path(filepath).suffix.lower()
+                if ext == ".catpart":
+                    row["Type"] = "零件"
+                else:
+                    # .catproduct or any other extension → product/assembly
+                    row["Type"] = "产品"
         except Exception:
             row["Type"] = ""
 
