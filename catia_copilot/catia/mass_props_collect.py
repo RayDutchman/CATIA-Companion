@@ -78,9 +78,20 @@ def _position_to_mat4(product_com) -> list[list[float]]:
 def _measure_part_mass_props(doc_com, part_com) -> dict | None:
     """通过 CATIA SPA 工作台逐一测量零件各 Body 的质量特性。
 
-    仅使用 per-body 策略：通过 ``part_com.CreateReferenceFromObject(body)``
-    创建正确类型的引用后再调用 ``spa.GetMeasurable(ref)``，
-    避免直接传入 Body COM 对象导致的类型不匹配错误。
+    策略：仅使用 per-body 路径，通过 ``part_com.CreateReferenceFromObject(body)``
+    创建引用后调用 ``spa.GetMeasurable(ref)``。
+
+    当材质定义在零件（Part）层面而非单个 Body 层面时，对 Body 引用调用
+    ``GetMass()`` 会抛出 CATIA COM 错误（body 不拥有材质属性）。
+    此时回退为体积法：
+      1. ``GetVolume(body_ref)``  →  该 Body 的体积（纯几何量，始终可用）
+      2. ``GetCOG(body_ref)``     →  该 Body 的几何中心（等价于质心，密度均匀）
+      3. 由零件整体推算密度：``density = part_mass / part_vol``
+         （密度是材质常量，推算结果精确，与包络体无关）
+      4. ``body_mass = density × body_vol``
+
+    如此即可正确排除"包络体"：包络体对应的 Body 不被纳入质量求和，
+    而零件整体数据仅用于推算密度，不直接贡献最终质量。
 
     返回字典：
       {
@@ -94,13 +105,11 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
     """
     # ── DEBUG: 记录传入对象的 COM 类型名 ─────────────────────────────────
     try:
-        doc_type_name = type(doc_com).__name__
-        logger.debug(f"[SPA] doc_com 类型: {doc_type_name}")
+        logger.debug(f"[SPA] doc_com 类型: {type(doc_com).__name__}")
     except Exception as e:
         logger.debug(f"[SPA] 无法获取 doc_com 类型: {e}")
     try:
-        part_type_name = type(part_com).__name__
-        logger.debug(f"[SPA] part_com 类型: {part_type_name}")
+        logger.debug(f"[SPA] part_com 类型: {type(part_com).__name__}")
     except Exception as e:
         logger.debug(f"[SPA] 无法获取 part_com 类型: {e}")
 
@@ -125,74 +134,98 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
         logger.debug("[SPA] 没有找到任何 Body，测量中止")
         return None
 
+    # ── 预推算零件密度（材质定义在 Part 层时 per-body GetMass 失败的备用路径）
+    # density = part_mass / part_volume，单位 kg/mm³
+    # 仅用于推算密度，不直接参与最终质量累加，因此包络体不影响结果。
+    _part_density: float | None = None
+    try:
+        meas_whole = spa.GetMeasurable(part_com)
+        logger.debug(f"[SPA] 整体 GetMeasurable(part_com) 成功（仅用于密度推算）")
+        _w_mass: float | None = None
+        try:
+            _w_mass = meas_whole.Mass
+            logger.debug(f"[SPA] 整体 .Mass = {_w_mass}")
+        except Exception as _me1:
+            logger.debug(f"[SPA] 整体 .Mass 失败: {_me1}，尝试 GetMass()")
+            try:
+                _w_mass = meas_whole.GetMass()
+                logger.debug(f"[SPA] 整体 GetMass() = {_w_mass}")
+            except Exception as _me2:
+                logger.debug(f"[SPA] 整体 GetMass() 也失败: {_me2}")
+        _w_vol: float | None = None
+        try:
+            _w_vol_arr = [0.0]
+            meas_whole.GetVolume(_w_vol_arr)
+            _w_vol = _w_vol_arr[0]
+            logger.debug(f"[SPA] 整体 GetVolume(arr) = {_w_vol}")
+        except Exception as _ve1:
+            logger.debug(f"[SPA] 整体 GetVolume(arr) 失败: {_ve1}，尝试无参")
+            try:
+                _w_vol = meas_whole.GetVolume()
+                logger.debug(f"[SPA] 整体 GetVolume() 无参 = {_w_vol}")
+            except Exception as _ve2:
+                logger.debug(f"[SPA] 整体 GetVolume() 无参也失败: {_ve2}")
+        if _w_mass and _w_mass > 0.0 and _w_vol and _w_vol > 0.0:
+            _part_density = _w_mass / _w_vol
+            logger.debug(f"[SPA] 推算零件密度: {_part_density:.6e} kg/mm³")
+    except Exception as _de:
+        logger.debug(f"[SPA] 整体测量（密度推算）失败: {_de}")
+
     total_mass = 0.0
     weighted_cog = [0.0, 0.0, 0.0]
     # 转动惯量（在零件原点处，零件局部坐标轴）
     I_at_origin = [[0.0] * 3 for _ in range(3)]
 
-    def _accumulate_body(measurable_target, body_label: str):
-        nonlocal total_mass
-        # 质量
+    def _get_cog(meas, label: str) -> list[float]:
+        """尝试从 Measurable 读取重心坐标，返回 [x, y, z]（失败时返回全零）。"""
         try:
-            mass = measurable_target.GetMass()
-            logger.debug(f"[SPA]   {body_label} GetMass() = {mass}")
-        except Exception as e:
-            logger.debug(f"[SPA]   {body_label} GetMass() 失败: {e}")
-            return
-
-        if mass is None or mass <= 0.0:
-            logger.debug(f"[SPA]   {body_label} mass={mass}，跳过（<=0 或 None）")
-            return
-
-        # 重心
-        cog = [0.0, 0.0, 0.0]
-        try:
-            cog_result = [0.0, 0.0, 0.0]
-            measurable_target.GetCOG(cog_result)
-            cog = cog_result
-            logger.debug(f"[SPA]   {body_label} GetCOG() = {cog}")
+            cog_arr = [0.0, 0.0, 0.0]
+            meas.GetCOG(cog_arr)
+            logger.debug(f"[SPA]   {label} GetCOG(arr) = {cog_arr}")
+            return list(cog_arr)
         except Exception as e1:
-            logger.debug(f"[SPA]   {body_label} GetCOG(arr) 失败: {e1}，尝试无参调用")
-            try:
-                cog_result = measurable_target.GetCOG()
-                cog = list(cog_result) if cog_result else [0.0, 0.0, 0.0]
-                logger.debug(f"[SPA]   {body_label} GetCOG() 无参 = {cog}")
-            except Exception as e2:
-                logger.debug(f"[SPA]   {body_label} GetCOG() 无参也失败: {e2}")
+            logger.debug(f"[SPA]   {label} GetCOG(arr) 失败: {e1}，尝试无参")
+        try:
+            cog_result = meas.GetCOG()
+            cog = list(cog_result) if cog_result else [0.0, 0.0, 0.0]
+            logger.debug(f"[SPA]   {label} GetCOG() 无参 = {cog}")
+            return cog
+        except Exception as e2:
+            logger.debug(f"[SPA]   {label} GetCOG() 无参也失败: {e2}")
+        return [0.0, 0.0, 0.0]
 
-        # 转动惯量（在重心处，SPA 默认行为）
-        inertia = [0.0] * 9
+    def _get_inertia_matrix(meas, label: str) -> list[float]:
+        """尝试从 Measurable 读取转动惯量矩阵（9 元素），失败时返回全零。"""
         try:
             inertia_arr = [0.0] * 9
-            measurable_target.GetInertiaMatrix(inertia_arr)
-            inertia = inertia_arr
-            logger.debug(f"[SPA]   {body_label} GetInertiaMatrix() = {inertia}")
+            meas.GetInertiaMatrix(inertia_arr)
+            logger.debug(f"[SPA]   {label} GetInertiaMatrix(arr) = {inertia_arr}")
+            return list(inertia_arr)
         except Exception as e1:
-            logger.debug(f"[SPA]   {body_label} GetInertiaMatrix(arr) 失败: {e1}，尝试无参调用")
-            try:
-                inertia_result = measurable_target.GetInertiaMatrix()
-                inertia = list(inertia_result) if inertia_result else [0.0] * 9
-                logger.debug(f"[SPA]   {body_label} GetInertiaMatrix() 无参 = {inertia}")
-            except Exception as e2:
-                logger.debug(f"[SPA]   {body_label} GetInertiaMatrix() 无参也失败: {e2}")
+            logger.debug(f"[SPA]   {label} GetInertiaMatrix(arr) 失败: {e1}，尝试无参")
+        try:
+            inertia_result = meas.GetInertiaMatrix()
+            inertia = list(inertia_result) if inertia_result else [0.0] * 9
+            logger.debug(f"[SPA]   {label} GetInertiaMatrix() 无参 = {inertia}")
+            return inertia
+        except Exception as e2:
+            logger.debug(f"[SPA]   {label} GetInertiaMatrix() 无参也失败: {e2}")
+        return [0.0] * 9
 
-        # 将 9 元素行主序数组转为 3×3 矩阵
+    def _accumulate(mass: float, cog: list[float], inertia_9: list[float]):
+        """将一个 Body 的质量特性累积到 total_mass / weighted_cog / I_at_origin。"""
+        nonlocal total_mass
         I_cog = [
-            [inertia[0], inertia[1], inertia[2]],
-            [inertia[3], inertia[4], inertia[5]],
-            [inertia[6], inertia[7], inertia[8]],
+            [inertia_9[0], inertia_9[1], inertia_9[2]],
+            [inertia_9[3], inertia_9[4], inertia_9[5]],
+            [inertia_9[6], inertia_9[7], inertia_9[8]],
         ]
-
-        # 平行轴定理：将转动惯量从重心移到零件原点
-        r = cog  # [x, y, z]
+        r = cog
         r2 = r[0]**2 + r[1]**2 + r[2]**2
-        # I_origin = I_cog + m*(r²·E - r⊗r)
         for row in range(3):
             for col in range(3):
                 delta = (1.0 if row == col else 0.0) * r2 - r[row] * r[col]
                 I_at_origin[row][col] += I_cog[row][col] + mass * delta
-
-        # 累计质量和加权重心
         total_mass += mass
         for j in range(3):
             weighted_cog[j] += mass * cog[j]
@@ -205,25 +238,78 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
                 body_name = body.Name
             except Exception:
                 body_name = f"Body_{i}"
-            logger.debug(f"[SPA] Body {i} 名称: {body_name}，COM 类型: {type(body).__name__}")
+            label = f"Body_{i}({body_name})"
+            logger.debug(f"[SPA] {label} COM 类型: {type(body).__name__}")
 
             # 通过 CreateReferenceFromObject 创建正确类型的引用
             ref = None
             try:
                 ref = part_com.CreateReferenceFromObject(body)
-                logger.debug(f"[SPA]   CreateReferenceFromObject 成功，类型: {type(ref).__name__}")
+                logger.debug(f"[SPA]   {label} CreateReferenceFromObject 成功，类型: {type(ref).__name__}")
             except Exception as ref_err:
-                logger.debug(f"[SPA]   CreateReferenceFromObject 失败: {ref_err}")
+                logger.debug(f"[SPA]   {label} CreateReferenceFromObject 失败: {ref_err}")
 
-            if ref is not None:
+            if ref is None:
+                logger.debug(f"[SPA]   {label} ref 为 None，跳过")
+                continue
+
+            try:
+                meas = spa.GetMeasurable(ref)
+                logger.debug(f"[SPA]   {label} GetMeasurable(ref) 成功，类型: {type(meas).__name__}")
+            except Exception as meas_err:
+                logger.debug(f"[SPA]   {label} GetMeasurable(ref) 失败: {meas_err}")
+                continue
+
+            # ── 尝试直接读取质量（先 .Mass 属性，再 GetMass() 方法）─────
+            mass: float | None = None
+            try:
+                mass = meas.Mass
+                logger.debug(f"[SPA]   {label} .Mass = {mass}")
+            except Exception as ma_err:
+                logger.debug(f"[SPA]   {label} .Mass 失败: {ma_err}，尝试 GetMass()")
                 try:
-                    meas = spa.GetMeasurable(ref)
-                    logger.debug(f"[SPA]   GetMeasurable(ref) 成功，类型: {type(meas).__name__}")
-                    _accumulate_body(meas, f"Body_{i}({body_name})[via ref]")
-                except Exception as meas_err:
-                    logger.debug(f"[SPA]   GetMeasurable(ref) 失败: {meas_err}")
-            else:
-                logger.debug(f"[SPA]   ref 为 None，跳过 Body {i}")
+                    mass = meas.GetMass()
+                    logger.debug(f"[SPA]   {label} GetMass() = {mass}")
+                except Exception as gm_err:
+                    logger.debug(f"[SPA]   {label} GetMass() 也失败（材质可能定义在 Part 层）: {gm_err}")
+
+            if mass is None or mass <= 0.0:
+                # ── 回退：体积 × 密度 ───────────────────────────────────
+                logger.debug(f"[SPA]   {label} 尝试体积法回退")
+                vol: float | None = None
+                try:
+                    vol_arr = [0.0]
+                    meas.GetVolume(vol_arr)
+                    vol = vol_arr[0]
+                    logger.debug(f"[SPA]   {label} GetVolume(arr) = {vol}")
+                except Exception as ve1:
+                    logger.debug(f"[SPA]   {label} GetVolume(arr) 失败: {ve1}，尝试无参")
+                    try:
+                        vol = meas.GetVolume()
+                        logger.debug(f"[SPA]   {label} GetVolume() 无参 = {vol}")
+                    except Exception as ve2:
+                        logger.debug(f"[SPA]   {label} GetVolume() 无参也失败: {ve2}")
+
+                if vol is not None and vol > 0.0 and _part_density is not None and _part_density > 0.0:
+                    mass = _part_density * vol
+                    logger.debug(f"[SPA]   {label} 体积法质量 = {_part_density:.6e} × {vol:.6g} = {mass:.6g} kg")
+                else:
+                    logger.debug(
+                        f"[SPA]   {label} 体积法也无法获取质量"
+                        f"（vol={vol}, density={_part_density}），跳过"
+                    )
+                    continue
+
+            # ── 读取重心 ───────────────────────────────────────────────
+            cog = _get_cog(meas, label)
+
+            # ── 读取转动惯量 ───────────────────────────────────────────
+            # 当材质在 Part 层时，Body ref 的 GetInertiaMatrix 可能也失败；
+            # 此时使用质量 × 零转动惯量（点质量近似）并依赖平行轴定理贡献。
+            inertia_9 = _get_inertia_matrix(meas, label)
+
+            _accumulate(mass, cog, inertia_9)
+
         except Exception as e:
             logger.debug(f"[SPA] 访问 Body {i} 失败: {e}")
 
