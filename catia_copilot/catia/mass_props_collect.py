@@ -385,8 +385,23 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
                 else:
                     logger.debug(
                         f"[SPA]   {label} 体积法也无法获取质量"
-                        f"（vol={vol}, density={_part_density}），跳过"
+                        f"（vol={vol}, density={_part_density}），尝试 GetCOG 诊断探针"
                     )
+                    # ── GetCOG 诊断探针 ─────────────────────────────────────
+                    # GetCOG 是纯几何量（几何重心），不依赖材质定义，可能在
+                    # GetMass / GetVolume 均失败的环境下仍然有效。
+                    # 此处仅探测并记录结果，以便下一步判断 SPA Measurable
+                    # 接口是否可用于几何属性。
+                    diag_cog = _get_cog(meas, label)
+                    if any(v != 0.0 for v in diag_cog):
+                        logger.debug(
+                            f"[SPA]   {label} GetCOG 探针成功: {diag_cog}"
+                            f"（但无质量数据，跳过累积）"
+                        )
+                    else:
+                        logger.debug(
+                            f"[SPA]   {label} GetCOG 探针返回全零或失败，跳过"
+                        )
                     continue
 
             # ── 读取重心 ───────────────────────────────────────────────
