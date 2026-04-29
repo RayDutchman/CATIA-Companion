@@ -171,6 +171,45 @@ SOURCE_OPTIONS: list[str]           = ["未知", "自制", "外购"]
 BOM_THUMBNAIL_MAX_SIZE: int = 130
 
 # ---------------------------------------------------------------------------
+# Mass properties columns
+# ---------------------------------------------------------------------------
+
+MASS_PROPS_COLUMNS: list[str] = [
+    "Level", "Type", "Filename", "Part Number", "Nomenclature", "Revision",
+    "Weight", "CogX", "CogY", "CogZ",
+    "Ixx", "Iyy", "Izz", "Ixy", "Ixz", "Iyz",
+]
+
+MASS_PROPS_COLUMN_DISPLAY_NAMES: dict[str, str] = {
+    "#":            "#",
+    "Level":        "层级",
+    "Type":         "类型",
+    "Filename":     "文件名",
+    "Part Number":  "零件编号",
+    "Nomenclature": "术语（中文名称）",
+    "Revision":     "版本",
+    "Weight":       "重量 (kg)",
+    "CogX":         "重心 X (mm)",
+    "CogY":         "重心 Y (mm)",
+    "CogZ":         "重心 Z (mm)",
+    "Ixx":          "Ixx (kg·mm²)",
+    "Iyy":          "Iyy (kg·mm²)",
+    "Izz":          "Izz (kg·mm²)",
+    "Ixy":          "Ixy (kg·mm²)",
+    "Ixz":          "Ixz (kg·mm²)",
+    "Iyz":          "Iyz (kg·mm²)",
+}
+
+# Columns that are read-only in the mass properties dialog
+# (only "Weight" is editable for part rows)
+MASS_PROPS_READONLY_COLUMNS: frozenset[str] = frozenset({
+    "#", "Level", "Type", "Filename", "Part Number",
+    "Nomenclature", "Revision",
+    "CogX", "CogY", "CogZ",
+    "Ixx", "Iyy", "Izz", "Ixy", "Ixz", "Iyz",
+})
+
+# ---------------------------------------------------------------------------
 # Part Number validation
 # ---------------------------------------------------------------------------
 
