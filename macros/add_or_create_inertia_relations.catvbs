@@ -1,0 +1,153 @@
+Option Explicit
+
+' ============================================================
+' 固定绑定：惯量包络体.1
+'
+' 参数（MP_*）：
+'   - 若已存在：复用（不改名/不改类型）
+'   - 若不存在：CreateReal 创建
+'
+' 公式（F_*）：
+'   - 若不存在：创建标准公式（反引号引用 + /1单位）
+'   - 若已存在：认为正确，什么都不做（不读取 RHS、不检查、不提示）
+' ============================================================
+
+Sub CATMain()
+
+    Dim CATIA As Application
+    Set CATIA = GetObject(, "CATIA.Application")
+
+    If CATIA.Documents.Count = 0 Then
+        MsgBox "没有打开任何文档。", vbExclamation
+        Exit Sub
+    End If
+
+    If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then
+        MsgBox "当前活动文档不是 PartDocument。", vbExclamation
+        Exit Sub
+    End If
+
+    Dim partDoc As PartDocument
+    Set partDoc = CATIA.ActiveDocument
+
+    Dim part As part
+    Set part = partDoc.part
+
+    Dim params As Parameters
+    Set params = part.Parameters
+
+    Dim rels As Relations
+    Set rels = part.Relations
+
+    Dim srcPrefix As String
+    srcPrefix = "惯量包络体.1\"
+
+    ' 基本校验：至少确认 Keep 参数存在
+    If Not ParameterExists(params, srcPrefix & "质量") Then
+        MsgBox "找不到参数：" & srcPrefix & "质量" & vbCrLf & _
+               "请先 测量惯量 并 勾选“保持测量”，确保生成 惯量包络体.1。", vbExclamation
+        Exit Sub
+    End If
+
+    ' ---------- 1) 参数：存在则复用，不存在才创建 ----------
+    Dim pVolume As Parameter: Set pVolume = GetOrCreateReal(params, "MP_Volume_cm3")
+    Dim pDensity As Parameter: Set pDensity = GetOrCreateReal(params, "MP_Density_g_cm3")
+    Dim pMass As Parameter: Set pMass = GetOrCreateReal(params, "MP_Mass_g")
+
+    Dim pCOGx As Parameter: Set pCOGx = GetOrCreateReal(params, "MP_COGx_mm")
+    Dim pCOGy As Parameter: Set pCOGy = GetOrCreateReal(params, "MP_COGy_mm")
+    Dim pCOGz As Parameter: Set pCOGz = GetOrCreateReal(params, "MP_COGz_mm")
+
+    Dim pIxx As Parameter: Set pIxx = GetOrCreateReal(params, "MP_Ixx_gmm2")
+    Dim pIyy As Parameter: Set pIyy = GetOrCreateReal(params, "MP_Iyy_gmm2")
+    Dim pIzz As Parameter: Set pIzz = GetOrCreateReal(params, "MP_Izz_gmm2")
+    Dim pIxy As Parameter: Set pIxy = GetOrCreateReal(params, "MP_Ixy_gmm2")
+    Dim pIxz As Parameter: Set pIxz = GetOrCreateReal(params, "MP_Ixz_gmm2")
+    Dim pIyz As Parameter: Set pIyz = GetOrCreateReal(params, "MP_Iyz_gmm2")
+
+    ' ---------- 2) 公式：只按“是否存在”决定是否创建 ----------
+    CreateFormulaIfMissing rels, "F_MP_Volume_cm3", pVolume, StdExpr(srcPrefix, "体积", "1cm3")
+    CreateFormulaIfMissing rels, "F_MP_Density_g_cm3", pDensity, StdExpr(srcPrefix, "密度", "1g_cm3")
+    CreateFormulaIfMissing rels, "F_MP_Mass_g", pMass, StdExpr(srcPrefix, "质量", "1g")
+
+    CreateFormulaIfMissing rels, "F_MP_COGx_mm", pCOGx, StdExpr(srcPrefix, "Gx", "1mm")
+    CreateFormulaIfMissing rels, "F_MP_COGy_mm", pCOGy, StdExpr(srcPrefix, "Gy", "1mm")
+    CreateFormulaIfMissing rels, "F_MP_COGz_mm", pCOGz, StdExpr(srcPrefix, "Gz", "1mm")
+
+    CreateFormulaIfMissing rels, "F_MP_Ixx_gmm2", pIxx, StdExpr(srcPrefix, "IoxG", "1gxmm2")
+    CreateFormulaIfMissing rels, "F_MP_Iyy_gmm2", pIyy, StdExpr(srcPrefix, "IoyG", "1gxmm2")
+    CreateFormulaIfMissing rels, "F_MP_Izz_gmm2", pIzz, StdExpr(srcPrefix, "IozG", "1gxmm2")
+    CreateFormulaIfMissing rels, "F_MP_Ixy_gmm2", pIxy, StdExpr(srcPrefix, "IxyG", "1gxmm2")
+    CreateFormulaIfMissing rels, "F_MP_Ixz_gmm2", pIxz, StdExpr(srcPrefix, "IxzG", "1gxmm2")
+    CreateFormulaIfMissing rels, "F_MP_Iyz_gmm2", pIyz, StdExpr(srcPrefix, "IyzG", "1gxmm2")
+
+    'part.Update
+
+    If False
+        MsgBox "完成。" & vbCrLf & _
+            "绑定源：" & srcPrefix & vbCrLf & _
+            "MP_Mass_g=" & pMass.ValueAsString & vbCrLf & _
+            "MP_Ixx_gmm2=" & pIxx.ValueAsString, vbInformation, "OK"
+    End If
+End Sub
+
+' ============================================================
+' 标准 RHS：`惯量包络体.1\质量` / 1g
+' ============================================================
+Private Function StdExpr(ByVal srcPrefix As String, ByVal fieldName As String, ByVal unitConst As String) As String
+    StdExpr = "`" & srcPrefix & fieldName & "` / " & unitConst
+End Function
+
+' ============================================================
+' 仅当同名公式不存在时才创建
+' - 公式存在：直接认为正确，返回
+' - 公式不存在：创建
+' ============================================================
+Private Sub CreateFormulaIfMissing(ByVal rels As Relations, ByVal fName As String, ByVal targetParam As Parameter, ByVal rhsExpr As String)
+
+    On Error Resume Next
+    Dim f As Formula
+    Set f = rels.Item(fName)
+    If Err.Number = 0 And Not f Is Nothing Then
+        Err.Clear
+        On Error GoTo 0
+        Exit Sub
+    End If
+    Err.Clear
+    On Error GoTo 0
+
+    ' 不存在则创建
+    On Error Resume Next
+    Err.Clear
+    rels.CreateFormula fName, "", targetParam, rhsExpr
+    If Err.Number <> 0 Then
+        MsgBox "创建公式失败：" & fName & vbCrLf & _
+               "表达式：" & rhsExpr & vbCrLf & _
+               "Err=" & Err.Number & " " & Err.Description, vbExclamation
+    End If
+    On Error GoTo 0
+
+End Sub
+
+Private Function ParameterExists(ByVal params As Parameters, ByVal fullName As String) As Boolean
+    On Error Resume Next
+    Dim p As Parameter
+    Set p = params.Item(fullName)
+    ParameterExists = (Err.Number = 0 And Not p Is Nothing)
+    Err.Clear
+    On Error GoTo 0
+End Function
+
+Private Function GetOrCreateReal(ByVal params As Parameters, ByVal name As String) As Parameter
+    On Error Resume Next
+    Dim p As Parameter
+    Set p = params.Item(name)
+    On Error GoTo 0
+
+    If p Is Nothing Then
+        Set p = params.CreateReal(name, 0#)
+    End If
+
+    Set GetOrCreateReal = p
+End Function
+
