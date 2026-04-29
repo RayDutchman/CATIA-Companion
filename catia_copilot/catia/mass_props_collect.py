@@ -138,9 +138,9 @@ def _position_to_mat4(product) -> list[list[float]]:
 
 
 def _try_mp_params(part_com, label: str = "") -> dict | None:
-    """读取由 create_inertia_relations.catvbs 写入的 MP_* 用户参数。
+    """读取由 create_mass_relations.catvbs 写入的 MP_* 用户参数。
 
-    create_inertia_relations.catvbs 在零件文档中以"用户参数"的形式存储质量特性，
+    create_mass_relations.catvbs 在零件文档中以"用户参数"的形式存储质量特性，
     参数名与程序内部单位制严格一致，无需换算：
       MP_Mass_g                   → 质量，g
       MP_COGx/y/z_mm              → 重心坐标（零件局部坐标系），mm
@@ -203,14 +203,14 @@ def _try_mp_params(part_com, label: str = "") -> dict | None:
         return None
 
 
-def _run_inertia_vbs_and_read(
+def _run_mass_vbs_and_read(
     doc_com, part_com, label: str = "", part_number: str = ""
 ) -> dict | None:
-    """若 MP_* 参数尚不存在，自动运行 create_inertia_relations.catvbs，
+    """若 MP_* 参数尚不存在，自动运行 create_mass_relations.catvbs，
     再尝试读取 VBS 写入的 MP_* 参数。
 
     工作流程：
-      1. 定位 ``macros/create_inertia_relations.catvbs`` 脚本文件；
+      1. 定位 ``macros/create_mass_relations.catvbs`` 脚本文件；
       2. 激活目标零件文档（doc_com.Activate()），确保 CATIA 聚焦到正确文档；
       3. 通过 ``ExecuteScript`` 调用 VBS，将零件号 (part_number) 作为
          ``iParameters(0)`` 传入，VBS 按此在已打开的文档中定位并激活目标零件；
@@ -231,7 +231,7 @@ def _run_inertia_vbs_and_read(
 
     try:
         from catia_copilot.utils import resource_path
-        vbs_path = resource_path("macros/create_inertia_relations.catvbs")
+        vbs_path = resource_path("macros/create_mass_relations.catvbs")
         if not vbs_path.is_file():
             logger.debug(f"{tag}找不到 VBS 文件: {vbs_path}，跳过")
             return None
@@ -264,10 +264,10 @@ def _run_inertia_vbs_and_read(
 def _measure_part_mass_props(doc_com, part_com, part_number: str = "") -> dict | None:
     """测量零件质量特性。
 
-    所有返回值均使用 **g / mm / g·mm²** 单位制（与 create_inertia_relations.catvbs 一致）。
+    所有返回值均使用 **g / mm / g·mm²** 单位制（与 create_mass_relations.catvbs 一致）。
 
     路径优先级：
-      1. **MP_* 参数**：直接读取由 ``create_inertia_relations.catvbs`` 写入的
+      1. **MP_* 参数**：直接读取由 ``create_mass_relations.catvbs`` 写入的
          ``MP_Mass_g``、``MP_COGx/y/z_mm``、``MP_Ixx/yy/zz/xy/xz/yz_gmm2`` 参数。
       2. **VBS 自动绑定**：若路径 1 失败，自动运行 VBS 脚本尝试创建 MP_* 参数后
          再读取。若零件无 Keep 惯量测量，脚本会静默退出，不阻塞。
@@ -287,13 +287,13 @@ def _measure_part_mass_props(doc_com, part_com, part_number: str = "") -> dict |
       }
     若所有路径均失败则返回 None。
     """
-    # ── 路径 1：读取 MP_* 用户参数（由 create_inertia_relations.catvbs 写入）──────
+    # ── 路径 1：读取 MP_* 用户参数（由 create_mass_relations.catvbs 写入）──────
     _mp = _try_mp_params(part_com, "直接读取")
     if _mp is not None:
         return _mp
 
     # ── 路径 2：自动运行 VBS 绑定脚本（要求零件已有 Keep 测量）─────────────────────
-    _mp = _run_inertia_vbs_and_read(doc_com, part_com, "VBS绑定", part_number)
+    _mp = _run_mass_vbs_and_read(doc_com, part_com, "VBS绑定", part_number)
     if _mp is not None:
         return _mp
 

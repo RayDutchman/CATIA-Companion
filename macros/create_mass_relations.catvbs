@@ -1,7 +1,7 @@
 Option Explicit
 
 ' ============================================================
-' create_inertia_relations.catvbs   (VBScript / CATScript)
+' create_mass_relations.catvbs   (VBScript / CATScript)
 '
 ' 功能概述：
 '   在 CATIA V5 零件文档中创建"质量特性参数绑定"。
@@ -189,7 +189,7 @@ Private Sub CreateFormulaIfMissing(rels, fName, targetParam, rhsExpr)
         MsgBox "创建公式 [" & fName & "] 失败" & vbCrLf & _
                "表达式：" & rhsExpr & vbCrLf & _
                "错误 " & createErr & "：" & createDesc, _
-               vbExclamation, "create_inertia_relations"
+               vbExclamation, "create_mass_relations"
     End If
 End Sub
 
