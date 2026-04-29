@@ -30,7 +30,7 @@ from catia_copilot.constants import (
     MASS_PROPS_HIDEABLE_COLUMNS,
     FILENAME_NOT_FOUND,
 )
-from catia_copilot.catia.mass_props_collect import collect_mass_props_rows
+from catia_copilot.catia.mass_props_collect import collect_mass_props_rows, _row_inertia_to_root
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
 from catia_copilot.ui.bom_widgets import _BomTreeWidget
 
@@ -97,8 +97,9 @@ class MassPropsDialog(QDialog):
         }
 
         self._summarize: bool = self._settings.value("summarize", False, type=bool)
-        self._unit: str = self._settings.value("unit", "kg")
-        self._unit_factor: float = 1000.0 if self._unit == "g" else 1.0
+        self._unit: str = self._settings.value("unit", "g")
+        # 内部单位为 g / g·mm²；kg 显示时乘以 0.001，g 显示时乘以 1.0
+        self._unit_factor: float = 1.0 if self._unit == "g" else 0.001
 
         # ── 内部状态 ──────────────────────────────────────────────────────
         self._rows: list[dict] = []
@@ -377,7 +378,8 @@ class MassPropsDialog(QDialog):
 
     def _on_unit_changed(self, checked: bool) -> None:
         self._unit = "g" if self._radio_g.isChecked() else "kg"
-        self._unit_factor = 1000.0 if self._unit == "g" else 1.0
+        # 内部单位为 g / g·mm²；kg 显示时乘以 0.001，g 显示时乘以 1.0
+        self._unit_factor = 1.0 if self._unit == "g" else 0.001
         self._settings.setValue("unit", self._unit)
         if self._rows:
             self._refresh_unit_display()
@@ -425,7 +427,9 @@ class MassPropsDialog(QDialog):
                 break
             item = self._item_by_row[di]
             node_type = str(row_data.get("Type", ""))
-            if node_type not in ("零件",):
+            # 刷新所有有数据的节点（零件、产品、部件）
+            if not any(row_data.get(c) is not None
+                       for c in ("Weight",) + tuple(_INERTIA_IDX.keys())):
                 continue
             for col_name, col_idx in mass_col_indices:
                 raw = row_data.get(col_name)
@@ -623,14 +627,14 @@ class MassPropsDialog(QDialog):
                 item.setText(col_idx, str(row_data.get("Quantity", 1)))
             elif col_name == "Weight":
                 raw = row_data.get("Weight")
-                if raw is None or node_type not in ("零件",):
-                    item.setText(col_idx, "" if node_type in ("产品", "部件") else "—")
+                if raw is None:
+                    item.setText(col_idx, "—" if node_type == "零件" else "")
                 else:
                     item.setText(col_idx, self._fmt_mass_val(raw))
             elif col_name in _INERTIA_IDX or col_name in ("CogX", "CogY", "CogZ"):
                 raw = row_data.get(col_name)
-                if raw is None or node_type not in ("零件",):
-                    item.setText(col_idx, "" if node_type in ("产品", "部件") else "—")
+                if raw is None:
+                    item.setText(col_idx, "—" if node_type == "零件" else "")
                 else:
                     if col_name in _INERTIA_IDX:
                         item.setText(col_idx, self._fmt_mass_val(raw))
@@ -715,16 +719,16 @@ class MassPropsDialog(QDialog):
 
         new_text = item.text(col_idx).strip()
         try:
-            # Input is in current unit; convert back to kg for storage
+            # 输入值为当前显示单位；除以 _unit_factor 还原到内部单位（g）
             new_display_val = float(new_text)
-            new_weight_kg = new_display_val / self._unit_factor
+            new_weight_stored = new_display_val / self._unit_factor
         except (ValueError, TypeError):
             self._is_updating = True
             item.setText(col_idx, self._fmt_mass_val(row_data.get("Weight")))
             self._is_updating = False
             return
 
-        if new_weight_kg < 0.0:
+        if new_weight_stored < 0.0:
             QMessageBox.warning(
                 self, "重量不合法",
                 "重量不能为负数，请输入大于或等于 0 的值。",
@@ -745,20 +749,39 @@ class MassPropsDialog(QDialog):
                 old_w_f = float(old_w) if old_w is not None else 0.0
             except (ValueError, TypeError):
                 old_w_f = 0.0
-            scale = (new_weight_kg / old_w_f) if old_w_f > 0.0 else 1.0
-            r["Weight"] = new_weight_kg
+            scale = (new_weight_stored / old_w_f) if old_w_f > 0.0 else 1.0
+            r["Weight"] = new_weight_stored
             mp = r.get("_mass_props")
             if mp:
-                mp["weight"] = new_weight_kg
+                mp["weight"] = new_weight_stored
                 if scale != 1.0 and old_w_f > 0.0:
                     orig_i = mp.get("inertia", [[0.0, 0.0, 0.0] for _ in range(3)])
-                    mp["inertia"] = [[orig_i[ri][ci] * scale for ci in range(3)]
-                                     for ri in range(3)]
-            # Update row-level inertia fields too
-            mp_cur = r.get("_mass_props") or {}
-            inertia_cur = mp_cur.get("inertia", [[0.0, 0.0, 0.0] for _ in range(3)])
-            for ic_name, (ri, ci) in _INERTIA_IDX.items():
-                r[ic_name] = inertia_cur[ri][ci]
+                    mp["inertia"] = [[orig_i[ir][ic] * scale for ic in range(3)]
+                                     for ir in range(3)]
+                    # 同步更新 _root_mp 中的惯量（缩放后重新旋转到根坐标系）
+                    I_root = _row_inertia_to_root(r)
+                    rmp = r.get("_root_mp")
+                    if rmp is not None:
+                        rmp["inertia"] = I_root
+                        rmp["weight"]  = new_weight_stored
+                    # 更新行级惯量显示字段（根坐标系）
+                    for ic_name, (ir2, ic2) in _INERTIA_IDX.items():
+                        r[ic_name] = I_root[ir2][ic2]
+                else:
+                    # 仅更新质量，惯量不变
+                    I_root = _row_inertia_to_root(r)
+                    for ic_name, (ir2, ic2) in _INERTIA_IDX.items():
+                        r[ic_name] = I_root[ir2][ic2]
+                    rmp = r.get("_root_mp")
+                    if rmp is not None:
+                        rmp["weight"] = new_weight_stored
+            else:
+                # 无 _mass_props，直接从行字段读取并缩放
+                if scale != 1.0 and old_w_f > 0.0:
+                    for ic_name in _INERTIA_IDX:
+                        cur = r.get(ic_name)
+                        if cur is not None:
+                            r[ic_name] = float(cur) * scale
 
         # ── Update visible tree items with the same PN ─────────────────────
         self._is_updating = True
@@ -773,12 +796,12 @@ class MassPropsDialog(QDialog):
                 continue
             if w_idx >= 0:
                 vis_item.setText(w_idx, self._fmt_mass_val(vis_row.get("Weight")))
-            mp_vis = vis_row.get("_mass_props") or {}
-            inertia_vis = mp_vis.get("inertia", [[0.0, 0.0, 0.0] for _ in range(3)])
-            for ic_name, (ri, ci) in _INERTIA_IDX.items():
+            for ic_name, (ir, ic) in _INERTIA_IDX.items():
                 if ic_name in self._columns:
                     ic_idx = self._columns.index(ic_name)
-                    vis_item.setText(ic_idx, self._fmt_mass_val(inertia_vis[ri][ci]))
+                    raw_i = vis_row.get(ic_name)
+                    if raw_i is not None:
+                        vis_item.setText(ic_idx, self._fmt_mass_val(raw_i))
 
         self._is_updating = False
         self._rollup_result = None

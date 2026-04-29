@@ -220,7 +220,7 @@ def _measure_part_mass_props(doc_com, part_com, filepath: str = "") -> dict | No
         return _mp
 
     # ── 路径 2：自动运行 VBS 绑定脚本（要求零件已有 Keep 测量）─────────────────────
-    _mp = _run_inertia_vbs_and_read(doc_com, part_com, "VBS绑定")
+    _mp = _run_inertia_vbs_and_read(doc_com, part_com, "VBS绑定", filepath)
     if _mp is not None:
         return _mp
 
@@ -534,11 +534,177 @@ def _measure_part_mass_props(doc_com, part_com, filepath: str = "") -> dict | No
             I_at_cog[row][col] = I_at_origin[row][col] - total_mass * delta
 
     logger.debug(f"[SPA] 最终结果: weight={total_mass}, cog={part_cog}")
+    # SPA 返回值为 kg / kg·mm²；统一换算为程序内部单位 g / g·mm²（×1000）
     return {
-        "weight":  total_mass,
+        "weight":  total_mass * 1000.0,
         "cog":     part_cog,
-        "inertia": I_at_cog,
+        "inertia": [[I_at_cog[r][c] * 1000.0 for c in range(3)] for r in range(3)],
     }
+
+
+# ---------------------------------------------------------------------------
+# Post-processing helpers
+# ---------------------------------------------------------------------------
+
+def _row_inertia_to_root(row: dict) -> list[list[float]]:
+    """从行的 ``_mass_props`` 局部惯量和 ``_placement`` 变换矩阵，
+    计算并返回根坐标系下的惯量张量（3×3 列表）。
+
+    若无有效 placement，直接返回局部惯量。
+    """
+    mp      = row.get("_mass_props") or {}
+    I_local = mp.get("inertia", [[0.0] * 3 for _ in range(3)])
+    placement = row.get("_placement")
+    if placement is None:
+        return I_local
+    R  = [[placement[i][j] for j in range(3)] for i in range(3)]
+    RT = [[R[j][i] for j in range(3)] for i in range(3)]
+    RI = [
+        [sum(R[i][k] * I_local[k][j] for k in range(3)) for j in range(3)]
+        for i in range(3)
+    ]
+    return [
+        [sum(RI[i][k] * RT[k][j] for k in range(3)) for j in range(3)]
+        for i in range(3)
+    ]
+
+
+def _post_process_rows(rows: list[dict]) -> None:
+    """对遍历后的行列表进行两轮后处理，使显示字段反映根产品坐标系。
+
+    第一轮（零件行）
+        利用 ``_placement``（零件局部→根的变换矩阵）将局部坐标系的重心和
+        转动惯量旋转变换到根坐标系，更新 ``CogX/Y/Z`` 及 ``Ixx``-``Iyz``
+        显示字段，并将变换结果缓存到 ``_root_mp`` 中供父级汇总和编辑后
+        回写使用。
+
+    第二轮（产品/部件行）
+        收集该节点子树内所有零件的根坐标系质量特性，按标准刚体力学汇总
+        （平行轴定理），计算该节点在根坐标系下的总质量、总重心和总转动
+        惯量，并更新到显示字段中。
+
+        若子树内所有零件均测量失败，则该节点的显示字段保持为 ``None``
+        （显示为 "—"）。
+    """
+    n = len(rows)
+
+    # ── 第一轮：零件行 → 变换到根坐标系 ─────────────────────────────────────
+    for row in rows:
+        if row.get("Type") != "零件":
+            continue
+        mp = row.get("_mass_props")
+        if not mp:
+            continue
+        placement = row.get("_placement")
+        if placement is None:
+            continue
+
+        R = [[placement[i][j] for j in range(3)] for i in range(3)]
+        T = [placement[0][3], placement[1][3], placement[2][3]]
+
+        # 重心变换：r_root = R @ r_local + T
+        cog_local = mp.get("cog", [0.0, 0.0, 0.0])
+        cog_root  = [
+            sum(R[i][k] * cog_local[k] for k in range(3)) + T[i]
+            for i in range(3)
+        ]
+
+        # 惯量旋转：I_root = R @ I_local @ R^T（在重心处，仅旋转轴方向）
+        I_local = mp.get("inertia", [[0.0] * 3 for _ in range(3)])
+        RT = [[R[j][i] for j in range(3)] for i in range(3)]
+        RI = [
+            [sum(R[i][k] * I_local[k][j] for k in range(3)) for j in range(3)]
+            for i in range(3)
+        ]
+        I_root = [
+            [sum(RI[i][k] * RT[k][j] for k in range(3)) for j in range(3)]
+            for i in range(3)
+        ]
+
+        # 更新显示字段为根坐标系值
+        row["CogX"] = cog_root[0]
+        row["CogY"] = cog_root[1]
+        row["CogZ"] = cog_root[2]
+        row["Ixx"]  = I_root[0][0]
+        row["Iyy"]  = I_root[1][1]
+        row["Izz"]  = I_root[2][2]
+        row["Ixy"]  = I_root[0][1]
+        row["Ixz"]  = I_root[0][2]
+        row["Iyz"]  = I_root[1][2]
+
+        # 缓存根坐标系数据，供父级汇总及编辑后重新写入使用
+        row["_root_mp"] = {
+            "weight":  mp.get("weight", 0.0),
+            "cog":     cog_root,
+            "inertia": I_root,
+        }
+
+    # ── 第二轮：产品/部件行 → 汇总子孙零件 ───────────────────────────────────
+    for i in range(n):
+        row = rows[i]
+        if row.get("Type") not in ("产品", "部件"):
+            continue
+
+        level = int(row.get("Level", 0))
+
+        # 收集当前节点子树内所有已成功测量的零件的根坐标系质量特性
+        child_parts: list[dict] = []
+        for j in range(i + 1, n):
+            desc = rows[j]
+            if int(desc.get("Level", 0)) <= level:
+                break  # 已超出子树范围
+            rmp = desc.get("_root_mp")
+            if rmp and float(rmp.get("weight", 0.0)) > 0.0:
+                child_parts.append(rmp)
+
+        if not child_parts:
+            continue
+
+        # 汇总（与 rollup_mass_properties 算法一致）
+        M_total   = 0.0
+        sum_mr    = [0.0, 0.0, 0.0]
+        I_at_orig = [[0.0] * 3 for _ in range(3)]
+
+        for rmp in child_parts:
+            m  = float(rmp.get("weight", 0.0))
+            if m <= 0.0:
+                continue
+            r  = rmp.get("cog", [0.0, 0.0, 0.0])
+            Ic = rmp.get("inertia", [[0.0] * 3 for _ in range(3)])
+            # 平行轴定理：从零件重心移到根原点
+            r2 = sum(r[k] ** 2 for k in range(3))
+            for ii in range(3):
+                for jj in range(3):
+                    delta = (1.0 if ii == jj else 0.0) * r2 - r[ii] * r[jj]
+                    I_at_orig[ii][jj] += Ic[ii][jj] + m * delta
+            M_total += m
+            for k in range(3):
+                sum_mr[k] += m * r[k]
+
+        if M_total <= 0.0:
+            continue
+
+        cog_total = [sum_mr[k] / M_total for k in range(3)]
+
+        # 平行轴定理：从根原点移回汇总重心
+        rc  = cog_total
+        rc2 = sum(rc[k] ** 2 for k in range(3))
+        I_final = [[0.0] * 3 for _ in range(3)]
+        for ii in range(3):
+            for jj in range(3):
+                delta = (1.0 if ii == jj else 0.0) * rc2 - rc[ii] * rc[jj]
+                I_final[ii][jj] = I_at_orig[ii][jj] - M_total * delta
+
+        row["Weight"] = M_total
+        row["CogX"]   = cog_total[0]
+        row["CogY"]   = cog_total[1]
+        row["CogZ"]   = cog_total[2]
+        row["Ixx"]    = I_final[0][0]
+        row["Iyy"]    = I_final[1][1]
+        row["Izz"]    = I_final[2][2]
+        row["Ixy"]    = I_final[0][1]
+        row["Ixz"]    = I_final[0][2]
+        row["Iyz"]    = I_final[1][2]
 
 
 # ---------------------------------------------------------------------------
@@ -684,7 +850,7 @@ def collect_mass_props_rows(
                         # 尝试获取 Part 对象（PartDocument 接口）
                         part_doc_com  = target_doc.com_object
                         part_com      = part_doc_com.Part
-                        mass_props    = _measure_part_mass_props(part_doc_com, part_com)
+                        mass_props    = _measure_part_mass_props(part_doc_com, part_com, filepath)
                     except Exception as e:
                         logger.debug(f"无法测量零件 {filepath}: {e}")
                         mass_props  = None
@@ -760,6 +926,7 @@ def collect_mass_props_rows(
         rows: list[dict] = []
         _traverse(root_product, rows, level=0, parent_filepath="",
                   parent_mat4=_identity_4x4(), documents=documents)
+        _post_process_rows(rows)
         return rows
 
     src = Path(file_path).resolve()
@@ -790,4 +957,5 @@ def collect_mass_props_rows(
     rows = []
     _traverse(root_product, rows, level=0, parent_filepath="",
               parent_mat4=_identity_4x4(), documents=documents)
+    _post_process_rows(rows)
     return rows
