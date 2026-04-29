@@ -42,10 +42,9 @@ def _mat4_mul(A: list[list[float]], B: list[list[float]]) -> list[list[float]]:
 def _position_to_mat4(product) -> list[list[float]]:
     """从 pycatia Product 包装对象的 position.get_components() 读取位置，返回 4×4 矩阵。
 
-    接收 pycatia Product 包装对象（非 com_object），调用
-    ``product.position.get_components(arr)``。
-    pycatia 的 Position 包装器会将 CATIA 返回的 12 个 double 分量原地写入
-    传入的列表，存储约定（列主序）：
+    接收 pycatia Product 包装对象（非 com_object），无参调用
+    ``product.position.get_components()``，捕获返回的 12 个 double 分量。
+    存储约定（列主序）：
       arr[0..2]  = 旋转矩阵第一列 (R[:,0])
       arr[3..5]  = 旋转矩阵第二列 (R[:,1])
       arr[6..8]  = 旋转矩阵第三列 (R[:,2])
@@ -60,19 +59,18 @@ def _position_to_mat4(product) -> list[list[float]]:
     except Exception:
         product_name = repr(product)
 
-    logger.debug(f"[MAT4] {product_name}: 调用 product.position.get_components(arr)")
+    logger.debug(f"[MAT4] {product_name}: 调用 product.position.get_components()")
 
     try:
-        arr = [0.0] * 12
-        product.position.get_components(arr)
-        logger.debug(f"[MAT4] {product_name}: get_components 返回 arr={arr}")
+        arr = product.position.get_components()
+        logger.debug(f"[MAT4] {product_name}: get_components 返回 arr={list(arr)}")
     except Exception as e:
         logger.debug(f"[MAT4] {product_name}: get_components 失败: {e}，返回单位矩阵")
         return _identity_4x4()
 
-    if not any(v != 0.0 for v in arr):
+    if arr is None or len(arr) < 12:
         logger.debug(
-            f"[MAT4] {product_name}: arr 全为零（可能调用未生效），返回单位矩阵"
+            f"[MAT4] {product_name}: arr 无效（len={len(arr) if arr else None}），返回单位矩阵"
         )
         return _identity_4x4()
 
