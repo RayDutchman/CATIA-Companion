@@ -32,6 +32,7 @@ from catia_copilot.constants import (
     MASS_PROPS_HIDEABLE_COLUMNS,
     MASS_PROPS_READONLY_COLUMNS,
     FILENAME_NOT_FOUND,
+    FILENAME_UNSAVED,
 )
 from catia_copilot.catia.mass_props_collect import collect_mass_props_rows, _row_inertia_to_root
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
@@ -709,12 +710,13 @@ class MassPropsDialog(QDialog):
         item = QTreeWidgetItem()
         item.setData(0, _ROW_IDX_ROLE, row_idx)
 
-        pn        = str(row_data.get("Part Number", ""))
-        not_found = bool(row_data.get("_not_found"))
-        unreadable = bool(row_data.get("_unreadable"))
+        pn          = str(row_data.get("Part Number", ""))
+        not_found   = bool(row_data.get("_not_found"))
+        no_file     = bool(row_data.get("_no_file"))
+        unreadable  = bool(row_data.get("_unreadable"))
         meas_failed = bool(row_data.get("_meas_failed"))
-        node_type  = str(row_data.get("Type", ""))
-        row_locked = unreadable or not_found
+        node_type   = str(row_data.get("Type", ""))
+        row_locked  = unreadable or not_found
 
         if pn:
             self._pn_to_items.setdefault(pn, []).append(item)
@@ -729,9 +731,14 @@ class MassPropsDialog(QDialog):
             elif col_name == "Filename":
                 fp = str(row_data.get("_filepath", ""))
                 fn = str(row_data.get("Filename", ""))
-                value = Path(fp).name if fp else fn
+                if no_file:
+                    value = FILENAME_UNSAVED
+                else:
+                    value = Path(fp).name if fp else fn
                 item.setText(col_idx, value)
-                if fp:
+                if no_file:
+                    pass  # tooltip 由下方 no_file 块统一设置
+                elif fp:
                     item.setToolTip(col_idx, fp)
             elif col_name == "Quantity":
                 item.setText(col_idx, str(row_data.get("Quantity", 1)))
@@ -761,12 +768,26 @@ class MassPropsDialog(QDialog):
             item.setData(0, _ITEM_LOCKED_ROLE, True)
 
         # Row colouring
+        fn_col = self._columns.index("Filename") if "Filename" in self._columns else -1
         if row_locked:
             grey = QColor(160, 160, 160)
             bg   = QColor(255, 205, 205) if not_found else QColor(245, 245, 245)
             for ci in range(len(self._columns)):
                 item.setForeground(ci, grey)
                 item.setBackground(ci, bg)
+            if fn_col >= 0:
+                tip = (
+                    "该零件/装配体的文件未被CATIA检索到，行内容不可编辑。"
+                    if not_found else
+                    "该零件/装配体处于轻量化模式，无法读取属性。"
+                )
+                item.setToolTip(fn_col, tip)
+        elif no_file:
+            bg_unsaved = QColor(255, 245, 180)
+            for ci in range(len(self._columns)):
+                item.setBackground(ci, bg_unsaved)
+            if fn_col >= 0:
+                item.setToolTip(fn_col, "该零件尚未保存到磁盘，质量特性数据可能不完整。")
         elif meas_failed and node_type == "零件":
             bg = QColor(255, 210, 160)
             for ci in range(len(self._columns)):
