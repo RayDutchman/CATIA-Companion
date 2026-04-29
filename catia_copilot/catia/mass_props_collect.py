@@ -76,14 +76,114 @@ def _position_to_mat4(product_com) -> list[list[float]]:
 # ---------------------------------------------------------------------------
 
 
-def _measure_part_mass_props(doc_com, part_com) -> dict | None:
-    """测量零件质量特性，通过 SPA 逐 Body 测量。
+def _try_mp_params(part_com, label: str = "") -> dict | None:
+    """读取由 create_inertia_relations.catvbs 写入的 MP_* 用户参数。
 
-    路径：SPA 逐 Body 测量 — 对每个 Body 依次尝试：
-      A. ``spa.GetMeasurable(body)`` — 直接传 Body 对象；
-      B. ``spa.GetMeasurable(CreateReferenceFromObject(body))`` — 通过引用。
-    读取质量时依次尝试：``.Volume``（直接属性）→ ``GetVolume(arr)`` → ``GetVolume()``，
-    再根据推算密度换算为质量；或直接读取 ``.Mass`` / ``GetMass()``。
+    参数单位约定（与 VBS 脚本一致）：
+      - MP_Mass_g       → 克（g），转换为千克（kg）
+      - MP_COGx/y/z_mm  → 毫米（mm），无需转换
+      - MP_Ixx/yy/zz/xy/xz/yz_gmm2 → g·mm²，转换为 kg·mm²
+
+    返回与 _measure_part_mass_props 相同结构的字典，或 None（参数不存在或质量≤0）。
+    """
+    tag = f"[MP] {label} " if label else "[MP] "
+    try:
+        params = part_com.Parameters
+
+        def _get(name: str) -> float | None:
+            try:
+                return float(params.Item(name).Value)
+            except Exception:
+                return None
+
+        mass_g = _get("MP_Mass_g")
+        if mass_g is None or mass_g <= 0.0:
+            logger.debug(f"{tag}MP_Mass_g 不存在或为零，跳过")
+            return None
+
+        cogx = _get("MP_COGx_mm") or 0.0
+        cogy = _get("MP_COGy_mm") or 0.0
+        cogz = _get("MP_COGz_mm") or 0.0
+        ixx  = _get("MP_Ixx_gmm2") or 0.0
+        iyy  = _get("MP_Iyy_gmm2") or 0.0
+        izz  = _get("MP_Izz_gmm2") or 0.0
+        ixy  = _get("MP_Ixy_gmm2") or 0.0
+        ixz  = _get("MP_Ixz_gmm2") or 0.0
+        iyz  = _get("MP_Iyz_gmm2") or 0.0
+
+        logger.debug(
+            f"{tag}MP_* 参数读取成功: "
+            f"mass={mass_g}g, cog=({cogx},{cogy},{cogz})mm"
+        )
+        return {
+            "weight":  mass_g / 1000.0,
+            "cog":     [cogx, cogy, cogz],
+            "inertia": [
+                [ixx / 1000.0, ixy / 1000.0, ixz / 1000.0],
+                [ixy / 1000.0, iyy / 1000.0, iyz / 1000.0],
+                [ixz / 1000.0, iyz / 1000.0, izz / 1000.0],
+            ],
+        }
+    except Exception as e:
+        logger.debug(f"{tag}MP_* 参数读取异常: {e}")
+        return None
+
+
+def _run_inertia_vbs_and_read(doc_com, part_com, label: str = "") -> dict | None:
+    """若零件已建立 Keep 惯量测量，自动运行 create_inertia_relations.catvbs，
+    再读取写入的 MP_* 参数。
+
+    先决条件：part.Parameters 中必须存在 ``惯量包络体.1\\质量`` 参数
+    （即用户已在 CATIA 中做了 "测量惯量 → 保持测量" 操作）。
+
+    VBS 脚本路径：``macros/create_inertia_relations.catvbs``（相对于项目根）。
+    """
+    tag = f"[MP] {label} " if label else "[MP] "
+
+    # 检查先决条件：惯量包络体.1\质量 参数必须存在
+    try:
+        part_com.Parameters.Item("惯量包络体.1\\质量")
+    except Exception:
+        logger.debug(f"{tag}无 '惯量包络体.1\\质量' 参数，跳过 VBS 路径")
+        return None
+
+    try:
+        from catia_copilot.utils import resource_path
+        vbs_path = resource_path("macros/create_inertia_relations.catvbs")
+        if not vbs_path.is_file():
+            logger.debug(f"{tag}找不到 VBS 文件: {vbs_path}，跳过")
+            return None
+
+        logger.debug(f"{tag}激活零件文档并运行 {vbs_path.name}")
+        doc_com.Activate()
+        doc_com.Application.SystemService.ExecuteScript(
+            str(vbs_path.parent), 1, vbs_path.name, "CATMain", []
+        )
+
+        result = _try_mp_params(part_com, label)
+        if result is not None:
+            logger.debug(f"{tag}VBS 执行后 MP_* 参数读取成功")
+        else:
+            logger.debug(f"{tag}VBS 执行后 MP_* 参数仍不可用")
+        return result
+    except Exception as e:
+        logger.debug(f"{tag}VBS 路径失败: {e}")
+        return None
+
+
+def _measure_part_mass_props(doc_com, part_com) -> dict | None:
+    """测量零件质量特性。
+
+    路径优先级：
+      1. **MP_* 参数**：直接读取由 ``create_inertia_relations.catvbs`` 写入的
+         ``MP_Mass_g``、``MP_COGx/y/z_mm``、``MP_Ixx/yy/zz/xy/xz/yz_gmm2`` 参数。
+      2. **VBS 自动绑定**：若零件有 ``惯量包络体.1\\质量``（Keep 测量），
+         自动运行 VBS 脚本创建 MP_* 参数后再读取。
+      3. **SPA 逐 Body 测量**：对每个 Body 依次尝试：
+         A. ``spa.GetMeasurable(body)`` — 直接传 Body 对象；
+         B. ``spa.GetMeasurable(CreateReferenceFromObject(body))`` — 通过引用。
+         读取质量时依次尝试：``.Volume`` → ``GetVolume(arr)`` → ``GetVolume()``，
+         再根据推算密度换算为质量；或直接读取 ``.Mass`` / ``GetMass()``。
 
     返回字典：
       {
@@ -93,7 +193,7 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
                     [Iyx,Iyy,Iyz],
                     [Izx,Izy,Izz]], # 重心处转动惯量（零件局部坐标轴），kg·mm²
       }
-    若测量失败则返回 None。
+    若所有路径均失败则返回 None。
     """
     # ── DEBUG: 记录传入对象的 COM 类型名 ─────────────────────────────────
     try:
@@ -105,6 +205,17 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
     except Exception as e:
         logger.debug(f"[SPA] 无法获取 part_com 类型: {e}")
 
+    # ── 路径 1：读取 MP_* 用户参数（由 create_inertia_relations.catvbs 写入）──────
+    _mp = _try_mp_params(part_com, "直接读取")
+    if _mp is not None:
+        return _mp
+
+    # ── 路径 2：自动运行 VBS 绑定脚本（要求零件已有 Keep 测量）─────────────────────
+    _mp = _run_inertia_vbs_and_read(doc_com, part_com, "VBS绑定")
+    if _mp is not None:
+        return _mp
+
+    # ── 路径 3：SPA 逐 Body 测量（兜底）─────────────────────────────────────────
     try:
         spa = doc_com.GetWorkbench("SPAWorkbench")
         logger.debug(f"[SPA] GetWorkbench('SPAWorkbench') 成功，类型: {type(spa).__name__}")
