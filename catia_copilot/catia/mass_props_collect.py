@@ -50,22 +50,49 @@ def _position_to_mat4(product_com) -> list[list[float]]:
 
     变换关系：P_parent = R @ P_local + T
 
-    注意：在 Python/win32com 中，传入列表不会像 VBA ByRef 那样被原地填充；
-    需捕获 GetComponents 的返回值才能得到真实分量。
+    路径说明（按优先级）：
+      路径 0 — pythoncom.VARIANT(VT_ARRAY|VT_R8, ...)：
+               构造与 CATIA 期望类型完全匹配的 SAFEARRAY(double)，
+               win32com 晚绑定下会将 COM 填写的值回写到 VARIANT.value。
+               这是 win32com 晚绑定下最可靠的方式，可解决 ret=0、
+               传入 list 不被修改的问题。
+      路径 1 — 传入 list 并捕获返回值：
+               部分早绑定或特殊 pycatia 版本会把 ByRef 结果放入返回值；
+               极少数环境会直接原地修改传入 list。
+      路径 2 — 无参调用：
+               极少数 CATIA/pycatia 版本支持直接返回分量序列。
+      兜底   — 返回 4×4 单位矩阵，视作零件位于父坐标系原点。
     """
     components: list[float] | None = None
 
-    # 路径 1：传入数组并捕获返回值（Python/win32com 通过返回值传出 ByRef 参数）
+    # 路径 0：pythoncom.VARIANT 显式指定 SAFEARRAY(double) 类型
+    # win32com 晚绑定下，传 Python list 时 GetComponents 返回 HRESULT(0) 而非数组；
+    # 使用 VT_ARRAY|VT_R8 的 VARIANT 可令 win32com 在调用后正确回写填充结果。
     try:
-        arr = [0.0] * 12
-        ret = product_com.Position.GetComponents(arr)
-        if ret is not None and hasattr(ret, '__len__') and len(ret) >= 12:
-            components = list(ret)
-        elif any(v != 0.0 for v in arr):
-            # 少数环境会原地填充传入列表
-            components = list(arr)
+        import pythoncom  # pywin32 的一部分，pycatia 已依赖
+        arr_var = pythoncom.VARIANT(
+            pythoncom.VT_ARRAY | pythoncom.VT_R8,
+            [0.0] * 12,
+        )
+        product_com.Position.GetComponents(arr_var)
+        val = arr_var.value
+        if val is not None and hasattr(val, '__len__') and len(val) >= 12:
+            components = list(val)
     except Exception:
         pass
+
+    # 路径 1：传入 list 并捕获返回值（早绑定/部分环境 ByRef → 返回值）
+    if components is None:
+        try:
+            arr = [0.0] * 12
+            ret = product_com.Position.GetComponents(arr)
+            if ret is not None and hasattr(ret, '__len__') and len(ret) >= 12:
+                components = list(ret)
+            elif any(v != 0.0 for v in arr):
+                # 极少数环境会原地填充传入列表
+                components = list(arr)
+        except Exception:
+            pass
 
     # 路径 2：无参调用（部分版本的 CATIA/pycatia 直接返回分量序列）
     if components is None:
