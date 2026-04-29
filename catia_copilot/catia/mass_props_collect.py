@@ -75,22 +75,92 @@ def _position_to_mat4(product_com) -> list[list[float]]:
 # SPA measurement helpers
 # ---------------------------------------------------------------------------
 
+def _try_part_analyze(part_com) -> dict | None:
+    """通过 ``Part.Analyze`` 读取整零件质量特性（不依赖 SPA 工作台）。
+
+    ``Part.Analyze`` 是 CATIA V5 内置 API，无需 SPA 许可，并且在材质
+    定义于零件（Part）层而非单个 Body 层时也能正确返回质量数据。
+
+    返回的重心与转动惯量已在零件局部坐标系中表达，且转动惯量在重心处给出，
+    无需再做平行轴定理修正。
+    """
+    try:
+        analyze = part_com.Analyze
+        logger.debug(f"[Analyze] Part.Analyze 成功，类型: {type(analyze).__name__}")
+    except Exception as e:
+        logger.debug(f"[Analyze] Part.Analyze 失败: {e}")
+        return None
+
+    # ── 质量 ──────────────────────────────────────────────────────────────
+    mass: float | None = None
+    try:
+        mass = analyze.Mass
+        logger.debug(f"[Analyze] Mass = {mass}")
+    except Exception as e:
+        logger.debug(f"[Analyze] Mass 失败: {e}")
+        return None
+
+    if mass is None or mass <= 0.0:
+        logger.debug(f"[Analyze] Mass = {mass}，无效，放弃 Analyze 路径")
+        return None
+
+    # ── 重心（零件局部坐标系） ─────────────────────────────────────────────
+    cog = [0.0, 0.0, 0.0]
+    try:
+        # 先尝试整体数组形式
+        analyze.GravityCenter(cog)
+        logger.debug(f"[Analyze] GravityCenter(arr) = {cog}")
+    except Exception as e1:
+        logger.debug(f"[Analyze] GravityCenter(arr) 失败: {e1}，尝试三独立参数")
+        try:
+            cx = [0.0]; cy = [0.0]; cz = [0.0]
+            analyze.GravityCenter(cx, cy, cz)
+            cog = [cx[0], cy[0], cz[0]]
+            logger.debug(f"[Analyze] GravityCenter(x,y,z) = {cog}")
+        except Exception as e2:
+            logger.debug(f"[Analyze] GravityCenter(x,y,z) 也失败: {e2}，尝试属性访问")
+            try:
+                gc = analyze.GravityCenter
+                try:
+                    tmp = [0.0, 0.0, 0.0]
+                    gc.GetCoordinates(tmp)
+                    cog = list(tmp)
+                except Exception:
+                    cog = [float(gc.X), float(gc.Y), float(gc.Z)]
+                logger.debug(f"[Analyze] GravityCenter 属性 = {cog}")
+            except Exception as e3:
+                logger.debug(f"[Analyze] GravityCenter 所有方式均失败: {e3}")
+
+    # ── 转动惯量（在重心处，零件局部坐标轴，已由 CATIA 计算） ─────────────
+    inertia_9 = [0.0] * 9
+    try:
+        analyze.InertiaTensor(inertia_9)
+        logger.debug(f"[Analyze] InertiaTensor(arr) = {inertia_9}")
+    except Exception as e:
+        logger.debug(f"[Analyze] InertiaTensor(arr) 失败: {e}")
+
+    logger.debug(f"[Analyze] 成功: weight={mass}, cog={cog}")
+    return {
+        "weight": mass,
+        "cog":    cog,
+        "inertia": [
+            [inertia_9[0], inertia_9[1], inertia_9[2]],
+            [inertia_9[3], inertia_9[4], inertia_9[5]],
+            [inertia_9[6], inertia_9[7], inertia_9[8]],
+        ],
+    }
+
+
 def _measure_part_mass_props(doc_com, part_com) -> dict | None:
-    """通过 CATIA SPA 工作台逐一测量零件各 Body 的质量特性。
+    """测量零件质量特性，优先使用 Part.Analyze，回退到 SPA 逐 Body 测量。
 
-    对每个 Body 依次尝试两种路径获取 Measurable：
-      路径 A（首选）：``spa.GetMeasurable(body)`` — 直接传 Body 对象，
-        符合 CATIA V5 脚本推荐方式，能获取全部质量/体积属性。
-      路径 B（回退）：``spa.GetMeasurable(CreateReferenceFromObject(body))`` — 通过
-        拓扑引用，某些安装配置下可能成功。
+    路径 0（首选）：``Part.Analyze`` — CATIA V5 内置 API，不依赖 SPA 许可，
+      在材质定义于 Part 层时也能正确返回整零件数据。
 
-    质量读取顺序：``.Mass`` 属性 → ``GetMass()`` 方法 → 体积法回退。
-
-    体积法回退（当材质定义在零件层而非 Body 层时）：
-      1. 密度探针：依次对 part_com / 各 Body 直接调用 GetMeasurable，
-         取 mass/volume → 推算 density = mass/vol（kg/mm³）。
-      2. ``GetVolume(body)`` 获取 Body 体积（纯几何量）。
-      3. ``body_mass = density × body_vol``
+    路径 1（回退）：SPA 逐 Body 测量 — 对每个 Body 依次尝试：
+      A. ``spa.GetMeasurable(body)`` — 直接传 Body 对象；
+      B. ``spa.GetMeasurable(CreateReferenceFromObject(body))`` — 通过引用。
+    若 ``GetMass()`` 失败则再尝试体积法（volume × density）。
 
     返回字典：
       {
@@ -111,6 +181,12 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
         logger.debug(f"[SPA] part_com 类型: {type(part_com).__name__}")
     except Exception as e:
         logger.debug(f"[SPA] 无法获取 part_com 类型: {e}")
+
+    # ── 路径 0：Part.Analyze（首选，不依赖 SPA，材质在 Part 层时也有效）────
+    result = _try_part_analyze(part_com)
+    if result is not None:
+        return result
+    logger.debug("[SPA] Part.Analyze 路径失败，回退到 SPA 逐 Body 测量")
 
     try:
         spa = doc_com.GetWorkbench("SPAWorkbench")
