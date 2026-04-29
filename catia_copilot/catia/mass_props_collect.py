@@ -218,29 +218,16 @@ def _measure_part_mass_props(doc_com, part_com, part_number: str = "") -> dict |
     # ── 路径 1：读取 MP_* 用户参数（由 create_inertia_relations.catvbs 写入）──────
     _mp = _try_mp_params(part_com, "直接读取")
     if _mp is not None:
-        logger.debug(
-            f"[MP] 路径1(MP_*参数) 成功: "
-            f"weight={_mp['weight']}g, "
-            f"cog={_mp['cog']}, "
-            f"Ixx={_mp['inertia'][0][0]}g·mm²"
-        )
         return _mp
 
     # ── 路径 2：自动运行 VBS 绑定脚本（要求零件已有 Keep 测量）─────────────────────
     _mp = _run_inertia_vbs_and_read(doc_com, part_com, "VBS绑定", part_number)
     if _mp is not None:
-        logger.debug(
-            f"[MP] 路径2(VBS绑定) 成功: "
-            f"weight={_mp['weight']}g, "
-            f"cog={_mp['cog']}, "
-            f"Ixx={_mp['inertia'][0][0]}g·mm²"
-        )
         return _mp
 
     # ── 路径 3：SPA 逐 Body 测量（兜底）─────────────────────────────────────────
     try:
         spa = doc_com.GetWorkbench("SPAWorkbench")
-        logger.debug(f"[SPA] GetWorkbench('SPAWorkbench') 成功，类型: {type(spa).__name__}")
     except Exception as e:
         logger.debug(f"[SPA] 无法获取 SPAWorkbench: {e}")
         return None
@@ -251,7 +238,6 @@ def _measure_part_mass_props(doc_com, part_com, part_number: str = "") -> dict |
     try:
         bodies = part_com.Bodies
         body_count = bodies.Count
-        logger.debug(f"[SPA] Bodies.Count = {body_count}")
     except Exception as e:
         logger.debug(f"[SPA] 无法访问 Bodies: {e}")
 
@@ -525,7 +511,7 @@ def _measure_part_mass_props(doc_com, part_com, part_number: str = "") -> dict |
         except Exception as e:
             logger.debug(f"[SPA] 访问 Body {i} 失败: {e}")
 
-    logger.debug(f"[SPA] 所有 Body 累计质量: {total_mass}")
+    logger.debug(f"[SPA] 所有 Body 累计质量: {total_mass:.3g} kg")
 
     if total_mass <= 0.0:
         return {
@@ -546,7 +532,10 @@ def _measure_part_mass_props(doc_com, part_com, part_number: str = "") -> dict |
             delta = (1.0 if row == col else 0.0) * r2 - r[row] * r[col]
             I_at_cog[row][col] = I_at_origin[row][col] - total_mass * delta
 
-    logger.debug(f"[SPA] 最终结果: weight={total_mass}, cog={part_cog}")
+    logger.debug(
+        f"[SPA] 最终结果: weight={total_mass * 1000.0:.3g}g, "
+        f"cog=[{', '.join(f'{v:.3g}' for v in part_cog)}]mm"
+    )
     # SPA 返回值单位：质量 kg、坐标 mm、惯量 kg·mm²。
     # 统一换算为程序内部单位 g / mm / g·mm²（质量和惯量各乘以 1000，坐标不变）。
     return {
@@ -634,16 +623,6 @@ def _post_process_rows(rows: list[dict]) -> None:
             [sum(RI[i][k] * RT[k][j] for k in range(3)) for j in range(3)]
             for i in range(3)
         ]
-
-        # ── DEBUG: 记录变换前后值，便于排查根坐标系数据异常 ───────────────
-        logger.debug(
-            f"[POST] {row.get('Part Number', '?')}  "
-            f"weight={mp.get('weight')}g | "
-            f"cog_local={[round(v,3) for v in cog_local]} → "
-            f"cog_root={[round(v,3) for v in cog_root]} | "
-            f"Ixx_local={I_local[0][0]:.3g} → Ixx_root={I_root[0][0]:.3g} | "
-            f"R[0]={[round(v,4) for v in R[0]]} T={[round(v,3) for v in T]}"
-        )
 
         # 更新显示字段为根坐标系值
         row["CogX"] = cog_root[0]

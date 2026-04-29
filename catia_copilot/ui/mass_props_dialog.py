@@ -48,7 +48,7 @@ _INERTIA_IDX: dict[str, tuple[int, int]] = {
 }
 
 
-def _fmt(value, digits: int = 4) -> str:
+def _fmt(value, digits: int = 3) -> str:
     """数值 → 字符串，None → '—'（不含单位换算）。"""
     if value is None:
         return "—"
@@ -157,11 +157,15 @@ class MassPropsDialog(QDialog):
         """将质量/惯量原始值（g / g·mm²）乘以 _unit_factor 并格式化为字符串。
 
         _unit_factor = 1.0 时以 g / g·mm² 显示；= 0.001 时以 kg / kg·mm² 显示。
+        质量/坐标等较小值使用定点格式（3位小数），惯量等大值使用科学计数法（3位有效数字）。
         """
         if value is None:
             return "—"
         try:
-            return f"{float(value) * self._unit_factor:.4f}"
+            v = float(value) * self._unit_factor
+            if abs(v) >= 1e4 or (v != 0.0 and abs(v) < 0.01):
+                return f"{v:.3e}"
+            return f"{v:.3f}"
         except (TypeError, ValueError):
             return str(value)
 
@@ -834,18 +838,26 @@ class MassPropsDialog(QDialog):
         unit_lbl = self._unit  # "kg" or "g"
         inertia_unit = f"{unit_lbl}·mm²"
         w_val = result.get("total_weight", 0.0)
-        self._lbl_weight.setText(f"{w_val * self._unit_factor:.4f} {unit_lbl}")
+        w_disp = w_val * self._unit_factor
+        self._lbl_weight.setText(f"{w_disp:.3f} {unit_lbl}")
         cog = result.get("cog", [0.0, 0.0, 0.0])
-        self._lbl_cx.setText(f"{cog[0]:.4f} mm")
-        self._lbl_cy.setText(f"{cog[1]:.4f} mm")
-        self._lbl_cz.setText(f"{cog[2]:.4f} mm")
+        self._lbl_cx.setText(f"{cog[0]:.3f} mm")
+        self._lbl_cy.setText(f"{cog[1]:.3f} mm")
+        self._lbl_cz.setText(f"{cog[2]:.3f} mm")
         I = result.get("inertia", [[0.0] * 3 for _ in range(3)])
-        self._lbl_ixx.setText(f"{I[0][0] * self._unit_factor:.4f} {inertia_unit}")
-        self._lbl_iyy.setText(f"{I[1][1] * self._unit_factor:.4f} {inertia_unit}")
-        self._lbl_izz.setText(f"{I[2][2] * self._unit_factor:.4f} {inertia_unit}")
-        self._lbl_ixy.setText(f"{I[0][1] * self._unit_factor:.4f} {inertia_unit}")
-        self._lbl_ixz.setText(f"{I[0][2] * self._unit_factor:.4f} {inertia_unit}")
-        self._lbl_iyz.setText(f"{I[1][2] * self._unit_factor:.4f} {inertia_unit}")
+
+        def _fmt_inertia(v: float) -> str:
+            disp = v * self._unit_factor
+            if abs(disp) >= 1e4 or (disp != 0.0 and abs(disp) < 0.01):
+                return f"{disp:.3e}"
+            return f"{disp:.3f}"
+
+        self._lbl_ixx.setText(f"{_fmt_inertia(I[0][0])} {inertia_unit}")
+        self._lbl_iyy.setText(f"{_fmt_inertia(I[1][1])} {inertia_unit}")
+        self._lbl_izz.setText(f"{_fmt_inertia(I[2][2])} {inertia_unit}")
+        self._lbl_ixy.setText(f"{_fmt_inertia(I[0][1])} {inertia_unit}")
+        self._lbl_ixz.setText(f"{_fmt_inertia(I[0][2])} {inertia_unit}")
+        self._lbl_iyz.setText(f"{_fmt_inertia(I[1][2])} {inertia_unit}")
 
     # ── 导出 ───────────────────────────────────────────────────────────────
 
