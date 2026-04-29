@@ -49,19 +49,35 @@ def _position_to_mat4(product_com) -> list[list[float]]:
       [9..11] = 平移向量 T
 
     变换关系：P_parent = R @ P_local + T
+
+    注意：在 Python/win32com 中，传入列表不会像 VBA ByRef 那样被原地填充；
+    需捕获 GetComponents 的返回值才能得到真实分量。
     """
+    components: list[float] | None = None
+
+    # 路径 1：传入数组并捕获返回值（Python/win32com 通过返回值传出 ByRef 参数）
     try:
-        components = [0.0] * 12
-        product_com.Position.GetComponents(components)
+        arr = [0.0] * 12
+        ret = product_com.Position.GetComponents(arr)
+        if ret is not None and hasattr(ret, '__len__') and len(ret) >= 12:
+            components = list(ret)
+        elif any(v != 0.0 for v in arr):
+            # 少数环境会原地填充传入列表
+            components = list(arr)
     except Exception:
+        pass
+
+    # 路径 2：无参调用（部分版本的 CATIA/pycatia 直接返回分量序列）
+    if components is None:
         try:
             result = product_com.Position.GetComponents()
-            if hasattr(result, '__len__') and len(result) == 12:
+            if result is not None and hasattr(result, '__len__') and len(result) >= 12:
                 components = list(result)
-            else:
-                return _identity_4x4()
         except Exception:
-            return _identity_4x4()
+            pass
+
+    if components is None:
+        return _identity_4x4()
 
     return [
         [components[0], components[3], components[6], components[9]],
