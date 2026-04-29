@@ -614,15 +614,15 @@ class MassPropsDialog(QDialog):
         self._calc_btn.setEnabled(True)
         self._export_btn.setEnabled(True)
 
-        failed_count = sum(1 for r in rows if r.get("_spa_failed") and r.get("Type") == "零件")
+        failed_count = sum(1 for r in rows if r.get("_meas_failed") and r.get("Type") == "零件")
         if failed_count:
             QMessageBox.information(
                 self, "部分零件测量失败",
-                f"有 {failed_count} 个零件节点无法完成SPA质量测量（显示橙色背景）。\n\n"
+                f"有 {failed_count} 个零件节点无法完成质量特性测量（显示橙色背景）。\n\n"
                 "可能原因：\n"
                 "  • 零件文档未加载到CATIA会话中\n"
-                "  • CATIA SPA工作台不可用\n"
-                "  • 零件无几何实体\n\n"
+                "  • 零件未运行「创建惯量关系」宏（MP_* 参数不存在）\n"
+                "  • 零件无有效的「惯量包络体」Keep 测量\n\n"
                 "未能测量的零件不参与最终汇总计算。",
             )
 
@@ -712,7 +712,7 @@ class MassPropsDialog(QDialog):
         pn        = str(row_data.get("Part Number", ""))
         not_found = bool(row_data.get("_not_found"))
         unreadable = bool(row_data.get("_unreadable"))
-        spa_failed = bool(row_data.get("_spa_failed"))
+        meas_failed = bool(row_data.get("_meas_failed"))
         node_type  = str(row_data.get("Type", ""))
         row_locked = unreadable or not_found
 
@@ -767,7 +767,7 @@ class MassPropsDialog(QDialog):
             for ci in range(len(self._columns)):
                 item.setForeground(ci, grey)
                 item.setBackground(ci, bg)
-        elif spa_failed and node_type == "零件":
+        elif meas_failed and node_type == "零件":
             bg = QColor(255, 210, 160)
             for ci in range(len(self._columns)):
                 item.setBackground(ci, bg)

@@ -35,7 +35,7 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from catia_copilot.constants import FILENAME_NOT_FOUND
+from catia_copilot.constants import FILENAME_NOT_FOUND, FILENAME_UNSAVED
 
 logger = logging.getLogger(__name__)
 
@@ -500,7 +500,8 @@ def collect_mass_props_rows(
 
     与 collect_bom_rows() 的关键区别：
       - **不对兄弟零件去重**——每个实例单独输出一行。
-      - 仅对类型为"零件"的叶子节点调用 SPA 测量；部件/产品节点跳过测量。
+      - 仅对类型为"零件"的叶子节点执行质量特性测量（通过 MP_* 用户参数或 VBS 绑定脚本），
+        部件/产品节点跳过测量，其质量由后处理阶段按平行轴定理汇总子树获得。
       - 每行额外包含 ``_placement`` 字段（4×4 列表），为该实例到根坐标系的变换矩阵。
 
     参数：
@@ -513,7 +514,7 @@ def collect_mass_props_rows(
         行字典列表，每行含以下键：
           Level, Type, Part Number, Filename, Nomenclature, Revision,
           Weight, CogX, CogY, CogZ, Ixx, Iyy, Izz, Ixy, Ixz, Iyz,
-          _filepath, _placement, _not_found, _unreadable, _spa_failed
+          _filepath, _placement, _not_found, _no_file, _unreadable, _meas_failed
     """
     from pycatia import catia, CatWorkModeType
     from pycatia.product_structure_interfaces.product_document import ProductDocument
@@ -575,8 +576,10 @@ def collect_mass_props_rows(
         except Exception:
             filepath = ""
 
-        # filepath 为空 → 文件未找到（可能路径失效或文档未加载）
+        # filepath 为空 → CATIA 无法解析该节点的文件引用（引用丢失或文档未载入）
         not_found = not bool(filepath)
+        # filepath 非空但磁盘上不存在 → 文件尚未保存到磁盘（仍在 CATIA 内存中）
+        no_file   = bool(filepath) and not Path(filepath).exists()
 
         # ── 判断节点类型 ──────────────────────────────────────────────────────
         # 规则：
@@ -627,8 +630,10 @@ def collect_mass_props_rows(
                 revision     = _get_prop(product, "Revision")
 
         # ── 质量特性测量（仅对叶子零件节点）────────────────────────────────────
+        # 测量路径：1) 读取 MP_* 用户参数；2) 自动运行 VBS 绑定脚本后再读取。
+        # 两种路径均不使用 CATIA SPA（已移除）。
         mass_props: dict | None = None
-        spa_failed = False
+        meas_failed = False
 
         if node_type == "零件" and is_readable and filepath:
             if filepath in _mass_cache:
@@ -656,7 +661,7 @@ def collect_mass_props_rows(
                     except Exception as e:
                         logger.debug(f"无法测量零件 {filepath}: {e}")
                         mass_props  = None
-                        spa_failed  = True
+                        meas_failed  = True
 
                     # ── DEBUG：记录每个零件的测量结果概要 ────────────────────
                     if mass_props is not None:
@@ -673,13 +678,13 @@ def collect_mass_props_rows(
                     # 写入缓存（即使测量失败也缓存 None，防止重复尝试）
                     _mass_cache[filepath] = mass_props
                 else:
-                    # 文档未在 CATIA 中打开，无法测量
+                    # 文档未在 CATIA 中打开，无法完成测量
                     logger.debug(f"找不到已打开的文档: {filepath}")
-                    spa_failed = True
+                    meas_failed = True
 
-        # 若零件本应可测但最终无数据，标记 spa_failed
+        # 若零件本应可测但最终无数据，标记 meas_failed（无论是找不到文档还是读参数失败）
         if mass_props is None:
-            spa_failed = spa_failed or (node_type == "零件" and is_readable and not not_found)
+            meas_failed = meas_failed or (node_type == "零件" and is_readable and not not_found)
 
         # ── 组装行字典 ─────────────────────────────────────────────────────────
         # CogX/Y/Z 和 Ixx 等此处存储的是零件局部坐标系下的原始测量值；
@@ -692,7 +697,10 @@ def collect_mass_props_rows(
             "Level":        level,
             "Type":         node_type,
             "Part Number":  pn,
-            "Filename":     Path(filepath).stem if filepath else FILENAME_NOT_FOUND,
+            # Filename 三态：文件路径为空 → "未检索到"；路径非空但磁盘不存在 → "未保存"；正常 → 文件名（不含扩展名）
+            "Filename":     (FILENAME_UNSAVED   if no_file
+                             else Path(filepath).stem if filepath
+                             else FILENAME_NOT_FOUND),
             "Nomenclature": nomenclature,
             "Revision":     revision,
             "Weight":       mp.get("weight", None),
@@ -707,10 +715,11 @@ def collect_mass_props_rows(
             "Iyz":          inertia[1][2] if mp else None,
             "_filepath":    filepath,
             "_placement":   abs_mat4,   # 零件局部坐标系 → 根产品坐标系的 4×4 变换矩阵
-            "_not_found":   not_found,
+            "_not_found":   not_found,  # True：CATIA 无法解析文件引用（路径丢失）
+            "_no_file":     no_file,    # True：路径有效但文件尚未保存到磁盘
             "_unreadable":  not is_readable,
-            "_spa_failed":  spa_failed,
-            "_mass_props":  mass_props,  # 原始测量值，供联动修改时使用
+            "_meas_failed": meas_failed,  # True：零件文档可访问但质量特性测量失败（MP_*/VBS 均无数据）
+            "_mass_props":  mass_props,   # 原始测量值，供联动修改时使用
         }
 
         rows.append(row)
