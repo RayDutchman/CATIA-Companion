@@ -64,7 +64,7 @@ Sub CATMain(iParameters)
             Set doc = CATIA.Documents.Item(i)
             If TypeName(doc) = "PartDocument" Then
                 Dim pn
-                pn = doc.Part.PartNumber
+                pn = doc.Product.PartNumber
                 If pn = targetPN Then
                     Set partDoc = doc
                     partDoc.Activate
@@ -78,7 +78,7 @@ Sub CATMain(iParameters)
         ' 没找到目标文档：静默退出
         If Not found Then Exit Sub
     Else
-        ' 未传入零件号：使用当前活动文档
+        MsgBox "未传入零件号：使用当前活动文档进行参数绑定。"
         If CATIA.Documents.Count = 0 Then Exit Sub
         If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then Exit Sub
         Set partDoc = CATIA.ActiveDocument
@@ -96,9 +96,21 @@ Sub CATMain(iParameters)
 
     ' 惯量包络体的参数名前缀（CATIA 生成的 Keep 测量节点名称）
     Dim srcPrefix
-    srcPrefix = "惯量包络体.1\"
+    srcPrefix = "Part1\惯量包络体.1\"
     MsgBox "正在为零件 '" & partDoc.Name & "' 创建惯量参数绑定...", vbInformation, "CATIA Copilot"
     ' ── 先决条件校验：检查 Keep 测量参数是否存在 ───────────────────────────
+    ' 列出所有参数名称，找到实际的惯量参数名
+    Dim dbgMsg, pi
+    dbgMsg = "参数总数: " & params.Count & Chr(10)
+    For pi = 1 To params.Count
+        Dim pp
+        Set pp = params.Item(pi)
+        If InStr(pp.Name, "质量") > 0 Or InStr(pp.Name, "IoxG") > 0 Then
+            dbgMsg = dbgMsg & pp.Name & Chr(10)
+        End If
+    Next
+    MsgBox dbgMsg
+    MsgBox srcPrefix & "质量"
     If Not ParameterExists(params, srcPrefix & "质量") Then Exit Sub
     ' 可以运行到这里
     ' ── 第 1 步：确保 MP_* 参数存在（不存在则创建，存在则复用）─────────────
