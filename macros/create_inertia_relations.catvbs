@@ -97,10 +97,10 @@ Sub CATMain(iParameters)
     ' 惯量包络体的参数名前缀（CATIA 生成的 Keep 测量节点名称）
     Dim srcPrefix
     srcPrefix = "惯量包络体.1\"
-
+    MsgBox "正在为零件 '" & partDoc.Name & "' 创建惯量参数绑定...", vbInformation, "CATIA Copilot"
     ' ── 先决条件校验：检查 Keep 测量参数是否存在 ───────────────────────────
     If Not ParameterExists(params, srcPrefix & "质量") Then Exit Sub
-
+    ' 可以运行到这里
     ' ── 第 1 步：确保 MP_* 参数存在（不存在则创建，存在则复用）─────────────
     Dim pVolume:  Set pVolume  = GetOrCreateReal(params, "MP_Volume_cm3")
     Dim pDensity: Set pDensity = GetOrCreateReal(params, "MP_Density_g_cm3")
