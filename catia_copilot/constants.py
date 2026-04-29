@@ -188,6 +188,7 @@ MASS_PROPS_COLUMN_DISPLAY_NAMES: dict[str, str] = {
     "Part Number":  "零件编号",
     "Nomenclature": "术语（中文名称）",
     "Revision":     "版本",
+    "Quantity":     "数量",
     "Weight":       "重量 (kg)",
     "CogX":         "重心 X (mm)",
     "CogY":         "重心 Y (mm)",
@@ -204,10 +205,15 @@ MASS_PROPS_COLUMN_DISPLAY_NAMES: dict[str, str] = {
 # (only "Weight" is editable for part rows)
 MASS_PROPS_READONLY_COLUMNS: frozenset[str] = frozenset({
     "#", "Level", "Type", "Filename", "Part Number",
-    "Nomenclature", "Revision",
+    "Nomenclature", "Revision", "Quantity",
     "CogX", "CogY", "CogZ",
     "Ixx", "Iyy", "Izz", "Ixy", "Ixz", "Iyz",
 })
+
+# Columns in the mass properties dialog that can be hidden by the user
+MASS_PROPS_HIDEABLE_COLUMNS: tuple[str, ...] = (
+    "Filename", "Part Number", "Nomenclature", "Revision",
+)
 
 # ---------------------------------------------------------------------------
 # Part Number validation

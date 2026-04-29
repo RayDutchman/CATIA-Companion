@@ -76,7 +76,11 @@ def _position_to_mat4(product_com) -> list[list[float]]:
 # ---------------------------------------------------------------------------
 
 def _measure_part_mass_props(doc_com, part_com) -> dict | None:
-    """通过 CATIA SPA 工作台测量零件中全部几何体的质量特性。
+    """通过 CATIA SPA 工作台测量零件的质量特性。
+
+    策略（按优先级）：
+    1. 直接测量整个 Part（最可靠；适合单体和多体零件）。
+    2. 若整体测量失败，逐一测量各 Body（通过 CreateReferenceFromObject 创建引用）。
 
     返回字典：
       {
@@ -93,14 +97,6 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
     except Exception as e:
         logger.debug(f"无法获取 SPAWorkbench: {e}")
         return None
-
-    try:
-        bodies = part_com.Bodies
-        body_count = bodies.Count
-    except Exception as e:
-        logger.debug(f"无法访问 Bodies: {e}")
-        # 尝试将整个 part 作为可测量对象
-        body_count = 0
 
     total_mass = 0.0
     weighted_cog = [0.0, 0.0, 0.0]
@@ -163,21 +159,40 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
         for j in range(3):
             weighted_cog[j] += mass * cog[j]
 
-    if body_count > 0:
-        for i in range(1, body_count + 1):
-            try:
-                body = bodies.Item(i)
-                meas = spa.GetMeasurable(body)
-                _accumulate_body(meas)
-            except Exception as e:
-                logger.debug(f"无法测量 Body {i}: {e}")
-    else:
-        # 无独立 Bodies 或访问 Bodies 失败，尝试直接测量整个 part
+    # ── 策略1：直接测量整个 Part ─────────────────────────────────────────
+    whole_part_ok = False
+    try:
+        meas = spa.GetMeasurable(part_com)
+        _accumulate_body(meas)
+        if total_mass > 0.0:
+            whole_part_ok = True
+    except Exception as e:
+        logger.debug(f"无法直接测量 Part: {e}")
+
+    # ── 策略2：逐一测量 Bodies（整体测量失败时的备用）──────────────────
+    if not whole_part_ok:
+        body_count = 0
+        bodies = None
         try:
-            meas = spa.GetMeasurable(part_com)
-            _accumulate_body(meas)
+            bodies = part_com.Bodies
+            body_count = bodies.Count
         except Exception as e:
-            logger.debug(f"无法测量 part 整体: {e}")
+            logger.debug(f"无法访问 Bodies: {e}")
+
+        if body_count > 0 and bodies is not None:
+            for i in range(1, body_count + 1):
+                try:
+                    body = bodies.Item(i)
+                    # 优先通过 CreateReferenceFromObject 获取正确类型
+                    try:
+                        ref = part_com.CreateReferenceFromObject(body)
+                        meas = spa.GetMeasurable(ref)
+                    except Exception as ref_err:
+                        logger.debug(f"CreateReferenceFromObject/GetMeasurable(ref) 失败: {ref_err}，改用直接传入 Body")
+                        meas = spa.GetMeasurable(body)
+                    _accumulate_body(meas)
+                except Exception as e:
+                    logger.debug(f"无法测量 Body {i}: {e}")
 
     if total_mass <= 0.0:
         return {
