@@ -101,6 +101,14 @@ Sub CATMain(iParameters)
     srcPrefix = "惯量包络体.1\"
     ' ── 先决条件校验：检查 Keep 测量参数是否存在 ───────────────────────────
     If Not ParameterExists(params, srcPrefix & "质量") Then Exit Sub
+
+    ' CATIA Knowledge Language 公式中，参数引用必须使用带零件号前缀的完整限定名，
+    ' 例如 `MyPart\惯量包络体.1\质量`。Parameters.Item() 接受不含零件号的相对路径，
+    ' 但 KL 公式解析器在 Relations.CreateFormula 时只认完整路径，否则无法解析引用，
+    ' 公式创建会静默失败。
+    Dim klPrefix
+    klPrefix = part.PartNumber & "\" & srcPrefix
+
     ' ── 第 1 步：确保 MP_* 参数存在（不存在则创建，存在则复用）─────────────
     Dim pVolume:  Set pVolume  = GetOrCreateReal(params, "MP_Volume_cm3")
     Dim pDensity: Set pDensity = GetOrCreateReal(params, "MP_Density_g_cm3")
@@ -118,23 +126,22 @@ Sub CATMain(iParameters)
     Dim pIyz: Set pIyz = GetOrCreateReal(params, "MP_Iyz_gmm2")
 
     ' ── 第 2 步：确保公式存在（不存在则创建，存在则保留现有公式）──────────
-    ' 注意：单位常量字符串要与你环境一致：
-    '   体积：1cm3
-    '   密度：你原文写的是 1g_cm3（下划线）；如果你环境实际是 1g/cm3，请改成 "1g/cm3"
-    CreateFormulaIfMissing rels, "F_MP_Volume_cm3",    pVolume,  StdExpr(srcPrefix, "体积",  "1cm3")
-    CreateFormulaIfMissing rels, "F_MP_Density_g_cm3", pDensity, StdExpr(srcPrefix, "密度",  "1g_cm3")
-    CreateFormulaIfMissing rels, "F_MP_Mass_g",        pMass,    StdExpr(srcPrefix, "质量",  "1g")
+    ' 注意：公式右侧使用 klPrefix（含零件号前缀的完整限定名），
+    '       单位常量字符串要与你环境一致（下同）。
+    CreateFormulaIfMissing rels, "F_MP_Volume_cm3",    pVolume,  StdExpr(klPrefix, "体积",  "1cm3")
+    CreateFormulaIfMissing rels, "F_MP_Density_g_cm3", pDensity, StdExpr(klPrefix, "密度",  "1g_cm3")
+    CreateFormulaIfMissing rels, "F_MP_Mass_g",        pMass,    StdExpr(klPrefix, "质量",  "1g")
 
-    CreateFormulaIfMissing rels, "F_MP_COGx_mm", pCOGx, StdExpr(srcPrefix, "Gx",   "1mm")
-    CreateFormulaIfMissing rels, "F_MP_COGy_mm", pCOGy, StdExpr(srcPrefix, "Gy",   "1mm")
-    CreateFormulaIfMissing rels, "F_MP_COGz_mm", pCOGz, StdExpr(srcPrefix, "Gz",   "1mm")
+    CreateFormulaIfMissing rels, "F_MP_COGx_mm", pCOGx, StdExpr(klPrefix, "Gx",   "1mm")
+    CreateFormulaIfMissing rels, "F_MP_COGy_mm", pCOGy, StdExpr(klPrefix, "Gy",   "1mm")
+    CreateFormulaIfMissing rels, "F_MP_COGz_mm", pCOGz, StdExpr(klPrefix, "Gz",   "1mm")
 
-    CreateFormulaIfMissing rels, "F_MP_Ixx_gmm2", pIxx, StdExpr(srcPrefix, "IoxG", "1gxmm2")
-    CreateFormulaIfMissing rels, "F_MP_Iyy_gmm2", pIyy, StdExpr(srcPrefix, "IoyG", "1gxmm2")
-    CreateFormulaIfMissing rels, "F_MP_Izz_gmm2", pIzz, StdExpr(srcPrefix, "IozG", "1gxmm2")
-    CreateFormulaIfMissing rels, "F_MP_Ixy_gmm2", pIxy, StdExpr(srcPrefix, "IxyG", "1gxmm2")
-    CreateFormulaIfMissing rels, "F_MP_Ixz_gmm2", pIxz, StdExpr(srcPrefix, "IxzG", "1gxmm2")
-    CreateFormulaIfMissing rels, "F_MP_Iyz_gmm2", pIyz, StdExpr(srcPrefix, "IyzG", "1gxmm2")
+    CreateFormulaIfMissing rels, "F_MP_Ixx_gmm2", pIxx, StdExpr(klPrefix, "IoxG", "1gxmm2")
+    CreateFormulaIfMissing rels, "F_MP_Iyy_gmm2", pIyy, StdExpr(klPrefix, "IoyG", "1gxmm2")
+    CreateFormulaIfMissing rels, "F_MP_Izz_gmm2", pIzz, StdExpr(klPrefix, "IozG", "1gxmm2")
+    CreateFormulaIfMissing rels, "F_MP_Ixy_gmm2", pIxy, StdExpr(klPrefix, "IxyG", "1gxmm2")
+    CreateFormulaIfMissing rels, "F_MP_Ixz_gmm2", pIxz, StdExpr(klPrefix, "IxzG", "1gxmm2")
+    CreateFormulaIfMissing rels, "F_MP_Iyz_gmm2", pIyz, StdExpr(klPrefix, "IyzG", "1gxmm2")
 
     ' 注：通常不需要显式 part.Update；下次更新时公式会自动计算。
 End Sub
@@ -167,12 +174,21 @@ Private Sub CreateFormulaIfMissing(rels, fName, targetParam, rhsExpr)
     Err.Clear
     On Error GoTo 0
 
-    ' 公式不存在，尝试创建；失败时静默忽略
+    ' 公式不存在，尝试创建；失败时通过 MsgBox 报告错误，便于诊断。
     On Error Resume Next
     Err.Clear
     rels.CreateFormula fName, "", targetParam, rhsExpr
+    Dim createErr: createErr = Err.Number
+    Dim createDesc: createDesc = Err.Description
     Err.Clear
     On Error GoTo 0
+
+    If createErr <> 0 Then
+        MsgBox "创建公式 [" & fName & "] 失败" & vbCrLf & _
+               "表达式：" & rhsExpr & vbCrLf & _
+               "错误 " & createErr & "：" & createDesc, _
+               vbExclamation, "create_inertia_relations"
+    End If
 End Sub
 
 ' ============================================================
