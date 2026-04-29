@@ -95,10 +95,19 @@ Sub CATMain(iParameters)
     Set rels = part.Relations
 
     ' 惯量包络体的参数名前缀（CATIA 生成的 Keep 测量节点名称）
-    ' 注意：在零件自身的 Parameters 集合内，参数全名不含零件号前缀，
-    '       直接以测量节点名开头，例如 "惯量包络体.1\质量"。
+    '
+    ' 参数全名的前缀规则：
+    '   · 通过 Documents 集合按零件号定位文档时（targetPN 非空），
+    '     CATIA 在 Part.Parameters.Item() 路径中以"零件号\"作为顶层命名空间，
+    '     因此前缀为 targetPN & "\惯量包络体.1\"。
+    '   · 直接操作当前活动文档时（targetPN 为空），CATIA 使用相对于
+    '     Part 本身的局部路径，不含零件号前缀，前缀为 "惯量包络体.1\"。
     Dim srcPrefix
-    srcPrefix = targetPN & "\惯量包络体.1\"
+    If targetPN <> "" Then
+        srcPrefix = targetPN & "\惯量包络体.1\"
+    Else
+        srcPrefix = "惯量包络体.1\"
+    End If
     ' ── 先决条件校验：检查 Keep 测量参数是否存在 ───────────────────────────
     If Not ParameterExists(params, srcPrefix & "质量") Then Exit Sub
     ' ── 第 1 步：确保 MP_* 参数存在（不存在则创建，存在则复用）─────────────
