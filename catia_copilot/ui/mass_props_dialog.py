@@ -20,7 +20,8 @@ from PySide6.QtWidgets import (
     QPushButton, QTreeWidgetItem, QHeaderView, QAbstractItemView,
     QCheckBox, QGroupBox, QMessageBox, QApplication,
     QFileDialog, QProgressDialog, QLineEdit, QGridLayout, QFrame,
-    QRadioButton, QButtonGroup, QWidget,
+    QRadioButton, QButtonGroup, QWidget, QComboBox,
+    QStyledItemDelegate,
 )
 from PySide6.QtGui import QColor
 from PySide6.QtCore import Qt, QSettings
@@ -29,6 +30,7 @@ from catia_copilot.constants import (
     MASS_PROPS_COLUMNS,
     MASS_PROPS_COLUMN_DISPLAY_NAMES,
     MASS_PROPS_HIDEABLE_COLUMNS,
+    MASS_PROPS_READONLY_COLUMNS,
     FILENAME_NOT_FOUND,
 )
 from catia_copilot.catia.mass_props_collect import collect_mass_props_rows, _row_inertia_to_root
@@ -47,6 +49,35 @@ _INERTIA_IDX: dict[str, tuple[int, int]] = {
     "Ixx": (0, 0), "Iyy": (1, 1), "Izz": (2, 2),
     "Ixy": (0, 1), "Ixz": (0, 2), "Iyz": (1, 2),
 }
+
+# Sortable columns in summary BOM mode
+_SUMMARY_SORT_COLUMNS: list[str] = [
+    "Part Number", "Nomenclature", "Revision", "Filename", "Weight",
+    "CogX", "CogY", "CogZ",
+]
+
+
+class _MassPropsDelegate(QStyledItemDelegate):
+    """只允许对未锁定零件行的"Weight"列进行编辑，其余列一律只读。"""
+
+    def __init__(self, cols_fn, tree) -> None:
+        super().__init__(tree)
+        self._cols_fn = cols_fn  # callable: () -> list[str]
+
+    def createEditor(self, parent, option, index):
+        tree = self.parent()
+        item = tree.itemFromIndex(index)
+        if item is None:
+            return None
+        if item.data(0, _ITEM_LOCKED_ROLE):
+            return None
+        cols = self._cols_fn()
+        if index.column() >= len(cols):
+            return None
+        col_name = cols[index.column()]
+        if col_name in MASS_PROPS_READONLY_COLUMNS:
+            return None
+        return super().createEditor(parent, option, index)
 
 
 def _fmt(value) -> str:
@@ -106,6 +137,14 @@ class MassPropsDialog(QDialog):
         self._unit: str = self._settings.value("unit", "g")
         # 内部单位为 g / g·mm²；kg 显示时乘以 0.001，g 显示时乘以 1.0
         self._unit_factor: float = 1.0 if self._unit == "g" else 0.001
+
+        # ── 汇总BOM专用选项 ───────────────────────────────────────────────────
+        self._summary_include_assemblies: bool = self._settings.value(
+            "summary_include_assemblies", True, type=bool
+        )
+        self._summary_sort_column: str = self._settings.value(
+            "summary_sort_column", ""
+        )
 
         # ── 内部状态 ──────────────────────────────────────────────────────
         self._rows: list[dict] = []
@@ -236,6 +275,35 @@ class MassPropsDialog(QDialog):
         self._radio_kg.toggled.connect(self._on_unit_changed)
         row1.addWidget(self._radio_kg)
         row1.addWidget(self._radio_g)
+
+        # 汇总BOM专用选项（is_include_assemblies + 排序列）
+        self._summary_opts_widget = QWidget()
+        summary_opts_layout = QHBoxLayout(self._summary_opts_widget)
+        summary_opts_layout.setContentsMargins(0, 0, 0, 0)
+        summary_opts_layout.setSpacing(8)
+        summary_opts_layout.addSpacing(16)
+
+        self._include_assemblies_chk = QCheckBox("是否包含产品和部件")
+        self._include_assemblies_chk.setToolTip(
+            "勾选后，汇总BOM中也会列出产品和部件（子装配体），而不仅限于零件。"
+        )
+        self._include_assemblies_chk.setChecked(self._summary_include_assemblies)
+        self._include_assemblies_chk.toggled.connect(self._on_include_assemblies_toggled)
+        summary_opts_layout.addWidget(self._include_assemblies_chk)
+        summary_opts_layout.addSpacing(8)
+        summary_opts_layout.addWidget(QLabel("排序列:"))
+        self._sort_col_combo = QComboBox()
+        self._sort_col_combo.addItem("（不排序）", "")
+        for col in _SUMMARY_SORT_COLUMNS:
+            self._sort_col_combo.addItem(MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col, col), col)
+        saved_sort_idx = self._sort_col_combo.findData(self._summary_sort_column)
+        if saved_sort_idx >= 0:
+            self._sort_col_combo.setCurrentIndex(saved_sort_idx)
+        self._sort_col_combo.currentIndexChanged.connect(self._on_sort_col_changed)
+        summary_opts_layout.addWidget(self._sort_col_combo)
+
+        self._summary_opts_widget.setVisible(self._summarize)
+        row1.addWidget(self._summary_opts_widget)
         row1.addStretch()
 
         opts_main.addLayout(row1)
@@ -274,6 +342,7 @@ class MassPropsDialog(QDialog):
         self._table.setAlternatingRowColors(True)
         self._table.setIndentation(16)
         self._table.setStyleSheet("QTreeWidget::item { min-height: 24px; }")
+        self._table.setItemDelegate(_MassPropsDelegate(lambda: self._columns, self._table))
         self._table.itemChanged.connect(self._on_item_changed)
         hdr.sectionResized.connect(self._on_section_resized)
         layout.addWidget(self._table, 1)
@@ -388,6 +457,7 @@ class MassPropsDialog(QDialog):
     def _on_bom_type_changed(self, checked: bool) -> None:
         self._summarize = self._radio_summ.isChecked()
         self._settings.setValue("summarize", self._summarize)
+        self._summary_opts_widget.setVisible(self._summarize)
         self._rebuild_columns_and_table()
 
     def _on_unit_changed(self, checked: bool) -> None:
@@ -407,6 +477,19 @@ class MassPropsDialog(QDialog):
         self._settings.setValue("visible_hideable_cols",
                                 list(self._visible_hideable_cols))
         self._rebuild_columns_and_table()
+
+    def _on_include_assemblies_toggled(self, checked: bool) -> None:
+        self._summary_include_assemblies = checked
+        self._settings.setValue("summary_include_assemblies", checked)
+        if self._summarize and self._rows:
+            self._rebuild_columns_and_table()
+
+    def _on_sort_col_changed(self, _index: int) -> None:
+        col = self._sort_col_combo.currentData()
+        self._summary_sort_column = col or ""
+        self._settings.setValue("summary_sort_column", self._summary_sort_column)
+        if self._summarize and self._rows:
+            self._populate_table()
 
     def _rebuild_columns_and_table(self) -> None:
         """重建列列表并重新填充表格（保留列宽）。"""
@@ -543,6 +626,9 @@ class MassPropsDialog(QDialog):
                 "未能测量的零件不参与最终汇总计算。",
             )
 
+        # 加载完成后自动计算汇总结果
+        self._calculate()
+
     # ── Display row builders ───────────────────────────────────────────────
 
     def _get_display_rows(self) -> list[dict]:
@@ -579,6 +665,16 @@ class MassPropsDialog(QDialog):
             r = dict(seen_pn[pn])
             r["Quantity"] = qty[pn]
             result.append(r)
+
+        # 若不包含产品和部件，仅保留零件行
+        if not self._summary_include_assemblies:
+            result = [r for r in result if r.get("Type") == "零件"]
+
+        # 按排序列排序
+        if self._summary_sort_column:
+            col = self._summary_sort_column
+            result.sort(key=lambda r: str(r.get(col, "") or ""))
+
         return result
 
     # ── 填充表格 ───────────────────────────────────────────────────────────
@@ -869,14 +965,23 @@ class MassPropsDialog(QDialog):
         dest, _ = QFileDialog.getSaveFileName(
             self, "导出质量特性表格",
             str(Path(default_dir) / "质量特性.xlsx"),
-            "Excel 文件 (*.xlsx);;所有文件 (*)",
+            "Excel 文件 (*.xlsx);;CSV 文件 (*.csv);;所有文件 (*)",
         )
         if not dest:
             return
 
+        dest_path = Path(dest)
+        suffix = dest_path.suffix.lower()
+        if suffix not in (".xlsx", ".csv"):
+            dest_path = dest_path.with_suffix(".xlsx")
+            suffix = ".xlsx"
+
         try:
-            self._do_export(dest)
-            QMessageBox.information(self, "导出成功", f"文件已保存到：\n{dest}")
+            if suffix == ".csv":
+                self._do_export_csv(dest_path)
+            else:
+                self._do_export(str(dest_path))
+            QMessageBox.information(self, "导出成功", f"文件已保存到：\n{dest_path}")
         except Exception as e:
             logger.error(f"导出失败: {e}")
             QMessageBox.critical(self, "导出失败", f"导出时出错：\n{e}")
@@ -978,7 +1083,49 @@ class MassPropsDialog(QDialog):
 
         wb.save(dest)
 
-    # ── 列宽辅助 ───────────────────────────────────────────────────────────
+    def _do_export_csv(self, dest: Path) -> None:
+        """将当前表格数据（含汇总行）写入 UTF-8 with BOM 的 CSV 文件。"""
+        import csv
+
+        export_cols = [c for c in self._columns if c != "#"]
+        display_rows = self._get_display_rows()
+
+        def _cell_value(col_name: str, raw) -> str:
+            if raw is None:
+                return ""
+            if col_name in ("Weight",) + tuple(_INERTIA_IDX.keys()):
+                try:
+                    return str(float(raw) * self._unit_factor)
+                except (TypeError, ValueError):
+                    return ""
+            return str(raw)
+
+        with open(dest, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow([self._column_header(c) for c in export_cols])
+            for row_data in display_rows:
+                writer.writerow([
+                    _cell_value(c, row_data.get(c)) for c in export_cols
+                ])
+            if self._rollup_result:
+                cog = self._rollup_result.get("cog", [0.0, 0.0, 0.0])
+                I   = self._rollup_result.get("inertia", [[0.0] * 3 for _ in range(3)])
+                w   = self._rollup_result.get("total_weight", 0.0)
+                summary = {
+                    "Part Number":  "总计 (根产品)",
+                    "Weight":       str(w * self._unit_factor),
+                    "CogX":         str(cog[0]),
+                    "CogY":         str(cog[1]),
+                    "CogZ":         str(cog[2]),
+                    "Ixx":          str(I[0][0] * self._unit_factor),
+                    "Iyy":          str(I[1][1] * self._unit_factor),
+                    "Izz":          str(I[2][2] * self._unit_factor),
+                    "Ixy":          str(I[0][1] * self._unit_factor),
+                    "Ixz":          str(I[0][2] * self._unit_factor),
+                    "Iyz":          str(I[1][2] * self._unit_factor),
+                }
+                writer.writerow([summary.get(c, "") for c in export_cols])
+        logger.info(f"质量特性表格已导出 (csv) -> {dest}")
 
     def _autofit_columns(self) -> None:
         min_width = 60
