@@ -75,92 +75,15 @@ def _position_to_mat4(product_com) -> list[list[float]]:
 # SPA measurement helpers
 # ---------------------------------------------------------------------------
 
-def _try_part_analyze(part_com) -> dict | None:
-    """通过 ``Part.Analyze`` 读取整零件质量特性（不依赖 SPA 工作台）。
-
-    ``Part.Analyze`` 是 CATIA V5 内置 API，无需 SPA 许可，并且在材质
-    定义于零件（Part）层而非单个 Body 层时也能正确返回质量数据。
-
-    返回的重心与转动惯量已在零件局部坐标系中表达，且转动惯量在重心处给出，
-    无需再做平行轴定理修正。
-    """
-    try:
-        analyze = part_com.Analyze
-        logger.debug(f"[Analyze] Part.Analyze 成功，类型: {type(analyze).__name__}")
-    except Exception as e:
-        logger.debug(f"[Analyze] Part.Analyze 失败: {e}")
-        return None
-
-    # ── 质量 ──────────────────────────────────────────────────────────────
-    mass: float | None = None
-    try:
-        mass = analyze.Mass
-        logger.debug(f"[Analyze] Mass = {mass}")
-    except Exception as e:
-        logger.debug(f"[Analyze] Mass 失败: {e}")
-        return None
-
-    if mass is None or mass <= 0.0:
-        logger.debug(f"[Analyze] Mass = {mass}，无效，放弃 Analyze 路径")
-        return None
-
-    # ── 重心（零件局部坐标系） ─────────────────────────────────────────────
-    cog = [0.0, 0.0, 0.0]
-    try:
-        # 先尝试整体数组形式
-        analyze.GravityCenter(cog)
-        logger.debug(f"[Analyze] GravityCenter(arr) = {cog}")
-    except Exception as e1:
-        logger.debug(f"[Analyze] GravityCenter(arr) 失败: {e1}，尝试三独立参数")
-        try:
-            cx = [0.0]; cy = [0.0]; cz = [0.0]
-            analyze.GravityCenter(cx, cy, cz)
-            cog = [cx[0], cy[0], cz[0]]
-            logger.debug(f"[Analyze] GravityCenter(x,y,z) = {cog}")
-        except Exception as e2:
-            logger.debug(f"[Analyze] GravityCenter(x,y,z) 也失败: {e2}，尝试属性访问")
-            try:
-                gc = analyze.GravityCenter
-                try:
-                    tmp = [0.0, 0.0, 0.0]
-                    gc.GetCoordinates(tmp)
-                    cog = list(tmp)
-                except Exception:
-                    cog = [float(gc.X), float(gc.Y), float(gc.Z)]
-                logger.debug(f"[Analyze] GravityCenter 属性 = {cog}")
-            except Exception as e3:
-                logger.debug(f"[Analyze] GravityCenter 所有方式均失败: {e3}")
-
-    # ── 转动惯量（在重心处，零件局部坐标轴，已由 CATIA 计算） ─────────────
-    inertia_9 = [0.0] * 9
-    try:
-        analyze.InertiaTensor(inertia_9)
-        logger.debug(f"[Analyze] InertiaTensor(arr) = {inertia_9}")
-    except Exception as e:
-        logger.debug(f"[Analyze] InertiaTensor(arr) 失败: {e}")
-
-    logger.debug(f"[Analyze] 成功: weight={mass}, cog={cog}")
-    return {
-        "weight": mass,
-        "cog":    cog,
-        "inertia": [
-            [inertia_9[0], inertia_9[1], inertia_9[2]],
-            [inertia_9[3], inertia_9[4], inertia_9[5]],
-            [inertia_9[6], inertia_9[7], inertia_9[8]],
-        ],
-    }
-
 
 def _measure_part_mass_props(doc_com, part_com) -> dict | None:
-    """测量零件质量特性，优先使用 Part.Analyze，回退到 SPA 逐 Body 测量。
+    """测量零件质量特性，通过 SPA 逐 Body 测量。
 
-    路径 0（首选）：``Part.Analyze`` — CATIA V5 内置 API，不依赖 SPA 许可，
-      在材质定义于 Part 层时也能正确返回整零件数据。
-
-    路径 1（回退）：SPA 逐 Body 测量 — 对每个 Body 依次尝试：
+    路径：SPA 逐 Body 测量 — 对每个 Body 依次尝试：
       A. ``spa.GetMeasurable(body)`` — 直接传 Body 对象；
       B. ``spa.GetMeasurable(CreateReferenceFromObject(body))`` — 通过引用。
-    若 ``GetMass()`` 失败则再尝试体积法（volume × density）。
+    读取质量时依次尝试：``.Volume``（直接属性）→ ``GetVolume(arr)`` → ``GetVolume()``，
+    再根据推算密度换算为质量；或直接读取 ``.Mass`` / ``GetMass()``。
 
     返回字典：
       {
@@ -181,12 +104,6 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
         logger.debug(f"[SPA] part_com 类型: {type(part_com).__name__}")
     except Exception as e:
         logger.debug(f"[SPA] 无法获取 part_com 类型: {e}")
-
-    # ── 路径 0：Part.Analyze（首选，不依赖 SPA，材质在 Part 层时也有效）────
-    result = _try_part_analyze(part_com)
-    if result is not None:
-        return result
-    logger.debug("[SPA] Part.Analyze 路径失败，回退到 SPA 逐 Body 测量")
 
     try:
         spa = doc_com.GetWorkbench("SPAWorkbench")
@@ -251,7 +168,13 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
         return None
 
     def _read_volume(meas, label: str) -> float | None:
-        """从 Measurable 读取体积：先传数组，再无参调用。"""
+        """从 Measurable 读取体积：先 .Volume 属性，再传数组，再无参调用。"""
+        try:
+            v = meas.Volume
+            logger.debug(f"[SPA]   {label} .Volume = {v}")
+            return v
+        except Exception as e0:
+            logger.debug(f"[SPA]   {label} .Volume 失败: {e0}，尝试 GetVolume(arr)")
         try:
             arr = [0.0]
             meas.GetVolume(arr)
