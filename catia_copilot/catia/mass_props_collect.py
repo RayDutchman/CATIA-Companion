@@ -159,6 +159,7 @@ def _run_inertia_vbs_and_read(
         doc_com.Activate()
         # 将零件号作为 iParameter 传给 VBS，让脚本按 PartNumber 定位目标文档。
         # 使用 PartNumber 而非文件路径，可避免受零件未保存（路径无效）的影响。
+        # ExecuteScript 参数：(脚本目录, 语言类型=1表示VBScript, 脚本文件名, 入口Sub名, 参数数组)
         doc_com.Application.SystemService.ExecuteScript(
             str(vbs_path.parent), 1, vbs_path.name, "CATMain", [part_number]
         )
