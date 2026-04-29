@@ -59,11 +59,8 @@ def _position_to_mat4(product) -> list[list[float]]:
     except Exception:
         product_name = repr(product)
 
-    logger.debug(f"[MAT4] {product_name}: 调用 product.position.get_components()")
-
     try:
         arr = product.position.get_components()
-        logger.debug(f"[MAT4] {product_name}: get_components 返回 arr={list(arr)}")
     except Exception as e:
         logger.debug(f"[MAT4] {product_name}: get_components 失败: {e}，返回单位矩阵")
         return _identity_4x4()
@@ -126,10 +123,6 @@ def _try_mp_params(part_com, label: str = "") -> dict | None:
         ixz  = _get("MP_Ixz_gmm2") or 0.0
         iyz  = _get("MP_Iyz_gmm2") or 0.0
 
-        logger.debug(
-            f"{tag}MP_* 参数读取成功: "
-            f"mass={mass_g}g, cog=({cogx},{cogy},{cogz})mm"
-        )
         return {
             "weight":  mass_g,
             "cog":     [cogx, cogy, cogz],
@@ -222,16 +215,6 @@ def _measure_part_mass_props(doc_com, part_com, part_number: str = "") -> dict |
       }
     若所有路径均失败则返回 None。
     """
-    # ── DEBUG: 记录传入对象的 COM 类型名 ─────────────────────────────────
-    try:
-        logger.debug(f"[SPA] doc_com 类型: {type(doc_com).__name__}")
-    except Exception as e:
-        logger.debug(f"[SPA] 无法获取 doc_com 类型: {e}")
-    try:
-        logger.debug(f"[SPA] part_com 类型: {type(part_com).__name__}")
-    except Exception as e:
-        logger.debug(f"[SPA] 无法获取 part_com 类型: {e}")
-
     # ── 路径 1：读取 MP_* 用户参数（由 create_inertia_relations.catvbs 写入）──────
     _mp = _try_mp_params(part_com, "直接读取")
     if _mp is not None:
