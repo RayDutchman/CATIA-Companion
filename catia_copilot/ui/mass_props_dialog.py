@@ -497,13 +497,12 @@ class MassPropsDialog(QDialog):
         if mp:
             mp["weight"] = new_weight
             if scale != 1.0 and old_float > 0.0:
-                orig_inertia = mp.get("inertia", [[0.0]*3]*3)
+                orig_inertia = mp.get("inertia", [[0.0, 0.0, 0.0] for _ in range(3)])
                 mp["inertia"] = [[orig_inertia[r][c] * scale for c in range(3)]
                                   for r in range(3)]
-                row_data["_mass_props"] = mp
 
         # 同步惯量列
-        inertia = mp.get("inertia", [[0.0]*3]*3) if mp else [[0.0]*3]*3
+        inertia = mp.get("inertia", [[0.0, 0.0, 0.0] for _ in range(3)]) if mp else [[0.0, 0.0, 0.0] for _ in range(3)]
         inertia_map = {
             "Ixx": inertia[0][0], "Iyy": inertia[1][1], "Izz": inertia[2][2],
             "Ixy": inertia[0][1], "Ixz": inertia[0][2], "Iyz": inertia[1][2],
@@ -675,7 +674,7 @@ class MassPropsDialog(QDialog):
             cog     = self._rollup_result.get("cog", [0.0, 0.0, 0.0])
             I       = self._rollup_result.get("inertia", [[0.0]*3]*3)
             summary = {
-                "Part Number":  "总计（根产品）",
+                "Part Number":  "总计 (根产品)",
                 "Weight":       self._rollup_result.get("total_weight", 0.0),
                 "CogX":         cog[0],
                 "CogY":         cog[1],

@@ -69,7 +69,7 @@ def rollup_mass_properties(rows: list[dict]) -> dict:
                     # 按比例缩放转动惯量
                     scale = override_val / mass
                     mass = override_val
-                    orig_inertia = mp.get("inertia", [[0.0]*3]*3)
+                    orig_inertia = mp.get("inertia", [[0.0, 0.0, 0.0] for _ in range(3)])
                     mp = {
                         "weight":  mass,
                         "cog":     mp.get("cog", [0.0, 0.0, 0.0]),
