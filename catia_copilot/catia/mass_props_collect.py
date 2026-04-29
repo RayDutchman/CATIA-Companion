@@ -84,7 +84,7 @@ def _position_to_mat4(product) -> list[list[float]]:
 
 
 # ---------------------------------------------------------------------------
-# SPA measurement helpers
+# 质量特性读取辅助函数
 # ---------------------------------------------------------------------------
 
 
@@ -219,193 +219,12 @@ def _measure_part_mass_props(doc_com, part_com, part_number: str = "") -> dict |
     if _mp is not None:
         return _mp
 
-    total_mass = 0.0
-    weighted_cog = [0.0, 0.0, 0.0]
-    # 转动惯量（在零件原点处，零件局部坐标轴）
-    I_at_origin = [[0.0] * 3 for _ in range(3)]
-
-    def _get_cog(meas, label: str) -> list[float]:
-        """尝试从 Measurable 读取重心坐标，返回 [x, y, z]（失败时返回全零）。"""
-        try:
-            cog_arr = [0.0, 0.0, 0.0]
-            meas.GetCOG(cog_arr)
-            logger.debug(f"[SPA]   {label} GetCOG(arr) = {cog_arr}")
-            return list(cog_arr)
-        except Exception as e1:
-            logger.debug(f"[SPA]   {label} GetCOG(arr) 失败: {e1}，尝试无参")
-        try:
-            cog_result = meas.GetCOG()
-            cog = list(cog_result) if cog_result else [0.0, 0.0, 0.0]
-            logger.debug(f"[SPA]   {label} GetCOG() 无参 = {cog}")
-            return cog
-        except Exception as e2:
-            logger.debug(f"[SPA]   {label} GetCOG() 无参也失败: {e2}")
-        return [0.0, 0.0, 0.0]
-
-    def _get_inertia_matrix(meas, label: str) -> list[float]:
-        """尝试从 Measurable 读取转动惯量矩阵（9 元素），失败时返回全零。"""
-        try:
-            inertia_arr = [0.0] * 9
-            meas.GetInertiaMatrix(inertia_arr)
-            logger.debug(f"[SPA]   {label} GetInertiaMatrix(arr) = {inertia_arr}")
-            return list(inertia_arr)
-        except Exception as e1:
-            logger.debug(f"[SPA]   {label} GetInertiaMatrix(arr) 失败: {e1}，尝试无参")
-        try:
-            inertia_result = meas.GetInertiaMatrix()
-            inertia = list(inertia_result) if inertia_result else [0.0] * 9
-            logger.debug(f"[SPA]   {label} GetInertiaMatrix() 无参 = {inertia}")
-            return inertia
-        except Exception as e2:
-            logger.debug(f"[SPA]   {label} GetInertiaMatrix() 无参也失败: {e2}")
-        return [0.0] * 9
-
-    def _accumulate(mass: float, cog: list[float], inertia_9: list[float]):
-        """将一个 Body 的质量特性累积到 total_mass / weighted_cog / I_at_origin。"""
-        nonlocal total_mass
-        I_cog = [
-            [inertia_9[0], inertia_9[1], inertia_9[2]],
-            [inertia_9[3], inertia_9[4], inertia_9[5]],
-            [inertia_9[6], inertia_9[7], inertia_9[8]],
-        ]
-        r = cog
-        r2 = r[0]**2 + r[1]**2 + r[2]**2
-        for row in range(3):
-            for col in range(3):
-                delta = (1.0 if row == col else 0.0) * r2 - r[row] * r[col]
-                I_at_origin[row][col] += I_cog[row][col] + mass * delta
-        total_mass += mass
-        for j in range(3):
-            weighted_cog[j] += mass * cog[j]
-
-    # ── 逐一测量各 Body ───────────────────────────────────────────────────
-    for i in range(1, body_count + 1):
-        try:
-            body = bodies.Item(i)
-            try:
-                body_name = body.Name
-            except Exception:
-                body_name = f"Body_{i}"
-            label = f"Body_{i}({body_name})"
-            logger.debug(f"[SPA] {label} COM 类型: {type(body).__name__}")
-
-            meas, meas_src = _get_measurable(body, label)
-            if meas is None:
-                logger.debug(f"[SPA]   {label} 无法获取 Measurable，跳过")
-                continue
-
-            # ── 读取质量 ─────────────────────────────────────────────
-            mass = _read_mass(meas, label)
-
-            if mass is None or mass <= 0.0:
-                # ── 回退：体积 × 密度 ───────────────────────────────────
-                logger.debug(f"[SPA]   {label} 质量获取失败，尝试体积法回退")
-                vol = _read_volume(meas, label)
-
-                # 密度优先使用全局推算值；若仍为 None，尝试从本 Body 的
-                # Measurable 直接读取（材质仅应用于单个 Body 的场景）
-                effective_density = _part_density
-                if effective_density is None:
-                    effective_density = _read_density(meas, label)
-
-                if vol is not None and vol > 0.0 and effective_density is not None and effective_density > 0.0:
-                    mass = effective_density * vol
-                    logger.debug(
-                        f"[SPA]   {label} 体积法质量"
-                        f" = {effective_density:.6e} × {vol:.6g} = {mass:.6g} kg"
-                    )
-                else:
-                    logger.debug(
-                        f"[SPA]   {label} 体积法也无法获取质量"
-                        f"（vol={vol}, density={effective_density}），尝试 GetCOG 诊断探针"
-                    )
-                    # ── GetCOG 诊断探针 ─────────────────────────────────────
-                    # GetCOG 是纯几何量（几何重心），不依赖材质定义，可能在
-                    # GetMass / GetVolume 均失败的环境下仍然有效。
-                    # 此处仅探测并记录结果，以便下一步判断 SPA Measurable
-                    # 接口是否可用于几何属性。
-                    diag_cog = _get_cog(meas, label)
-                    if any(v != 0.0 for v in diag_cog):
-                        logger.debug(
-                            f"[SPA]   {label} GetCOG 探针成功: {diag_cog}"
-                            f"（但无质量数据，跳过累积）"
-                        )
-                    else:
-                        logger.debug(
-                            f"[SPA]   {label} GetCOG 探针返回全零或失败，跳过"
-                        )
-                    continue
-
-            # ── 读取重心 ───────────────────────────────────────────────
-            cog = _get_cog(meas, label)
-
-            # ── 读取转动惯量 ───────────────────────────────────────────
-            inertia_9 = _get_inertia_matrix(meas, label)
-
-            _accumulate(mass, cog, inertia_9)
-
-        except Exception as e:
-            logger.debug(f"[SPA] 访问 Body {i} 失败: {e}")
-
-    logger.debug(f"[SPA] 所有 Body 累计质量: {total_mass:.3g} kg")
-
-    if total_mass <= 0.0:
-        return {
-            "weight": 0.0,
-            "cog":    [0.0, 0.0, 0.0],
-            "inertia": [[0.0] * 3 for _ in range(3)],
-        }
-
-    # 计算零件重心（局部坐标系）
-    part_cog = [weighted_cog[j] / total_mass for j in range(3)]
-
-    # 平行轴定理：将转动惯量从原点移回重心
-    r = part_cog
-    r2 = r[0]**2 + r[1]**2 + r[2]**2
-    I_at_cog = [[0.0] * 3 for _ in range(3)]
-    for row in range(3):
-        for col in range(3):
-            delta = (1.0 if row == col else 0.0) * r2 - r[row] * r[col]
-            I_at_cog[row][col] = I_at_origin[row][col] - total_mass * delta
-
-    logger.debug(
-        f"[SPA] 最终结果: weight={total_mass * 1000.0:.3g}g, "
-        f"cog=[{', '.join(f'{v:.3g}' for v in part_cog)}]mm"
-    )
-    # SPA 返回值单位：质量 kg、坐标 mm、惯量 kg·mm²。
-    # 统一换算为程序内部单位 g / mm / g·mm²（质量和惯量各乘以 1000，坐标不变）。
-    return {
-        "weight":  total_mass * 1000.0,
-        "cog":     part_cog,
-        "inertia": [[I_at_cog[r][c] * 1000.0 for c in range(3)] for r in range(3)],
-    }
+    return None
 
 
 # ---------------------------------------------------------------------------
 # Post-processing helpers
 # ---------------------------------------------------------------------------
-
-def _row_inertia_to_root(row: dict) -> list[list[float]]:
-    """从行的 ``_mass_props`` 局部惯量和 ``_placement`` 变换矩阵，
-    计算并返回根坐标系下的惯量张量（3×3 列表）。
-
-    若无有效 placement，直接返回局部惯量。
-    """
-    mp      = row.get("_mass_props") or {}
-    I_local = mp.get("inertia", [[0.0] * 3 for _ in range(3)])
-    placement = row.get("_placement")
-    if placement is None:
-        return I_local
-    R  = [[placement[i][j] for j in range(3)] for i in range(3)]
-    RT = [[R[j][i] for j in range(3)] for i in range(3)]
-    RI = [
-        [sum(R[i][k] * I_local[k][j] for k in range(3)) for j in range(3)]
-        for i in range(3)
-    ]
-    return [
-        [sum(RI[i][k] * RT[k][j] for k in range(3)) for j in range(3)]
-        for i in range(3)
-    ]
 
 
 def _post_process_rows(rows: list[dict]) -> None:
