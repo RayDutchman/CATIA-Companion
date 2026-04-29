@@ -140,9 +140,6 @@ class MassPropsDialog(QDialog):
         self._unit_factor: float = 1.0 if self._unit == "g" else 0.001
 
         # ── 汇总BOM专用选项 ───────────────────────────────────────────────────
-        self._summary_include_assemblies: bool = self._settings.value(
-            "summary_include_assemblies", True, type=bool
-        )
         self._summary_sort_column: str = self._settings.value(
             "summary_sort_column", ""
         )
@@ -277,21 +274,13 @@ class MassPropsDialog(QDialog):
         row1.addWidget(self._radio_kg)
         row1.addWidget(self._radio_g)
 
-        # 汇总BOM专用选项（is_include_assemblies + 排序列）
+        # 汇总BOM专用选项（排序列）
         self._summary_opts_widget = QWidget()
         summary_opts_layout = QHBoxLayout(self._summary_opts_widget)
         summary_opts_layout.setContentsMargins(0, 0, 0, 0)
         summary_opts_layout.setSpacing(8)
         summary_opts_layout.addSpacing(16)
 
-        self._include_assemblies_chk = QCheckBox("是否包含产品和部件")
-        self._include_assemblies_chk.setToolTip(
-            "勾选后，汇总BOM中也会列出产品和部件（子装配体），而不仅限于零件。"
-        )
-        self._include_assemblies_chk.setChecked(self._summary_include_assemblies)
-        self._include_assemblies_chk.toggled.connect(self._on_include_assemblies_toggled)
-        summary_opts_layout.addWidget(self._include_assemblies_chk)
-        summary_opts_layout.addSpacing(8)
         summary_opts_layout.addWidget(QLabel("排序列:"))
         self._sort_col_combo = QComboBox()
         self._sort_col_combo.addItem("（不排序）", "")
@@ -451,11 +440,9 @@ class MassPropsDialog(QDialog):
         """返回当前 BOM 模式对应的说明文字。"""
         if self._summarize:
             return (
-                "【汇总BOM】按零件编号合并，每行显示出现数量（Quantity）。"
-                "零件行的 Weight / CogX / CogY / CogZ / Ixx–Iyz "
-                "在零件自身坐标系下显示。"
-                "若勾选「是否包含产品和部件」，产品/部件行的上述字段"
-                "按平行轴定理汇总（在根产品坐标系下）。"
+                "【汇总BOM】按零件编号合并，每行显示出现数量（Quantity），仅列出零件（不含产品和部件）。"
+                "Weight / CogX / CogY / CogZ / Ixx–Iyz "
+                "在零件自身坐标系下显示，与装配位置无关。"
                 "底部「汇总结果」在根产品坐标系下计算。"
             )
         return (
@@ -508,12 +495,6 @@ class MassPropsDialog(QDialog):
         self._settings.setValue("visible_hideable_cols",
                                 list(self._visible_hideable_cols))
         self._rebuild_columns_and_table()
-
-    def _on_include_assemblies_toggled(self, checked: bool) -> None:
-        self._summary_include_assemblies = checked
-        self._settings.setValue("summary_include_assemblies", checked)
-        if self._summarize and self._rows:
-            self._rebuild_columns_and_table()
 
     def _on_sort_col_changed(self, _index: int) -> None:
         col = self._sort_col_combo.currentData()
@@ -706,9 +687,8 @@ class MassPropsDialog(QDialog):
             r["Quantity"] = qty[pn]
             result.append(r)
 
-        # 若不包含产品和部件，仅保留零件行
-        if not self._summary_include_assemblies:
-            result = [r for r in result if r.get("Type") == "零件"]
+        # 仅保留零件行（汇总BOM不显示产品和部件）
+        result = [r for r in result if r.get("Type") == "零件"]
 
         # 按排序列排序
         if self._summary_sort_column:
