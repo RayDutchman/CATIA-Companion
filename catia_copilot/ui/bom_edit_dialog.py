@@ -33,6 +33,7 @@ from catia_copilot.constants import (
     SOURCE_OPTIONS,
     PART_NUMBER_VALID_PATTERN,
     FILENAME_NOT_FOUND,
+    FILENAME_UNSAVED,
     BOM_THUMBNAIL_MAX_SIZE,
 )
 from catia_copilot.catia.bom_collect import collect_bom_rows, flatten_bom_to_summary
@@ -46,6 +47,7 @@ from catia_copilot.ui.bom_widgets import _BomTreeDelegate, _BomTreeWidget, _ITEM
 from catia_copilot.ui.bom_file_rename_dialog import _FileRenameDialog
 
 logger = logging.getLogger(__name__)
+
 
 
 class BomEditDialog(QDialog):
@@ -333,8 +335,8 @@ class BomEditDialog(QDialog):
         self._rename_btn.clicked.connect(self._rename_by_part_number)
         btn_row.addWidget(self._rename_btn)
 
-        self._rename_file_btn = QPushButton("编辑选中文件名/路径")
-        self._rename_file_btn.setToolTip("为选中行的文件执行重命名或移动（通过CATIA另存为）")
+        self._rename_file_btn = QPushButton("另存为")
+        self._rename_file_btn.setToolTip("对选中文件执行另存为操作（通过CATIA另存为）")
         self._rename_file_btn.setEnabled(False)
         self._rename_file_btn.clicked.connect(self._rename_selected_file)
         btn_row.addWidget(self._rename_file_btn)
@@ -767,6 +769,7 @@ class BomEditDialog(QDialog):
 
             pn         = str(row_data.get("Part Number", ""))
             not_found  = bool(row_data.get("_not_found"))
+            no_file    = bool(row_data.get("_no_file"))
             unreadable = bool(row_data.get("_unreadable"))
             row_locked = unreadable or not_found
 
@@ -836,7 +839,10 @@ class BomEditDialog(QDialog):
                 elif col_name == "Filename":
                     fp = str(row_data.get("_filepath", ""))
                     fn = str(row_data.get("Filename", ""))
-                    if self._show_filepath_col:
+                    if no_file:
+                        # 文件未保存到磁盘：固定显示哨兵文本
+                        value = FILENAME_UNSAVED
+                    elif self._show_filepath_col:
                         value = fp if fp else fn
                     else:
                         # 已知路径时显示带扩展名的文件名；
@@ -857,7 +863,9 @@ class BomEditDialog(QDialog):
                 if col_name == "Filename":
                     fp = str(row_data.get("_filepath", ""))
                     fn = str(row_data.get("Filename", ""))
-                    if fp:
+                    if no_file:
+                        pass  # tooltip 由下方 no_file 块统一设置
+                    elif fp:
                         if self._show_filepath_col:
                             # 列显示完整路径；工具提示显示文件名+扩展名
                             name_with_ext = Path(fp).name
@@ -886,6 +894,15 @@ class BomEditDialog(QDialog):
                         "该零件/装配体处于轻量化模式，无法读取属性。"
                     )
                     item.setToolTip(fn_col, tip)
+
+            # _no_file 行（文件未保存到磁盘）：不锁定，但以淡黄背景和专属提示标识
+            if no_file:
+                fn_col = self._columns.index("Filename") if "Filename" in self._columns else -1
+                bg_unsaved = QColor(255, 245, 180)
+                for ci in range(len(self._columns)):
+                    item.setBackground(ci, bg_unsaved)
+                if fn_col >= 0:
+                    item.setToolTip(fn_col, "该零件尚未保存到磁盘，可通过右键菜单「另存为」将其保存。")
 
         self._table.expandAll()
         self._table.blockSignals(False)
@@ -1172,7 +1189,12 @@ class BomEditDialog(QDialog):
                 target_doc = doc_cache.get(src)
                 if target_doc is None:
                     documents.open(str(src))
-                    target_doc = _find_catia_doc_by_path(documents, src)
+                    candidate = documents.item(documents.count)
+                    target_doc = (
+                        candidate
+                        if Path(candidate.full_name).resolve() == src
+                        else _find_catia_doc_by_path(documents, src)
+                    )
                     if target_doc:
                         doc_cache[src] = target_doc
 
@@ -1256,9 +1278,8 @@ class BomEditDialog(QDialog):
         if not fp or row_data.get("_not_found"):
             QMessageBox.warning(self, "无有效路径", "该行没有可用的文件路径，无法执行重命名/移动。")
             return
-        if not Path(fp).exists():
-            QMessageBox.warning(self, "文件不存在", f"文件不存在：\n{fp}")
-            return
+        # 注意：此处不检查 Path(fp).exists()；
+        # 未保存过的零件（文件尚不在磁盘上但在CATIA内存中打开）同样允许另存为。
 
         # 改名前要求先写回属性，以确保文件内容与表格一致
         orig_pn = str(row_data.get("Part Number", ""))
@@ -1285,7 +1306,9 @@ class BomEditDialog(QDialog):
         new_fp                = dlg.new_path
         target_existed_before = Path(new_fp).exists()
 
-        delete_old = (
+        # 仅当旧文件实际存在于磁盘时才询问是否删除，否则无从删除
+        file_on_disk = Path(fp).exists()
+        delete_old = file_on_disk and (
             QMessageBox.question(
                 self, "是否删除旧文件",
                 f"另存为完成后，是否删除旧文件？\n\n旧文件：{fp}",
@@ -1304,14 +1327,22 @@ class BomEditDialog(QDialog):
             src         = Path(fp).resolve()
 
             target_doc = _find_catia_doc_by_path(documents, src)
-            if target_doc is None:
+            # 仅当文件在磁盘上存在时才尝试打开；
+            # 未保存过的零件只能通过已打开的文档缓存找到。
+            if target_doc is None and file_on_disk:
                 documents.open(str(src))
-                target_doc = _find_catia_doc_by_path(documents, src)
+                candidate  = documents.item(documents.count)
+                target_doc = (
+                    candidate
+                    if Path(candidate.full_name).resolve() == src
+                    else _find_catia_doc_by_path(documents, src)
+                )
 
             if target_doc is None:
                 QMessageBox.warning(
                     self, "无法找到文档",
-                    f"无法在CATIA中找到或打开文档：\n{fp}",
+                    f"无法在CATIA中找到或打开文档：\n{fp}\n\n"
+                    "请确认该零件已在CATIA中打开。",
                 )
                 return
 
@@ -1343,11 +1374,12 @@ class BomEditDialog(QDialog):
             #   1. 异常来自CATIA COM层（pywintypes.com_error）——
             #      这是用户在CATIA自身另存为对话框中点击"取消"或"否"时抛出的，
             #      而非操作系统级别的失败。
-            #   2. 源文件仍然完好。
+            #   2. 源文件仍然完好（或本来就未在磁盘上）。
             #   3. 目标文件要么在操作前就已存在，要么从未被创建。
             # 其他任何异常（OSError、PermissionError、磁盘空间不足等非COM错误）
             # 均应作为真正的失败弹出提示。
-            if _is_catia_com_error(e) and Path(fp).exists() and (
+            source_intact = not file_on_disk or Path(fp).exists()
+            if _is_catia_com_error(e) and source_intact and (
                 target_existed_before or not Path(new_fp).exists()
             ):
                 # 用户很可能在CATIA另存为对话框中点击了"取消"或"否"——
@@ -1735,12 +1767,11 @@ class BomEditDialog(QDialog):
 
         menu.addSeparator()
 
-        # ── 编辑文件名/路径 ───────────────────────────────────────────────────
-        act_edit_path = menu.addAction("编辑文件名/路径")
-        act_edit_path.setEnabled(
-            bool(fp) and not not_found
-            and fp_path is not None and fp_path.exists()
-        )
+        # ── 另存为 ────────────────────────────────────────────────────────────
+        act_edit_path = menu.addAction("另存为")
+        # 允许对未保存过的零件（文件不在磁盘上但在CATIA内存中）执行另存为；
+        # 仅排除没有路径或CATIA无法找到的节点。
+        act_edit_path.setEnabled(bool(fp) and not is_component and not not_found)
 
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
 

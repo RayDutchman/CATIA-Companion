@@ -20,7 +20,7 @@ class _FileRenameDialog(QDialog):
 
     def __init__(self, current_fp: str, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("编辑文件名/路径")
+        self.setWindowTitle("另存为")
         self.setMinimumWidth(540)
         self._current_fp = current_fp
         self._p          = Path(current_fp)
