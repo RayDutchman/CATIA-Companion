@@ -1,13 +1,13 @@
 Option Explicit
 
 ' ============================================================
-' create_inertia_relations.catvbs
+' create_inertia_relations.catvbs   (VBScript / CATScript)
 '
 ' 功能概述：
 '   在 CATIA V5 零件文档中创建"质量特性参数绑定"。
-'   脚本会把零件的 "惯量包络体.1" Keep 测量结果（质量、重心、
+'   脚本会把零件的 "惯量包络体.1" Keep 测量结果（体积、密度、质量、重心、
 '   转动惯量等）通过公式绑定到以 MP_* 开头的用户参数中，
-'   供外部程序（如 CATIA Copilot）直接读取，而无需再次运行 SPA。
+'   供外部程序直接读取，而无需再次运行 SPA。
 '
 ' 参数写出清单（全部为无量纲实数，单位在参数名中标注）：
 '   MP_Volume_cm3       — 体积，cm³
@@ -19,15 +19,14 @@ Option Explicit
 '   MP_Ixx_gmm2 ~ MP_Iyz_gmm2 — 惯量张量分量，g·mm²（重心处，零件局部轴）
 '
 ' 先决条件：
-'   零件必须已在 CATIA 测量工作台中执行"测量惯量"并勾选"保持测量"，
-'   从而在零件参数树中生成 "惯量包络体.1\质量" 等参数。
+'   零件必须已执行"测量惯量"并勾选"保持测量"，
+'   从而在参数树中生成 "惯量包络体.1\质量" 等参数。
 '   若该参数不存在，脚本静默退出（不弹对话框），以便外部批量调用。
 '
 ' iParameters 用法（由 SystemService.ExecuteScript 传入）：
 '   iParameters(0) — 目标零件的零件号（PartNumber，可选）。
-'     · 若提供且非空：脚本自动遍历已打开的 PartDocument，找到
-'       part.PartNumber 与传入值匹配的文档并激活，再执行绑定。
-'       使用零件号而非文件路径，可避免受零件未保存（路径无效）的影响。
+'     · 若提供且非空：脚本遍历已打开的 PartDocument，找到
+'       doc.Part.PartNumber 与传入值匹配的文档并激活，再执行绑定。
 '     · 若为空或省略：对 CATIA 当前活动文档执行绑定。
 '
 ' 幂等性：
@@ -36,106 +35,92 @@ Option Explicit
 
 Sub CATMain(iParameters)
 
-    ' ── 获取 CATIA 应用对象 ──────────────────────────────────────────────────
-    Dim CATIA As Application
+    ' ── 获取 CATIA 应用对象 ────────────────────────────────────────────────
+    Dim CATIA
     Set CATIA = GetObject(, "CATIA.Application")
 
-    ' ── 解析 iParameters(0)：目标零件的零件号（PartNumber，可选）──────────
-    Dim targetPN As String
+    ' ── 解析 iParameters(0)：目标零件号（PartNumber，可选）───────────────
+    ' VBScript 下 iParameters 可能是数组、也可能是单值；这里做容错读取。
+    Dim targetPN
     targetPN = ""
+
     On Error Resume Next
-    If Not IsEmpty(iParameters) And Not IsNull(iParameters) Then
-        If IsArray(iParameters) Then
-            If UBound(iParameters) >= 0 Then
-                targetPN = CStr(iParameters(0))
-            End If
-        End If
-    End If
+    targetPN = CStr(iParameters)
+    Err.Clear
     On Error GoTo 0
 
     ' ── 定位目标 PartDocument ──────────────────────────────────────────────
-    Dim partDoc As PartDocument
+    Dim partDoc
+    Set partDoc = Nothing
 
     If targetPN <> "" Then
-        ' 按零件号在已打开文档中查找，并激活。
-        ' 使用 PartNumber 可避免零件未保存时文件路径无效的问题。
-        Dim i As Integer
-        Dim found As Boolean
+        ' 按零件号在已打开文档中查找，并激活
+        Dim i, found
         found = False
+
         On Error Resume Next
         For i = 1 To CATIA.Documents.Count
-            Dim doc As Document
+            Dim doc
             Set doc = CATIA.Documents.Item(i)
             If TypeName(doc) = "PartDocument" Then
-                ' 比较 Part.PartNumber（不区分大小写）
-                Dim pn As String
+                Dim pn
                 pn = doc.Part.PartNumber
-                If LCase(pn) = LCase(targetPN) Then
+                If pn = targetPN Then
                     Set partDoc = doc
                     partDoc.Activate
                     found = True
                     Exit For
                 End If
             End If
-        Next i
+        Next
         On Error GoTo 0
 
-        ' 零件号对应文档未在 CATIA 中打开，静默退出（外部程序负责打开文档）
+        ' 没找到目标文档：静默退出
         If Not found Then Exit Sub
     Else
-        ' 未传入零件号，使用当前活动文档
+        ' 未传入零件号：使用当前活动文档
         If CATIA.Documents.Count = 0 Then Exit Sub
-        On Error Resume Next
-        Dim docType As String
-        docType = TypeName(CATIA.ActiveDocument)
-        On Error GoTo 0
-        If docType <> "PartDocument" Then Exit Sub
+        If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then Exit Sub
         Set partDoc = CATIA.ActiveDocument
     End If
 
     ' ── 获取零件的 Parameters / Relations 集合 ──────────────────────────────
-    Dim part As part
-    Set part = partDoc.part
+    Dim part
+    Set part = partDoc.Part
 
-    Dim params As Parameters
+    Dim params
     Set params = part.Parameters
 
-    Dim rels As Relations
+    Dim rels
     Set rels = part.Relations
 
     ' 惯量包络体的参数名前缀（CATIA 生成的 Keep 测量节点名称）
-    Dim srcPrefix As String
+    Dim srcPrefix
     srcPrefix = "惯量包络体.1\"
 
-    ' ── 先决条件校验：检查 Keep 测量参数是否存在 ─────────────────────────────
-    ' 若用户尚未执行"测量惯量 → 保持测量"，则无 srcPrefix & "质量" 参数。
-    ' 此时静默退出，避免在批量调用中弹出阻塞对话框。
-    If Not ParameterExists(params, srcPrefix & "质量") Then
-        Exit Sub
-    End If
+    ' ── 先决条件校验：检查 Keep 测量参数是否存在 ───────────────────────────
+    If Not ParameterExists(params, srcPrefix & "质量") Then Exit Sub
 
-    ' ── 第 1 步：确保 MP_* 参数存在（不存在则创建，存在则复用） ────────────
-    ' GetOrCreateReal 只在参数不存在时调用 CreateReal，已存在则直接返回，
-    ' 保证脚本的幂等性（可安全重复运行）。
-    Dim pVolume  As Parameter: Set pVolume  = GetOrCreateReal(params, "MP_Volume_cm3")
-    Dim pDensity As Parameter: Set pDensity = GetOrCreateReal(params, "MP_Density_g_cm3")
-    Dim pMass    As Parameter: Set pMass    = GetOrCreateReal(params, "MP_Mass_g")
+    ' ── 第 1 步：确保 MP_* 参数存在（不存在则创建，存在则复用）─────────────
+    Dim pVolume:  Set pVolume  = GetOrCreateReal(params, "MP_Volume_cm3")
+    Dim pDensity: Set pDensity = GetOrCreateReal(params, "MP_Density_g_cm3")
+    Dim pMass:    Set pMass    = GetOrCreateReal(params, "MP_Mass_g")
 
-    Dim pCOGx As Parameter: Set pCOGx = GetOrCreateReal(params, "MP_COGx_mm")
-    Dim pCOGy As Parameter: Set pCOGy = GetOrCreateReal(params, "MP_COGy_mm")
-    Dim pCOGz As Parameter: Set pCOGz = GetOrCreateReal(params, "MP_COGz_mm")
+    Dim pCOGx: Set pCOGx = GetOrCreateReal(params, "MP_COGx_mm")
+    Dim pCOGy: Set pCOGy = GetOrCreateReal(params, "MP_COGy_mm")
+    Dim pCOGz: Set pCOGz = GetOrCreateReal(params, "MP_COGz_mm")
 
-    Dim pIxx As Parameter: Set pIxx = GetOrCreateReal(params, "MP_Ixx_gmm2")
-    Dim pIyy As Parameter: Set pIyy = GetOrCreateReal(params, "MP_Iyy_gmm2")
-    Dim pIzz As Parameter: Set pIzz = GetOrCreateReal(params, "MP_Izz_gmm2")
-    Dim pIxy As Parameter: Set pIxy = GetOrCreateReal(params, "MP_Ixy_gmm2")
-    Dim pIxz As Parameter: Set pIxz = GetOrCreateReal(params, "MP_Ixz_gmm2")
-    Dim pIyz As Parameter: Set pIyz = GetOrCreateReal(params, "MP_Iyz_gmm2")
+    Dim pIxx: Set pIxx = GetOrCreateReal(params, "MP_Ixx_gmm2")
+    Dim pIyy: Set pIyy = GetOrCreateReal(params, "MP_Iyy_gmm2")
+    Dim pIzz: Set pIzz = GetOrCreateReal(params, "MP_Izz_gmm2")
+    Dim pIxy: Set pIxy = GetOrCreateReal(params, "MP_Ixy_gmm2")
+    Dim pIxz: Set pIxz = GetOrCreateReal(params, "MP_Ixz_gmm2")
+    Dim pIyz: Set pIyz = GetOrCreateReal(params, "MP_Iyz_gmm2")
 
-    ' ── 第 2 步：确保公式存在（不存在则创建，存在则保留现有公式） ───────────
-    ' 公式将 Keep 测量的原始带单位值除以对应单位常数，得到无量纲实数。
-    ' 例：MP_Mass_g = `惯量包络体.1\质量` / 1g
-    ' CreateFormulaIfMissing 只在同名公式不存在时创建，避免覆盖用户自定义公式。
+    ' ── 第 2 步：确保公式存在（不存在则创建，存在则保留现有公式）──────────
+    ' 注意：单位常量字符串要与你环境一致：
+    '   体积：1cm3
+    '   密度：你原文写的是 1g_cm3（下划线）；如果你环境实际是 1g/cm3，请改成 "1g/cm3"
     CreateFormulaIfMissing rels, "F_MP_Volume_cm3",    pVolume,  StdExpr(srcPrefix, "体积",  "1cm3")
     CreateFormulaIfMissing rels, "F_MP_Density_g_cm3", pDensity, StdExpr(srcPrefix, "密度",  "1g_cm3")
     CreateFormulaIfMissing rels, "F_MP_Mass_g",        pMass,    StdExpr(srcPrefix, "质量",  "1g")
@@ -151,41 +136,27 @@ Sub CATMain(iParameters)
     CreateFormulaIfMissing rels, "F_MP_Ixz_gmm2", pIxz, StdExpr(srcPrefix, "IxzG", "1gxmm2")
     CreateFormulaIfMissing rels, "F_MP_Iyz_gmm2", pIyz, StdExpr(srcPrefix, "IyzG", "1gxmm2")
 
-    ' 注：part.Update 通常不需要显式调用；
-    '     公式在下次 CATIA 更新时自动计算最新的测量结果。
-
+    ' 注：通常不需要显式 part.Update；下次更新时公式会自动计算。
 End Sub
 
 ' ============================================================
 ' StdExpr — 生成标准公式右侧表达式字符串
-'
 ' 格式：`<srcPrefix><fieldName>` / <unitConst>
-' 例：StdExpr("惯量包络体.1\", "质量", "1g") 返回
-'     "`惯量包络体.1\质量` / 1g"
 ' ============================================================
-Private Function StdExpr(ByVal srcPrefix As String, _
-                          ByVal fieldName As String, _
-                          ByVal unitConst As String) As String
+Private Function StdExpr(srcPrefix, fieldName, unitConst)
     StdExpr = "`" & srcPrefix & fieldName & "` / " & unitConst
 End Function
 
 ' ============================================================
 ' CreateFormulaIfMissing — 只在同名公式不存在时才创建
-'
-' 逻辑：
-'   1. 用 rels.Item(fName) 尝试获取公式；若不抛错且结果非 Nothing → 已存在，返回。
-'   2. 否则调用 rels.CreateFormula 创建；若失败静默忽略（不弹框），
-'      避免批量调用时因个别零件缺少某字段而中断整个流程。
+' - VBScript 不能使用强类型声明（As Formula/As Parameter 等）
 ' ============================================================
-Private Sub CreateFormulaIfMissing(ByVal rels As Relations, _
-                                    ByVal fName As String, _
-                                    ByVal targetParam As Parameter, _
-                                    ByVal rhsExpr As String)
+Private Sub CreateFormulaIfMissing(rels, fName, targetParam, rhsExpr)
+
     On Error Resume Next
-    Dim f As Formula
+    Dim f
     Set f = rels.Item(fName)
     If Err.Number = 0 And Not f Is Nothing Then
-        ' 公式已存在，无需重建
         Err.Clear
         On Error GoTo 0
         Exit Sub
@@ -203,16 +174,10 @@ End Sub
 
 ' ============================================================
 ' ParameterExists — 检查指定全名的参数是否存在
-'
-' 参数：
-'   params   — 零件的 Parameters 集合
-'   fullName — 含路径的参数全名，例如 "惯量包络体.1\质量"
-' 返回：True 若参数存在且可访问，否则 False
 ' ============================================================
-Private Function ParameterExists(ByVal params As Parameters, _
-                                  ByVal fullName As String) As Boolean
+Private Function ParameterExists(params, fullName)
     On Error Resume Next
-    Dim p As Parameter
+    Dim p
     Set p = params.Item(fullName)
     ParameterExists = (Err.Number = 0 And Not p Is Nothing)
     Err.Clear
@@ -221,22 +186,18 @@ End Function
 
 ' ============================================================
 ' GetOrCreateReal — 获取或新建一个实数参数
-'
-' 参数：
-'   params — 零件的 Parameters 集合
-'   name   — 参数名（不含路径），例如 "MP_Mass_g"
-' 返回：已存在的 Parameter 对象，或新建的 Parameter 对象
 ' ============================================================
-Private Function GetOrCreateReal(ByVal params As Parameters, _
-                                  ByVal name As String) As Parameter
+Private Function GetOrCreateReal(params, paramName)
     On Error Resume Next
-    Dim p As Parameter
-    Set p = params.Item(name)
+    Dim p
+    Set p = params.Item(paramName)
     On Error GoTo 0
 
     If p Is Nothing Then
-        ' 参数不存在，创建初始值为 0 的实数参数
-        Set p = params.CreateReal(name, 0#)
+        ' 某些环境下 “name” 作为变量名会导致解析/对象模型冲突，改用 paramName
+        On Error Resume Next
+        Set p = params.CreateReal(paramName, 0)
+        On Error GoTo 0
     End If
 
     Set GetOrCreateReal = p
