@@ -116,12 +116,12 @@ def _try_mp_params(part_com, label: str = "") -> dict | None:
         cogx = _get("MP_COGx_mm") or 0.0
         cogy = _get("MP_COGy_mm") or 0.0
         cogz = _get("MP_COGz_mm") or 0.0
-        ixx  = _get("MP_Ixx_gmm2") or 0.0
-        iyy  = _get("MP_Iyy_gmm2") or 0.0
-        izz  = _get("MP_Izz_gmm2") or 0.0
-        ixy  = _get("MP_Ixy_gmm2") or 0.0
-        ixz  = _get("MP_Ixz_gmm2") or 0.0
-        iyz  = _get("MP_Iyz_gmm2") or 0.0
+        ixx  = _get("MP_Ixx_gxmm2") or 0.0
+        iyy  = _get("MP_Iyy_gxmm2") or 0.0
+        izz  = _get("MP_Izz_gxmm2") or 0.0
+        ixy  = _get("MP_Ixy_gxmm2") or 0.0
+        ixz  = _get("MP_Ixz_gxmm2") or 0.0
+        iyz  = _get("MP_Iyz_gxmm2") or 0.0
 
         return {
             "weight":  mass_g,

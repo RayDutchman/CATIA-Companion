@@ -16,7 +16,7 @@ Option Explicit
 '   MP_COGx_mm          — 重心 X 坐标，mm（零件局部坐标系）
 '   MP_COGy_mm          — 重心 Y 坐标，mm
 '   MP_COGz_mm          — 重心 Z 坐标，mm
-'   MP_Ixx_gmm2 ~ MP_Iyz_gmm2 — 惯量张量分量，g·mm²（重心处，零件局部轴）
+'   MP_Ixx_gxmm2 ~ MP_Iyz_gxmm2 — 惯量张量分量，g·mm²（重心处，零件局部轴）
 '
 ' 先决条件：
 '   零件必须已执行"测量惯量"并勾选"保持测量"，
@@ -39,13 +39,13 @@ Sub CATMain(iParameters)
     Dim CATIA
     Set CATIA = GetObject(, "CATIA.Application")
 
-    ' ── 解析 iParameters(0)：目标零件号（PartNumber，可选）───────────────
+    ' ── 解析 iParameters：目标零件号（PartNumber，可选）───────────────
     ' VBScript 下 iParameters 可能是数组、也可能是单值；这里做容错读取。
     Dim targetPN
     targetPN = ""
 
     On Error Resume Next
-    targetPN = CStr(iParameters(0))
+    targetPN = CStr(iParameters)
     Err.Clear
     On Error GoTo 0
 
@@ -98,7 +98,7 @@ Sub CATMain(iParameters)
     ' 注意：在零件自身的 Parameters 集合内，参数全名不含零件号前缀，
     '       直接以测量节点名开头，例如 "惯量包络体.1\质量"。
     Dim srcPrefix
-    srcPrefix = "惯量包络体.1\"
+    srcPrefix = targetPN & "\惯量包络体.1\"
     ' ── 先决条件校验：检查 Keep 测量参数是否存在 ───────────────────────────
     If Not ParameterExists(params, srcPrefix & "质量") Then Exit Sub
     ' ── 第 1 步：确保 MP_* 参数存在（不存在则创建，存在则复用）─────────────
@@ -110,12 +110,12 @@ Sub CATMain(iParameters)
     Dim pCOGy: Set pCOGy = GetOrCreateReal(params, "MP_COGy_mm")
     Dim pCOGz: Set pCOGz = GetOrCreateReal(params, "MP_COGz_mm")
 
-    Dim pIxx: Set pIxx = GetOrCreateReal(params, "MP_Ixx_gmm2")
-    Dim pIyy: Set pIyy = GetOrCreateReal(params, "MP_Iyy_gmm2")
-    Dim pIzz: Set pIzz = GetOrCreateReal(params, "MP_Izz_gmm2")
-    Dim pIxy: Set pIxy = GetOrCreateReal(params, "MP_Ixy_gmm2")
-    Dim pIxz: Set pIxz = GetOrCreateReal(params, "MP_Ixz_gmm2")
-    Dim pIyz: Set pIyz = GetOrCreateReal(params, "MP_Iyz_gmm2")
+    Dim pIxx: Set pIxx = GetOrCreateReal(params, "MP_Ixx_gxmm2")
+    Dim pIyy: Set pIyy = GetOrCreateReal(params, "MP_Iyy_gxmm2")
+    Dim pIzz: Set pIzz = GetOrCreateReal(params, "MP_Izz_gxmm2")
+    Dim pIxy: Set pIxy = GetOrCreateReal(params, "MP_Ixy_gxmm2")
+    Dim pIxz: Set pIxz = GetOrCreateReal(params, "MP_Ixz_gxmm2")
+    Dim pIyz: Set pIyz = GetOrCreateReal(params, "MP_Iyz_gxmm2")
 
     ' ── 第 2 步：确保公式存在（不存在则创建，存在则保留现有公式）──────────
     ' 注意：单位常量字符串要与你环境一致：
@@ -129,12 +129,12 @@ Sub CATMain(iParameters)
     CreateFormulaIfMissing rels, "F_MP_COGy_mm", pCOGy, StdExpr(srcPrefix, "Gy",   "1mm")
     CreateFormulaIfMissing rels, "F_MP_COGz_mm", pCOGz, StdExpr(srcPrefix, "Gz",   "1mm")
 
-    CreateFormulaIfMissing rels, "F_MP_Ixx_gmm2", pIxx, StdExpr(srcPrefix, "IoxG", "1gxmm2")
-    CreateFormulaIfMissing rels, "F_MP_Iyy_gmm2", pIyy, StdExpr(srcPrefix, "IoyG", "1gxmm2")
-    CreateFormulaIfMissing rels, "F_MP_Izz_gmm2", pIzz, StdExpr(srcPrefix, "IozG", "1gxmm2")
-    CreateFormulaIfMissing rels, "F_MP_Ixy_gmm2", pIxy, StdExpr(srcPrefix, "IxyG", "1gxmm2")
-    CreateFormulaIfMissing rels, "F_MP_Ixz_gmm2", pIxz, StdExpr(srcPrefix, "IxzG", "1gxmm2")
-    CreateFormulaIfMissing rels, "F_MP_Iyz_gmm2", pIyz, StdExpr(srcPrefix, "IyzG", "1gxmm2")
+    CreateFormulaIfMissing rels, "F_MP_Ixx_gxmm2", pIxx, StdExpr(srcPrefix, "IoxG", "1gxmm2")
+    CreateFormulaIfMissing rels, "F_MP_Iyy_gxmm2", pIyy, StdExpr(srcPrefix, "IoyG", "1gxmm2")
+    CreateFormulaIfMissing rels, "F_MP_Izz_gxmm2", pIzz, StdExpr(srcPrefix, "IozG", "1gxmm2")
+    CreateFormulaIfMissing rels, "F_MP_Ixy_gxmm2", pIxy, StdExpr(srcPrefix, "IxyG", "1gxmm2")
+    CreateFormulaIfMissing rels, "F_MP_Ixz_gxmm2", pIxz, StdExpr(srcPrefix, "IxzG", "1gxmm2")
+    CreateFormulaIfMissing rels, "F_MP_Iyz_gxmm2", pIyz, StdExpr(srcPrefix, "IyzG", "1gxmm2")
 
     ' 注：通常不需要显式 part.Update；下次更新时公式会自动计算。
 End Sub
