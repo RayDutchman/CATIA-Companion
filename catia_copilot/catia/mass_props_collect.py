@@ -399,8 +399,9 @@ def _post_process_rows(rows: list[dict]) -> None:
             for i in range(3)
         ]
 
-        # 将零件自身坐标系下的值写入显示字段（表格展示）
-        # 注：层级BOM / 汇总BOM 的单行显示均以零件自身坐标系为准；
+        # 将零件自身坐标系下的值写入显示字段（汇总BOM展示及后续缩放用）
+        # 注：汇总BOM 的单行显示以零件自身坐标系为准；
+        #     层级BOM 在 _get_display_rows() 中会以 _root_mp 值覆盖这些字段；
         #     根坐标系数据缓存于 _root_mp，供第二轮汇总和底部计算面板使用。
         row["CogX"] = cog_local[0]
         row["CogY"] = cog_local[1]

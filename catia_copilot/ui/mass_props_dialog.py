@@ -99,8 +99,11 @@ def _fmt(value) -> str:
 class MassPropsDialog(QDialog):
     """质量特性汇总对话框。
 
-    - 遍历 CATProduct 树，每个零件实例单独显示一行（层级BOM模式）。
-    - 汇总BOM模式：相同零件编号的实例合并为一行，并显示数量。
+    - 遍历 CATProduct 树，每个节点（零件/产品/部件实例）单独显示一行（层级BOM模式）。
+      Weight / CogX / CogY / CogZ / Ixx–Iyz 均在根产品坐标系下显示，与装配位置有关。
+    - 汇总BOM模式：相同零件编号的零件实例合并为一行，并显示数量（Quantity）；
+      仅列出零件（不含产品和部件）；Weight / CogX / CogY / CogZ / Ixx–Iyz
+      在零件自身坐标系下显示，与装配位置无关。
     - 仅零件节点的"重量"列可编辑；修改后等比缩放该行惯量，
       并同步更新所有相同零件编号的行（及 _rows 中全部同PN数据）。
     - 单位可在 kg/g 间切换（影响重量列与转动惯量列的显示和导出）。
@@ -446,9 +449,9 @@ class MassPropsDialog(QDialog):
                 "底部「汇总结果」在根产品坐标系下计算。"
             )
         return (
-            "【层级BOM】仅展示零件节点（产品/部件节点已隐藏）。"
+            "【层级BOM】展示零件节点和产品/部件节点。"
             "Weight / CogX / CogY / CogZ / Ixx–Iyz "
-            "均在零件自身坐标系下显示，与零件的装配位置无关。"
+            "均在根产品坐标系下显示，与零件的装配位置有关。"
             "底部「汇总结果」在根产品坐标系下计算。"
         )
 
@@ -647,15 +650,31 @@ class MassPropsDialog(QDialog):
         """返回当前模式下应显示的行列表。"""
         if self._summarize:
             return self._build_summary_rows()
-        # 层级BOM：仅展示零件节点，跳过产品/部件节点。
+        # 层级BOM：展示全部节点（零件、产品、部件），使用根产品坐标系下的值。
         # 每行附加 _rows_idx，指向 self._rows 中的原始索引，
         # 以确保 _make_item / _on_item_changed 能正确回写数据。
+        # 对零件行，将 _root_mp 中的根坐标系 COG / 惯量值覆盖显示字段；
+        # 产品/部件行的显示字段已由 _post_process_rows() 写入根坐标系汇总值。
         result = []
         for i, row in enumerate(self._rows):
-            if row.get("Type") == "零件":
-                r = dict(row)
-                r["_rows_idx"] = i
-                result.append(r)
+            r = dict(row)
+            r["_rows_idx"] = i
+            if r.get("Type") == "零件":
+                rmp = r.get("_root_mp")
+                if rmp:
+                    cog = rmp.get("cog", [None, None, None])
+                    r["CogX"] = cog[0]
+                    r["CogY"] = cog[1]
+                    r["CogZ"] = cog[2]
+                    I = rmp.get("inertia")
+                    if I:
+                        r["Ixx"] = I[0][0]
+                        r["Iyy"] = I[1][1]
+                        r["Izz"] = I[2][2]
+                        r["Ixy"] = I[0][1]
+                        r["Ixz"] = I[0][2]
+                        r["Iyz"] = I[1][2]
+            result.append(r)
         return result
 
     def _build_summary_rows(self) -> list[dict]:
@@ -947,7 +966,17 @@ class MassPropsDialog(QDialog):
             for ic_name, (ir, ic) in _INERTIA_IDX.items():
                 if ic_name in self._columns:
                     ic_idx = self._columns.index(ic_name)
-                    raw_i = vis_row.get(ic_name)
+                    if self._summarize:
+                        # 汇总BOM：显示零件自身坐标系值
+                        raw_i = vis_row.get(ic_name)
+                    else:
+                        # 层级BOM：显示根产品坐标系值
+                        rmp = vis_row.get("_root_mp")
+                        raw_i = (
+                            rmp["inertia"][ir][ic]
+                            if rmp and rmp.get("inertia")
+                            else vis_row.get(ic_name)
+                        )
                     if raw_i is not None:
                         vis_item.setText(ic_idx, self._fmt_mass_val(raw_i))
 
