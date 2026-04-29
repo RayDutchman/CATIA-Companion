@@ -196,14 +196,14 @@ def _measure_part_mass_props(doc_com, part_com) -> dict | None:
         """
         try:
             v = meas.Density
-            if v and v > 0.0:
+            if v is not None and v > 0.0:
                 logger.debug(f"[SPA]   {label} .Density = {v}")
                 return float(v)
         except Exception as e1:
             logger.debug(f"[SPA]   {label} .Density 失败: {e1}，尝试 GetDensity()")
         try:
             v = meas.GetDensity()
-            if v and v > 0.0:
+            if v is not None and v > 0.0:
                 logger.debug(f"[SPA]   {label} GetDensity() = {v}")
                 return float(v)
         except Exception as e2:
