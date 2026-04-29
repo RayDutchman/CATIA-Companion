@@ -154,7 +154,10 @@ class MassPropsDialog(QDialog):
         return [self._column_header(c) for c in self._columns]
 
     def _fmt_mass_val(self, value) -> str:
-        """将质量/惯量原始值（kg / kg·mm²）转换并格式化为当前单位的字符串。"""
+        """将质量/惯量原始值（g / g·mm²）乘以 _unit_factor 并格式化为字符串。
+
+        _unit_factor = 1.0 时以 g / g·mm² 显示；= 0.001 时以 kg / kg·mm² 显示。
+        """
         if value is None:
             return "—"
         try:

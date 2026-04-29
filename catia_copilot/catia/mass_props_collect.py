@@ -534,7 +534,8 @@ def _measure_part_mass_props(doc_com, part_com, filepath: str = "") -> dict | No
             I_at_cog[row][col] = I_at_origin[row][col] - total_mass * delta
 
     logger.debug(f"[SPA] 最终结果: weight={total_mass}, cog={part_cog}")
-    # SPA 返回值为 kg / kg·mm²；统一换算为程序内部单位 g / g·mm²（×1000）
+    # SPA 返回值单位：质量 kg、坐标 mm、惯量 kg·mm²。
+    # 统一换算为程序内部单位 g / mm / g·mm²（质量和惯量各乘以 1000，坐标不变）。
     return {
         "weight":  total_mass * 1000.0,
         "cog":     part_cog,
