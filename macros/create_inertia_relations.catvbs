@@ -167,12 +167,21 @@ Private Sub CreateFormulaIfMissing(rels, fName, targetParam, rhsExpr)
     Err.Clear
     On Error GoTo 0
 
-    ' 公式不存在，尝试创建；失败时静默忽略
+    ' 公式不存在，尝试创建；失败时通过 MsgBox 报告错误，便于诊断。
     On Error Resume Next
     Err.Clear
     rels.CreateFormula fName, "", targetParam, rhsExpr
+    Dim createErr: createErr = Err.Number
+    Dim createDesc: createDesc = Err.Description
     Err.Clear
     On Error GoTo 0
+
+    If createErr <> 0 Then
+        MsgBox "创建公式 [" & fName & "] 失败" & vbCrLf & _
+               "表达式：" & rhsExpr & vbCrLf & _
+               "错误 " & createErr & "：" & createDesc, _
+               vbExclamation, "create_inertia_relations"
+    End If
 End Sub
 
 ' ============================================================
