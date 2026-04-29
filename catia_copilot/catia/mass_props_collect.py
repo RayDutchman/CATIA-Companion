@@ -79,10 +79,10 @@ def _position_to_mat4(product_com) -> list[list[float]]:
 def _try_mp_params(part_com, label: str = "") -> dict | None:
     """读取由 create_inertia_relations.catvbs 写入的 MP_* 用户参数。
 
-    参数单位约定（与 VBS 脚本一致）：
-      - MP_Mass_g       → 克（g），转换为千克（kg）
-      - MP_COGx/y/z_mm  → 毫米（mm），无需转换
-      - MP_Ixx/yy/zz/xy/xz/yz_gmm2 → g·mm²，转换为 kg·mm²
+    参数单位与程序内部单位一致（无需转换）：
+      - MP_Mass_g                   → g（直接使用）
+      - MP_COGx/y/z_mm              → mm（直接使用）
+      - MP_Ixx/yy/zz/xy/xz/yz_gmm2 → g·mm²（直接使用）
 
     返回与 _measure_part_mass_props 相同结构的字典，或 None（参数不存在或质量≤0）。
     """
@@ -116,12 +116,12 @@ def _try_mp_params(part_com, label: str = "") -> dict | None:
             f"mass={mass_g}g, cog=({cogx},{cogy},{cogz})mm"
         )
         return {
-            "weight":  mass_g / 1000.0,
+            "weight":  mass_g,
             "cog":     [cogx, cogy, cogz],
             "inertia": [
-                [ixx / 1000.0, ixy / 1000.0, ixz / 1000.0],
-                [ixy / 1000.0, iyy / 1000.0, iyz / 1000.0],
-                [ixz / 1000.0, iyz / 1000.0, izz / 1000.0],
+                [ixx, ixy, ixz],
+                [ixy, iyy, iyz],
+                [ixz, iyz, izz],
             ],
         }
     except Exception as e:
@@ -129,23 +129,23 @@ def _try_mp_params(part_com, label: str = "") -> dict | None:
         return None
 
 
-def _run_inertia_vbs_and_read(doc_com, part_com, label: str = "") -> dict | None:
-    """若零件已建立 Keep 惯量测量，自动运行 create_inertia_relations.catvbs，
+def _run_inertia_vbs_and_read(
+    doc_com, part_com, label: str = "", filepath: str = ""
+) -> dict | None:
+    """若 MP_* 参数不存在，自动运行 create_inertia_relations.catvbs，
     再读取写入的 MP_* 参数。
 
-    先决条件：part.Parameters 中必须存在 ``惯量包络体.1\\质量`` 参数
-    （即用户已在 CATIA 中做了 "测量惯量 → 保持测量" 操作）。
-
     VBS 脚本路径：``macros/create_inertia_relations.catvbs``（相对于项目根）。
+    若零件没有 "惯量包络体.1\\质量"（Keep 测量）参数，脚本会静默退出，不弹框。
+
+    参数：
+        doc_com:  COM 对象（PartDocument 层）。
+        part_com: COM 对象（Part 层），用于读取 MP_* 参数。
+        label:    调试标签，用于 debug 日志。
+        filepath: 零件文档的磁盘路径，作为 iParameter[0] 传给 VBS，
+                  VBS 可据此定位并激活目标文档；为空时 VBS 使用当前活动文档。
     """
     tag = f"[MP] {label} " if label else "[MP] "
-
-    # 检查先决条件：惯量包络体.1\质量 参数必须存在
-    try:
-        part_com.Parameters.Item("惯量包络体.1\\质量")
-    except Exception:
-        logger.debug(f"{tag}无 '惯量包络体.1\\质量' 参数，跳过 VBS 路径")
-        return None
 
     try:
         from catia_copilot.utils import resource_path
@@ -154,44 +154,53 @@ def _run_inertia_vbs_and_read(doc_com, part_com, label: str = "") -> dict | None
             logger.debug(f"{tag}找不到 VBS 文件: {vbs_path}，跳过")
             return None
 
-        logger.debug(f"{tag}激活零件文档并运行 {vbs_path.name}")
+        logger.debug(f"{tag}激活零件文档并运行 {vbs_path.name}，filepath={filepath!r}")
         doc_com.Activate()
+        # 将零件文件路径作为 iParameter 传给 VBS，让脚本可自行定位目标文档
         doc_com.Application.SystemService.ExecuteScript(
-            str(vbs_path.parent), 1, vbs_path.name, "CATMain", []
+            str(vbs_path.parent), 1, vbs_path.name, "CATMain", [filepath]
         )
 
         result = _try_mp_params(part_com, label)
         if result is not None:
             logger.debug(f"{tag}VBS 执行后 MP_* 参数读取成功")
         else:
-            logger.debug(f"{tag}VBS 执行后 MP_* 参数仍不可用")
+            logger.debug(f"{tag}VBS 执行后 MP_* 参数仍不可用（零件可能无 Keep 惯量测量）")
         return result
     except Exception as e:
         logger.debug(f"{tag}VBS 路径失败: {e}")
         return None
 
 
-def _measure_part_mass_props(doc_com, part_com) -> dict | None:
+def _measure_part_mass_props(doc_com, part_com, filepath: str = "") -> dict | None:
     """测量零件质量特性。
+
+    所有返回值均使用 **g / mm / g·mm²** 单位制（与 create_inertia_relations.catvbs 一致）。
 
     路径优先级：
       1. **MP_* 参数**：直接读取由 ``create_inertia_relations.catvbs`` 写入的
          ``MP_Mass_g``、``MP_COGx/y/z_mm``、``MP_Ixx/yy/zz/xy/xz/yz_gmm2`` 参数。
-      2. **VBS 自动绑定**：若零件有 ``惯量包络体.1\\质量``（Keep 测量），
-         自动运行 VBS 脚本创建 MP_* 参数后再读取。
+      2. **VBS 自动绑定**：若路径 1 失败，自动运行 VBS 脚本尝试创建 MP_* 参数后
+         再读取。若零件无 Keep 惯量测量，脚本会静默退出，不阻塞。
       3. **SPA 逐 Body 测量**：对每个 Body 依次尝试：
          A. ``spa.GetMeasurable(body)`` — 直接传 Body 对象；
          B. ``spa.GetMeasurable(CreateReferenceFromObject(body))`` — 通过引用。
          读取质量时依次尝试：``.Volume`` → ``GetVolume(arr)`` → ``GetVolume()``，
          再根据推算密度换算为质量；或直接读取 ``.Mass`` / ``GetMass()``。
+         SPA 返回值（kg/kg·mm²）在返回前统一换算为 g/g·mm²（×1000）。
+
+    参数：
+        doc_com:  COM 对象（PartDocument 层）。
+        part_com: COM 对象（Part 层）。
+        filepath: 零件文档的磁盘路径，传给 VBS 脚本以定位目标文档。
 
     返回字典：
       {
-        "weight":  float,          # 总质量，kg
+        "weight":  float,          # 总质量，g
         "cog":     [x, y, z],      # 重心坐标（零件局部坐标系），mm
         "inertia": [[Ixx,Ixy,Ixz],
                     [Iyx,Iyy,Iyz],
-                    [Izx,Izy,Izz]], # 重心处转动惯量（零件局部坐标轴），kg·mm²
+                    [Izx,Izy,Izz]], # 重心处转动惯量（零件局部坐标轴），g·mm²
       }
     若所有路径均失败则返回 None。
     """
