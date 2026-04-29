@@ -78,6 +78,32 @@ def _mat4_mul(A: list[list[float]], B: list[list[float]]) -> list[list[float]]:
     return C
 
 
+def _row_inertia_to_root(row: dict) -> list[list[float]]:
+    """将行的 _mass_props.inertia（零件局部坐标系）旋转变换到根坐标系。
+
+    公式：I_root = R @ I_local @ R^T
+    其中 R 为从行的 _placement 矩阵中提取的 3×3 旋转子矩阵。
+
+    若 _placement 或 _mass_props 缺失，返回 3×3 零矩阵。
+    """
+    placement = row.get("_placement")
+    mp = row.get("_mass_props")
+    if placement is None or mp is None:
+        return [[0.0] * 3 for _ in range(3)]
+    I_local = mp.get("inertia", [[0.0] * 3 for _ in range(3)])
+    R  = [[placement[i][j] for j in range(3)] for i in range(3)]
+    RT = [[R[j][i] for j in range(3)] for i in range(3)]          # R^T
+    RI = [
+        [sum(R[i][k] * I_local[k][j] for k in range(3)) for j in range(3)]
+        for i in range(3)
+    ]
+    I_root = [
+        [sum(RI[i][k] * RT[k][j] for k in range(3)) for j in range(3)]
+        for i in range(3)
+    ]
+    return I_root
+
+
 def _position_to_mat4(product) -> list[list[float]]:
     """从 pycatia Product 包装对象的 position.get_components() 读取位置，返回 4×4 变换矩阵。
 
@@ -373,18 +399,20 @@ def _post_process_rows(rows: list[dict]) -> None:
             for i in range(3)
         ]
 
-        # 将变换后的值写回显示字段（用于表格展示）
-        row["CogX"] = cog_root[0]
-        row["CogY"] = cog_root[1]
-        row["CogZ"] = cog_root[2]
-        row["Ixx"]  = I_root[0][0]
-        row["Iyy"]  = I_root[1][1]
-        row["Izz"]  = I_root[2][2]
-        row["Ixy"]  = I_root[0][1]
-        row["Ixz"]  = I_root[0][2]
-        row["Iyz"]  = I_root[1][2]
+        # 将零件自身坐标系下的值写入显示字段（表格展示）
+        # 注：层级BOM / 汇总BOM 的单行显示均以零件自身坐标系为准；
+        #     根坐标系数据缓存于 _root_mp，供第二轮汇总和底部计算面板使用。
+        row["CogX"] = cog_local[0]
+        row["CogY"] = cog_local[1]
+        row["CogZ"] = cog_local[2]
+        row["Ixx"]  = I_local[0][0]
+        row["Iyy"]  = I_local[1][1]
+        row["Izz"]  = I_local[2][2]
+        row["Ixy"]  = I_local[0][1]
+        row["Ixz"]  = I_local[0][2]
+        row["Iyz"]  = I_local[1][2]
 
-        # 缓存根坐标系数据到 _root_mp，供第二轮汇总及界面联动回写使用
+        # 缓存根坐标系数据到 _root_mp，供第二轮汇总及底部计算面板使用
         row["_root_mp"] = {
             "weight":  mp.get("weight", 0.0),
             "cog":     cog_root,

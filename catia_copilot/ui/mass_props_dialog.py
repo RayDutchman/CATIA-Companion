@@ -327,6 +327,15 @@ class MassPropsDialog(QDialog):
 
         layout.addWidget(opts_group)
 
+        # ── BOM说明标签 ─────────────────────────────────────────────────────
+        self._bom_desc_lbl = QLabel(self._bom_desc_text())
+        self._bom_desc_lbl.setWordWrap(True)
+        self._bom_desc_lbl.setStyleSheet(
+            "QLabel { background-color: #EEF4FC; border: 1px solid #B8D0F0;"
+            " border-radius: 4px; padding: 4px 8px; color: #2B4C7E; font-size: 11px; }"
+        )
+        layout.addWidget(self._bom_desc_lbl)
+
         # ── 树形表格 ────────────────────────────────────────────────────────
         self._table = _BomTreeWidget()
         self._table.setColumnCount(len(self._columns))
@@ -436,6 +445,25 @@ class MassPropsDialog(QDialog):
 
         layout.addLayout(btn_row)
 
+    # ── BOM 说明文字 ───────────────────────────────────────────────────────
+
+    def _bom_desc_text(self) -> str:
+        """返回当前 BOM 模式对应的说明文字。"""
+        if self._summarize:
+            return (
+                "【汇总BOM】按零件编号合并，每行显示出现数量（Quantity）。"
+                "零件行的 Weight / CogX / CogY / CogZ / Ixx–Iyz "
+                "在零件自身坐标系下显示；"
+                "部件/产品行的上述字段按平行轴定理汇总（在根产品坐标系下）。"
+                "底部「汇总结果」同样在根产品坐标系下计算。"
+            )
+        return (
+            "【层级BOM】仅展示零件节点（产品/部件节点已隐藏）。"
+            "Weight / CogX / CogY / CogZ / Ixx–Iyz "
+            "均在零件自身坐标系下显示，与零件的装配位置无关。"
+            "底部「汇总结果」在根产品坐标系下计算。"
+        )
+
     # ── 文件/活动文档切换 ──────────────────────────────────────────────────
 
     def _toggle_file_row(self, use_active: bool) -> None:
@@ -459,6 +487,7 @@ class MassPropsDialog(QDialog):
         self._summarize = self._radio_summ.isChecked()
         self._settings.setValue("summarize", self._summarize)
         self._summary_opts_widget.setVisible(self._summarize)
+        self._bom_desc_lbl.setText(self._bom_desc_text())
         self._rebuild_columns_and_table()
 
     def _on_unit_changed(self, checked: bool) -> None:
@@ -636,7 +665,16 @@ class MassPropsDialog(QDialog):
         """返回当前模式下应显示的行列表。"""
         if self._summarize:
             return self._build_summary_rows()
-        return self._rows
+        # 层级BOM：仅展示零件节点，跳过产品/部件节点。
+        # 每行附加 _rows_idx，指向 self._rows 中的原始索引，
+        # 以确保 _make_item / _on_item_changed 能正确回写数据。
+        result = []
+        for i, row in enumerate(self._rows):
+            if row.get("Type") == "零件":
+                r = dict(row)
+                r["_rows_idx"] = i
+                result.append(r)
+        return result
 
     def _build_summary_rows(self) -> list[dict]:
         """汇总模式：将相同零件编号的行合并，增加 Quantity 字段。
@@ -810,9 +848,10 @@ class MassPropsDialog(QDialog):
         """层级BOM模式：按 Level 构建树形结构。"""
         parent_stack: list[tuple[int, QTreeWidgetItem | None]] = [(-1, None)]
 
-        for rows_idx, row_data in enumerate(display_rows):
+        for di, row_data in enumerate(display_rows):
             level = int(row_data.get("Level", 0))
-            # In hierarchical mode display_rows IS self._rows, so rows_idx == _rows index
+            # 使用 _rows_idx（若存在）映射回 self._rows，保持与 _populate_flat 一致
+            rows_idx = row_data.get("_rows_idx", di)
 
             while len(parent_stack) > 1 and parent_stack[-1][0] >= level:
                 parent_stack.pop()
@@ -894,14 +933,12 @@ class MassPropsDialog(QDialog):
                     if rmp is not None:
                         rmp["inertia"] = I_root
                         rmp["weight"]  = new_weight_stored
-                    # 更新行级惯量显示字段（根坐标系）
+                    # 更新行级惯量显示字段（零件自身坐标系）
+                    I_local_new = mp.get("inertia", [[0.0] * 3 for _ in range(3)])
                     for ic_name, (ir2, ic2) in _INERTIA_IDX.items():
-                        r[ic_name] = I_root[ir2][ic2]
+                        r[ic_name] = I_local_new[ir2][ic2]
                 else:
-                    # 仅更新质量，惯量不变
-                    I_root = _row_inertia_to_root(r)
-                    for ic_name, (ir2, ic2) in _INERTIA_IDX.items():
-                        r[ic_name] = I_root[ir2][ic2]
+                    # 仅更新质量，惯量不变（显示字段为局部坐标系值，无需重新计算）
                     rmp = r.get("_root_mp")
                     if rmp is not None:
                         rmp["weight"] = new_weight_stored
