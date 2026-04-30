@@ -34,7 +34,7 @@ from catia_copilot.constants import (
     FILENAME_NOT_FOUND,
     FILENAME_UNSAVED,
 )
-from catia_copilot.catia.mass_props_collect import collect_mass_props_rows, _row_inertia_to_root
+from catia_copilot.catia.mass_props_collect import collect_mass_props_rows, _row_inertia_to_root, recompute_product_rows
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
 from catia_copilot.ui.bom_widgets import _BomTreeWidget
 
@@ -139,8 +139,11 @@ class MassPropsDialog(QDialog):
 
         self._summarize: bool = self._settings.value("summarize", False, type=bool)
         self._unit: str = self._settings.value("unit", "g")
-        # 内部单位为 g / g·mm²；kg 显示时乘以 0.001，g 显示时乘以 1.0
-        self._unit_factor: float = 1.0 if self._unit == "g" else 0.001
+        # 内部单位为 g / g·mm²；根据所选单位制设置换算因子：
+        #   "g"     → mass: ×1,      inertia: ×1         (g,     g·mm²)
+        #   "kg"    → mass: ×0.001,  inertia: ×0.001     (kg,    kg·mm²)
+        #   "kg_m2" → mass: ×0.001,  inertia: ×1e-9      (kg,    kg·m²)
+        self._unit_factor, self._inertia_unit_factor = self._calc_unit_factors(self._unit)
 
         # ── 汇总BOM专用选项 ───────────────────────────────────────────────────
         self._summary_sort_column: str = self._settings.value(
@@ -164,6 +167,33 @@ class MassPropsDialog(QDialog):
         self._build_ui()
 
     # ── Column management ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _calc_unit_factors(unit: str) -> tuple[float, float]:
+        """根据单位制字符串返回 (mass_factor, inertia_factor)。
+
+        Returns:
+            mass_factor:    g → 显示单位的换算因子（重量列）
+            inertia_factor: g·mm² → 显示单位的换算因子（惯量列）
+        """
+        if unit == "g":
+            return 1.0, 1.0
+        if unit == "kg_m2":
+            return 1e-3, 1e-9
+        # "kg" (kg / kg·mm²)
+        return 1e-3, 1e-3
+
+    def _weight_unit_label(self) -> str:
+        """返回重量列的单位标签字符串。"""
+        return "g" if self._unit == "g" else "kg"
+
+    def _inertia_unit_label(self) -> str:
+        """返回惯量列的单位标签字符串。"""
+        if self._unit == "g":
+            return "g·mm²"
+        if self._unit == "kg_m2":
+            return "kg·m²"
+        return "kg·mm²"
 
     def _build_columns(self) -> list[str]:
         """根据当前可见性设置和 BOM 模式，构建列名列表。
@@ -189,25 +219,35 @@ class MassPropsDialog(QDialog):
 
     def _column_header(self, col_name: str) -> str:
         """返回列名的中文显示名（含当前单位后缀）。"""
-        if self._unit == "g":
-            if col_name == "Weight":
-                return "重量 (g)"
-            if col_name in _INERTIA_IDX:
-                return f"{col_name} (g·mm²)"
+        if col_name == "Weight":
+            return f"重量 ({self._weight_unit_label()})"
+        if col_name in _INERTIA_IDX:
+            return f"{col_name} ({self._inertia_unit_label()})"
         return MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col_name, col_name)
 
     def _display_headers(self) -> list[str]:
         return [self._column_header(c) for c in self._columns]
 
     def _fmt_mass_val(self, value) -> str:
-        """将质量/惯量原始值（g / g·mm²）乘以 _unit_factor 并格式化为字符串。
-
-        _unit_factor = 1.0 时以 g / g·mm² 显示；= 0.001 时以 kg / kg·mm² 显示。
-        """
+        """将质量原始值（g）乘以 _unit_factor 并格式化为字符串（重量列专用）。"""
         if value is None:
             return "—"
         try:
             v = float(value) * self._unit_factor
+            if math.isclose(v, round(v), rel_tol=0.0, abs_tol=1e-6):
+                return f"{v:.0f}"
+            if abs(v) >= 1e4 or (v != 0.0 and abs(v) < 0.001):
+                return f"{v:.3e}"
+            return f"{v:.3f}"
+        except (TypeError, ValueError):
+            return str(value)
+
+    def _fmt_inertia_val(self, value) -> str:
+        """将惯量原始值（g·mm²）乘以 _inertia_unit_factor 并格式化为字符串（惯量列专用）。"""
+        if value is None:
+            return "—"
+        try:
+            v = float(value) * self._inertia_unit_factor
             if math.isclose(v, round(v), rel_tol=0.0, abs_tol=1e-6):
                 return f"{v:.0f}"
             if abs(v) >= 1e4 or (v != 0.0 and abs(v) < 0.001):
@@ -267,15 +307,21 @@ class MassPropsDialog(QDialog):
         unit_lbl = QLabel("单位：")
         row1.addWidget(unit_lbl)
         self._unit_group = QButtonGroup(self)
-        self._radio_kg = QRadioButton("kg / kg·mm²")
-        self._radio_g = QRadioButton("g / g·mm²")
+        self._radio_kg    = QRadioButton("kg / kg·mm²")
+        self._radio_g     = QRadioButton("g / g·mm²")
+        self._radio_kg_m2 = QRadioButton("kg / kg·m²")
         self._radio_kg.setChecked(self._unit == "kg")
         self._radio_g.setChecked(self._unit == "g")
+        self._radio_kg_m2.setChecked(self._unit == "kg_m2")
         self._unit_group.addButton(self._radio_kg)
         self._unit_group.addButton(self._radio_g)
+        self._unit_group.addButton(self._radio_kg_m2)
         self._radio_kg.toggled.connect(self._on_unit_changed)
+        self._radio_g.toggled.connect(self._on_unit_changed)
+        self._radio_kg_m2.toggled.connect(self._on_unit_changed)
         row1.addWidget(self._radio_kg)
         row1.addWidget(self._radio_g)
+        row1.addWidget(self._radio_kg_m2)
 
         # 汇总BOM专用选项（排序列）
         self._summary_opts_widget = QWidget()
@@ -482,9 +528,13 @@ class MassPropsDialog(QDialog):
         self._rebuild_columns_and_table()
 
     def _on_unit_changed(self, checked: bool) -> None:
-        self._unit = "g" if self._radio_g.isChecked() else "kg"
-        # 内部单位为 g / g·mm²；kg 显示时乘以 0.001，g 显示时乘以 1.0
-        self._unit_factor = 1.0 if self._unit == "g" else 0.001
+        if self._radio_g.isChecked():
+            self._unit = "g"
+        elif self._radio_kg_m2.isChecked():
+            self._unit = "kg_m2"
+        else:
+            self._unit = "kg"
+        self._unit_factor, self._inertia_unit_factor = self._calc_unit_factors(self._unit)
         self._settings.setValue("unit", self._unit)
         if self._rows:
             self._refresh_unit_display()
@@ -546,7 +596,10 @@ class MassPropsDialog(QDialog):
             for col_name, col_idx in mass_col_indices:
                 raw = row_data.get(col_name)
                 if raw is not None:
-                    item.setText(col_idx, self._fmt_mass_val(raw))
+                    if col_name == "Weight":
+                        item.setText(col_idx, self._fmt_mass_val(raw))
+                    else:
+                        item.setText(col_idx, self._fmt_inertia_val(raw))
         self._is_updating = False
 
         # Update summary labels if result is available
@@ -792,7 +845,7 @@ class MassPropsDialog(QDialog):
                     item.setText(col_idx, "—" if node_type == "零件" else "")
                 else:
                     if col_name in _INERTIA_IDX:
-                        item.setText(col_idx, self._fmt_mass_val(raw))
+                        item.setText(col_idx, self._fmt_inertia_val(raw))
                     else:
                         item.setText(col_idx, _fmt(raw))
             else:
@@ -978,7 +1031,7 @@ class MassPropsDialog(QDialog):
                             else vis_row.get(ic_name)
                         )
                     if raw_i is not None:
-                        vis_item.setText(ic_idx, self._fmt_mass_val(raw_i))
+                        vis_item.setText(ic_idx, self._fmt_inertia_val(raw_i))
 
         self._is_updating = False
         self._rollup_result = None
@@ -989,6 +1042,9 @@ class MassPropsDialog(QDialog):
     def _calculate(self) -> None:
         if not self._rows:
             return
+        # 先重新计算产品/部件行（使用更新后的 _root_mp），刷新表格
+        recompute_product_rows(self._rows)
+        self._refresh_product_items()
         try:
             result = rollup_mass_properties(self._rows)
         except Exception as e:
@@ -998,6 +1054,37 @@ class MassPropsDialog(QDialog):
         self._rollup_result = result
         self._update_summary_labels(result)
 
+    def _refresh_product_items(self) -> None:
+        """刷新树形表格中所有产品/部件行的显示值（仅层级BOM模式有效）。
+
+        在 _calculate() 调用 recompute_product_rows() 更新 self._rows 后，
+        调用本方法将新的汇总值写回对应的 QTreeWidgetItem，以保持表格与数据同步。
+        汇总BOM不含产品/部件行，故直接返回。
+        """
+        if self._summarize:
+            return
+        self._is_updating = True
+        try:
+            for item in self._item_by_row:
+                row_idx = item.data(0, _ROW_IDX_ROLE)
+                if row_idx is None:
+                    continue
+                row_data = self._rows[row_idx]
+                if row_data.get("Type") not in ("产品", "部件"):
+                    continue
+                for col_idx, col_name in enumerate(self._columns):
+                    if col_name == "Weight":
+                        raw = row_data.get("Weight")
+                        item.setText(col_idx, self._fmt_mass_val(raw) if raw is not None else "")
+                    elif col_name in ("CogX", "CogY", "CogZ"):
+                        raw = row_data.get(col_name)
+                        item.setText(col_idx, _fmt(raw) if raw is not None else "")
+                    elif col_name in _INERTIA_IDX:
+                        raw = row_data.get(col_name)
+                        item.setText(col_idx, self._fmt_inertia_val(raw) if raw is not None else "")
+        finally:
+            self._is_updating = False
+
     def _clear_summary_labels(self) -> None:
         for lbl in (self._lbl_weight, self._lbl_cx, self._lbl_cy, self._lbl_cz,
                     self._lbl_ixx, self._lbl_iyy, self._lbl_izz,
@@ -1005,8 +1092,8 @@ class MassPropsDialog(QDialog):
             lbl.setText("—")
 
     def _update_summary_labels(self, result: dict) -> None:
-        unit_lbl = self._unit  # "kg" or "g"
-        inertia_unit = f"{unit_lbl}·mm²"
+        unit_lbl     = self._weight_unit_label()
+        inertia_unit = self._inertia_unit_label()
         w_val = result.get("total_weight", 0.0)
         self._lbl_weight.setText(f"{self._fmt_mass_val(w_val)} {unit_lbl}")
         cog = result.get("cog", [0.0, 0.0, 0.0])
@@ -1014,12 +1101,12 @@ class MassPropsDialog(QDialog):
         self._lbl_cy.setText(f"{_fmt(cog[1])} mm")
         self._lbl_cz.setText(f"{_fmt(cog[2])} mm")
         I = result.get("inertia", [[0.0] * 3 for _ in range(3)])
-        self._lbl_ixx.setText(f"{self._fmt_mass_val(I[0][0])} {inertia_unit}")
-        self._lbl_iyy.setText(f"{self._fmt_mass_val(I[1][1])} {inertia_unit}")
-        self._lbl_izz.setText(f"{self._fmt_mass_val(I[2][2])} {inertia_unit}")
-        self._lbl_ixy.setText(f"{self._fmt_mass_val(I[0][1])} {inertia_unit}")
-        self._lbl_ixz.setText(f"{self._fmt_mass_val(I[0][2])} {inertia_unit}")
-        self._lbl_iyz.setText(f"{self._fmt_mass_val(I[1][2])} {inertia_unit}")
+        self._lbl_ixx.setText(f"{self._fmt_inertia_val(I[0][0])} {inertia_unit}")
+        self._lbl_iyy.setText(f"{self._fmt_inertia_val(I[1][1])} {inertia_unit}")
+        self._lbl_izz.setText(f"{self._fmt_inertia_val(I[2][2])} {inertia_unit}")
+        self._lbl_ixy.setText(f"{self._fmt_inertia_val(I[0][1])} {inertia_unit}")
+        self._lbl_ixz.setText(f"{self._fmt_inertia_val(I[0][2])} {inertia_unit}")
+        self._lbl_iyz.setText(f"{self._fmt_inertia_val(I[1][2])} {inertia_unit}")
 
     # ── 导出 ───────────────────────────────────────────────────────────────
 
@@ -1093,7 +1180,7 @@ class MassPropsDialog(QDialog):
                         value = ""
                 elif col_name in _INERTIA_IDX:
                     try:
-                        value = float(raw) * self._unit_factor
+                        value = float(raw) * self._inertia_unit_factor
                     except (TypeError, ValueError):
                         value = ""
                 elif col_name in ("CogX", "CogY", "CogZ"):
@@ -1120,12 +1207,12 @@ class MassPropsDialog(QDialog):
                 "CogX":         cog[0],
                 "CogY":         cog[1],
                 "CogZ":         cog[2],
-                "Ixx":          I[0][0] * self._unit_factor,
-                "Iyy":          I[1][1] * self._unit_factor,
-                "Izz":          I[2][2] * self._unit_factor,
-                "Ixy":          I[0][1] * self._unit_factor,
-                "Ixz":          I[0][2] * self._unit_factor,
-                "Iyz":          I[1][2] * self._unit_factor,
+                "Ixx":          I[0][0] * self._inertia_unit_factor,
+                "Iyy":          I[1][1] * self._inertia_unit_factor,
+                "Izz":          I[2][2] * self._inertia_unit_factor,
+                "Ixy":          I[0][1] * self._inertia_unit_factor,
+                "Ixz":          I[0][2] * self._inertia_unit_factor,
+                "Iyz":          I[1][2] * self._inertia_unit_factor,
             }
             summary_fill = PatternFill(fill_type="solid", fgColor="C6EFCE")
             for ci, col_name in enumerate(export_cols, start=1):
@@ -1160,9 +1247,14 @@ class MassPropsDialog(QDialog):
         def _cell_value(col_name: str, raw) -> str:
             if raw is None:
                 return ""
-            if col_name in ("Weight",) + tuple(_INERTIA_IDX.keys()):
+            if col_name == "Weight":
                 try:
                     return str(float(raw) * self._unit_factor)
+                except (TypeError, ValueError):
+                    return ""
+            if col_name in _INERTIA_IDX:
+                try:
+                    return str(float(raw) * self._inertia_unit_factor)
                 except (TypeError, ValueError):
                     return ""
             return str(raw)
@@ -1184,12 +1276,12 @@ class MassPropsDialog(QDialog):
                     "CogX":         str(cog[0]),
                     "CogY":         str(cog[1]),
                     "CogZ":         str(cog[2]),
-                    "Ixx":          str(I[0][0] * self._unit_factor),
-                    "Iyy":          str(I[1][1] * self._unit_factor),
-                    "Izz":          str(I[2][2] * self._unit_factor),
-                    "Ixy":          str(I[0][1] * self._unit_factor),
-                    "Ixz":          str(I[0][2] * self._unit_factor),
-                    "Iyz":          str(I[1][2] * self._unit_factor),
+                    "Ixx":          str(I[0][0] * self._inertia_unit_factor),
+                    "Iyy":          str(I[1][1] * self._inertia_unit_factor),
+                    "Izz":          str(I[2][2] * self._inertia_unit_factor),
+                    "Ixy":          str(I[0][1] * self._inertia_unit_factor),
+                    "Ixz":          str(I[0][2] * self._inertia_unit_factor),
+                    "Iyz":          str(I[1][2] * self._inertia_unit_factor),
                 }
                 writer.writerow([summary.get(c, "") for c in export_cols])
         logger.info(f"质量特性表格已导出 (csv) -> {dest}")

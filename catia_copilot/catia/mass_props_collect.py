@@ -204,11 +204,21 @@ def _try_mp_params(part_com, label: str = "") -> dict | None:
         cogy = _get("MP_COGy_mm") or 0.0
         cogz = _get("MP_COGz_mm") or 0.0
 
-        # 转动惯量张量分量——缺失时默认 0
-        # 对角分量（主惯量）
-        ixx  = _get("MP_Ixx_gxmm2") or 0.0
-        iyy  = _get("MP_Iyy_gxmm2") or 0.0
-        izz  = _get("MP_Izz_gxmm2") or 0.0
+        # 转动惯量张量分量
+        # 对角分量（主惯量）——先保留原始 None 标记，用于判断参数是否缺失
+        ixx_raw = _get("MP_Ixx_gxmm2")
+        iyy_raw = _get("MP_Iyy_gxmm2")
+        izz_raw = _get("MP_Izz_gxmm2")
+
+        # 若三个对角分量全部缺失（参数从未被 VBS 写入），
+        # 返回 None 以触发路径 2（运行 VBS 创建并评估惯量公式）。
+        if ixx_raw is None and iyy_raw is None and izz_raw is None:
+            logger.debug(f"{tag}惯量参数（MP_Ixx/Iyy/Izz_gxmm2）不存在，返回 None 触发 VBS 绑定")
+            return None
+
+        ixx = ixx_raw if ixx_raw is not None else 0.0
+        iyy = iyy_raw if iyy_raw is not None else 0.0
+        izz = izz_raw if izz_raw is not None else 0.0
         # 非对角分量（惯性积，通常为负值）
         ixy  = _get("MP_Ixy_gxmm2") or 0.0
         ixz  = _get("MP_Ixz_gxmm2") or 0.0
@@ -275,6 +285,14 @@ def _run_mass_vbs_and_read(
         doc_com.Application.SystemService.ExecuteScript(
             str(vbs_path.parent), 1, vbs_path.name, "CATMain", [part_number]
         )
+
+        # 强制更新零件，确保 VBS 新建的公式立即完成求值，
+        # 否则 MP_* 参数可能仍保持初始值 0（公式延迟计算）。
+        try:
+            part_com.Update()
+            logger.debug(f"{tag}Part.Update() 完成")
+        except Exception as e_upd:
+            logger.warning(f"{tag}Part.Update() 失败，惯量参数可能仍为初始值: {e_upd}")
 
         result = _try_mp_params(part_com, label)
         if result is not None:
@@ -505,6 +523,89 @@ def _post_process_rows(rows: list[dict]) -> None:
                 I_final[ii][jj] = I_at_orig[ii][jj] - M_total * delta
 
         # 将汇总结果写入本节点的显示字段
+        row["Weight"] = M_total
+        row["CogX"]   = cog_total[0]
+        row["CogY"]   = cog_total[1]
+        row["CogZ"]   = cog_total[2]
+        row["Ixx"]    = I_final[0][0]
+        row["Iyy"]    = I_final[1][1]
+        row["Izz"]    = I_final[2][2]
+        row["Ixy"]    = I_final[0][1]
+        row["Ixz"]    = I_final[0][2]
+        row["Iyz"]    = I_final[1][2]
+
+
+def recompute_product_rows(rows: list[dict]) -> None:
+    """重新计算所有产品/部件行的汇总质量特性。
+
+    与 ``_post_process_rows()`` 第二轮逻辑相同，但可在初始加载后独立调用——
+    例如用户在对话框中手动修改了零件重量（同时更新了 ``_root_mp``），
+    点击"计算"按钮后需要刷新产品/部件行的汇总结果。
+
+    处理流程（与 _post_process_rows 第二轮完全一致）：
+      · 遍历 rows，对每个产品/部件节点，收集子树内全部零件的 ``_root_mp``；
+      · 按平行轴定理汇总质量、重心和转动惯量；
+      · 将结果写回该节点的显示字段（Weight / CogX/Y/Z / Ixx–Iyz）。
+    """
+    n = len(rows)
+    for i in range(n):
+        row = rows[i]
+        if row.get("Type") not in ("产品", "部件"):
+            continue
+
+        level = int(row.get("Level", 0))
+
+        # 收集子树内全部零件的根坐标系质量特性
+        child_parts: list[dict] = []
+        for j in range(i + 1, n):
+            desc = rows[j]
+            if int(desc.get("Level", 0)) <= level:
+                break
+            rmp = desc.get("_root_mp")
+            if rmp and float(rmp.get("weight", 0.0)) > 0.0:
+                child_parts.append(rmp)
+
+        if not child_parts:
+            continue
+
+        # 步骤 1 + 2：累积质量、质量×重心，同时将各零件惯量移到根坐标原点
+        M_total   = 0.0
+        sum_mr    = [0.0, 0.0, 0.0]
+        I_at_orig = [[0.0] * 3 for _ in range(3)]
+
+        for rmp in child_parts:
+            m = float(rmp.get("weight", 0.0))
+            if m <= 0.0:
+                continue
+            r  = rmp.get("cog", [0.0, 0.0, 0.0])
+            Ic = rmp.get("inertia", [[0.0] * 3 for _ in range(3)])
+
+            r2 = sum(r[k] ** 2 for k in range(3))
+            for ii in range(3):
+                for jj in range(3):
+                    delta = (1.0 if ii == jj else 0.0) * r2 - r[ii] * r[jj]
+                    I_at_orig[ii][jj] += Ic[ii][jj] + m * delta
+
+            M_total += m
+            for k in range(3):
+                sum_mr[k] += m * r[k]
+
+        if M_total <= 0.0:
+            continue
+
+        # 步骤 3：计算总重心
+        cog_total = [sum_mr[k] / M_total for k in range(3)]
+
+        # 步骤 4：从根原点移回总重心
+        rc  = cog_total
+        rc2 = sum(rc[k] ** 2 for k in range(3))
+        I_final = [[0.0] * 3 for _ in range(3)]
+        for ii in range(3):
+            for jj in range(3):
+                delta = (1.0 if ii == jj else 0.0) * rc2 - rc[ii] * rc[jj]
+                I_final[ii][jj] = I_at_orig[ii][jj] - M_total * delta
+
+        # 写回显示字段
         row["Weight"] = M_total
         row["CogX"]   = cog_total[0]
         row["CogY"]   = cog_total[1]
