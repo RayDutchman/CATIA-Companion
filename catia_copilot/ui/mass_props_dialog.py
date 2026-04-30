@@ -489,7 +489,7 @@ class MassPropsDialog(QDialog):
         """返回当前 BOM 模式对应的说明文字。"""
         if self._summarize:
             return (
-                "【汇总BOM】按零件编号合并，每行显示出现数量（Quantity），仅列出零件（不含产品和部件）。"
+                "【汇总BOM】按零件编号合并，仅列出零件（不含产品和部件）。"
                 "Weight / CogX / CogY / CogZ / Ixx–Iyz "
                 "在零件自身坐标系下显示，与装配位置无关。"
                 "底部「汇总结果」在根产品坐标系下计算。"
@@ -497,7 +497,7 @@ class MassPropsDialog(QDialog):
         return (
             "【层级BOM】展示零件节点和产品/部件节点。"
             "Weight / CogX / CogY / CogZ / Ixx–Iyz "
-            "均在根产品坐标系下显示，与零件的装配位置有关。"
+            "在根产品坐标系下显示，与零件的装配位置有关。"
             "底部「汇总结果」在根产品坐标系下计算。"
         )
 
@@ -689,8 +689,8 @@ class MassPropsDialog(QDialog):
                 f"有 {failed_count} 个零件节点无法完成质量特性测量（显示橙色背景）。\n\n"
                 "可能原因：\n"
                 "  • 零件文档未加载到CATIA会话中\n"
-                "  • 零件未运行「创建惯量关系」宏（MP_* 参数不存在）\n"
-                "  • 零件无有效的「惯量包络体」Keep 测量\n\n"
+                "  • 零件无有效的保持测量的「惯量包络体.1」\n"
+                "  • 零件未成功运行「创建质量关系」宏（MP_* 参数不存在）\n\n"
                 "未能测量的零件不参与最终汇总计算。",
             )
 
