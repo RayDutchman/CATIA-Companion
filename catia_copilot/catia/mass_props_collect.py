@@ -230,9 +230,15 @@ def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") 
         def _req(name: str) -> float | None:
             return _get(prefix_ok, name)
 
-        gx_si  = _req("Gx");   gy_si  = _req("Gy");   gz_si  = _req("Gz")
-        ixx_si = _req("IoxG"); iyy_si = _req("IoyG"); izz_si = _req("IozG")
-        ixy_si = _req("IxyG"); ixz_si = _req("IxzG"); iyz_si = _req("IyzG")
+        gx_si  = _req("Gx")
+        gy_si  = _req("Gy")
+        gz_si  = _req("Gz")
+        ixx_si = _req("IoxG")
+        iyy_si = _req("IoyG")
+        izz_si = _req("IozG")
+        ixy_si = _req("IxyG")
+        ixz_si = _req("IxzG")
+        iyz_si = _req("IyzG")
 
         # 惯量分量允许为 0（球对称体），但不允许任意分量读取失败
         if any(v is None for v in (gx_si, gy_si, gz_si,

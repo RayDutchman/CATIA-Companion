@@ -51,7 +51,10 @@ _INERTIA_IDX: dict[str, tuple[int, int]] = {
     "Ixy": (0, 1), "Ixz": (0, 2), "Iyz": (1, 2),
 }
 
-# Sortable columns in summary BOM mode
+# Columns whose display values depend on the current unit selection
+_UNIT_SENSITIVE_COLUMNS: tuple[str, ...] = (
+    "Weight",
+) + tuple(_INERTIA_IDX.keys()) + ("CogX", "CogY", "CogZ")
 _SUMMARY_SORT_COLUMNS: list[str] = [
     "Part Number", "Nomenclature", "Revision", "Filename", "Weight",
     "CogX", "CogY", "CogZ",
@@ -602,7 +605,7 @@ class MassPropsDialog(QDialog):
         self._table.setHeaderLabels(self._display_headers())
 
         mass_col_indices: list[tuple[str, int]] = []
-        for col_name in ("Weight",) + tuple(_INERTIA_IDX.keys()) + ("CogX", "CogY", "CogZ"):
+        for col_name in _UNIT_SENSITIVE_COLUMNS:
             if col_name in self._columns:
                 mass_col_indices.append((col_name, self._columns.index(col_name)))
 
@@ -615,8 +618,7 @@ class MassPropsDialog(QDialog):
             if di >= len(self._item_by_row):
                 break
             item = self._item_by_row[di]
-            if not any(row_data.get(c) is not None
-                       for c in ("Weight",) + tuple(_INERTIA_IDX.keys()) + ("CogX", "CogY", "CogZ")):
+            if not any(row_data.get(c) is not None for c in _UNIT_SENSITIVE_COLUMNS):
                 continue
             for col_name, col_idx in mass_col_indices:
                 raw = row_data.get(col_name)
