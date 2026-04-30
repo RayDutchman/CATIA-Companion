@@ -1,0 +1,194 @@
+Option Explicit
+
+' ============================================================
+' hide_wireframe.catvbs   (VBScript / CATScript)
+'
+' 功能概述：
+'   一键隐藏 CATIA V5 活动文档中的所有点、线、三维曲线、草图、轴系、平面（不含曲面）。
+'   · 若活动文档为零件（CATPart）：直接处理该零件文档。
+'   · 若活动文档为装配体（CATProduct）：递归处理所有子孙零件文档，
+'     同一份零件文档被多次实例化时只处理一次（路径级去重）。
+'
+' 隐藏的几何类型：
+'   · 点（Point）
+'   · 线（Line）
+'   · 三维曲线（Curve）
+'   · 草图（Sketch）
+'   · 轴系（AxisSystem）
+'   · 平面（Plane）
+'   不包含曲面（Surface）。
+'
+' 实现方式：
+'   对目标 PartDocument 的 Selection 依次按几何类型搜索（Search），
+'   再调用 VisProperties.SetShow(catVisPropertyNoShowAttr) 将选中元素设置为隐藏状态。
+'   catVisPropertyNoShowAttr 为 CATIA V5 枚举值，表示"不显示/隐藏"。
+'
+' 用法：
+'   在 CATIA 中打开零件或装配体并激活对应文档后，运行本脚本。
+'   不依赖 iParameters，可通过 Tools > Macros 直接执行，
+'   也可由外部程序通过 SystemService.ExecuteScript 调用。
+' ============================================================
+
+Sub CATMain()
+
+    ' ── 获取 CATIA 应用对象 ─────────────────────────────────────────────────
+    Dim oCATIA
+    Set oCATIA = GetObject(, "CATIA.Application")
+
+    If oCATIA.Documents.Count = 0 Then
+        MsgBox "没有打开的文档，请先打开零件或装配体。", vbExclamation, "hide_wireframe"
+        Exit Sub
+    End If
+
+    ' ── 取当前活动文档 ──────────────────────────────────────────────────────
+    Dim oDoc
+    Set oDoc = oCATIA.ActiveDocument
+
+    Dim docType
+    docType = TypeName(oDoc)
+
+    Select Case docType
+
+        Case "PartDocument"
+            HideWireframeInPart oDoc
+            MsgBox "已隐藏零件中的点、线、曲线、草图、轴系、平面。", vbInformation, "hide_wireframe"
+
+        Case "ProductDocument"
+            ' processedDocs："|fullpath1|fullpath2|..." 形式的已处理路径列表，用于跨递归层去重
+            Dim processedDocs
+            processedDocs = "|"
+            RecurseProduct oDoc.Product, processedDocs
+            MsgBox "已隐藏装配体及所有子孙零件中的点、线、曲线、草图、轴系、平面。", vbInformation, "hide_wireframe"
+
+        Case Else
+            MsgBox "当前活动文档不是零件（CATPart）或装配体（CATProduct），无法执行。", _
+                   vbExclamation, "hide_wireframe"
+
+    End Select
+
+End Sub
+
+' ============================================================
+' HideWireframeInPart — 隐藏指定 PartDocument 中的点、线、三维曲线、草图、轴系、平面
+'
+' 对 oPartDoc 的 Selection 依次按 Point / Line / Curve / Sketch / AxisSystem / Plane
+' 六种类型搜索并调用 VisProperties.SetShow 设置为隐藏状态。
+' 搜索范围 "All" 覆盖零件内所有几何体（GeometricSet、OrderedGeometricSet 等）。
+'
+' 参数：
+'   oPartDoc — 目标 PartDocument 对象
+' ============================================================
+Private Sub HideWireframeInPart(oPartDoc)
+
+    Dim oSel
+    Set oSel = oPartDoc.Selection
+    oSel.Clear
+
+    Dim geomTypes
+    geomTypes = Array("Point", "Line", "Curve", "Sketch", "AxisSystem", "Plane")
+
+    Dim i
+    For i = 0 To UBound(geomTypes)
+        On Error Resume Next
+        Err.Clear
+        oSel.Search "Type=" & geomTypes(i) & ", All"
+        Dim searchErr: searchErr = Err.Number
+        Err.Clear
+        On Error GoTo 0
+
+        If searchErr = 0 And oSel.Count > 0 Then
+            oSel.VisProperties.SetShow catVisPropertyNoShowAttr
+        End If
+
+        oSel.Clear
+    Next
+
+End Sub
+
+' ============================================================
+' RecurseProduct — 递归遍历产品树，对每份唯一的 PartDocument 调用 HideWireframeInPart
+'
+' 通过 ByRef 传递 processedDocs 字符串实现跨层去重：
+' 同一份零件被多个实例引用时，仅在首次遇到时执行隐藏操作。
+'
+' 参数：
+'   oProduct      — 当前层级的 Product 对象
+'   processedDocs — ByRef 字符串，记录已处理文档路径，格式："|path1|path2|"
+' ============================================================
+Private Sub RecurseProduct(oProduct, ByRef processedDocs)
+
+    Dim i
+    For i = 1 To oProduct.Products.Count
+
+        ' ── 取子实例 ────────────────────────────────────────────────────────
+        Dim childProd
+        Set childProd = Nothing
+        On Error Resume Next
+        Set childProd = oProduct.Products.Item(i)
+        On Error GoTo 0
+
+        If IsObject(childProd) Then
+            If Not (childProd Is Nothing) Then
+
+                ' ── 取子实例的参考产品 ──────────────────────────────────────
+                Dim refProd
+                Set refProd = Nothing
+                On Error Resume Next
+                Set refProd = childProd.ReferenceProduct
+                On Error GoTo 0
+
+                If IsObject(refProd) Then
+                    If Not (refProd Is Nothing) Then
+
+                        ' ── 取参考产品所在文档 ──────────────────────────────
+                        Dim parentDoc
+                        Set parentDoc = Nothing
+                        On Error Resume Next
+                        Set parentDoc = refProd.Parent
+                        On Error GoTo 0
+
+                        If IsObject(parentDoc) Then
+                            If Not (parentDoc Is Nothing) Then
+
+                                ' ── 按文档类型分支处理 ──────────────────────
+                                Dim childDocType
+                                childDocType = TypeName(parentDoc)
+
+                                If childDocType = "PartDocument" Then
+
+                                    ' 取文档唯一标识（FullName 不可用时回退到 Name）
+                                    Dim docKey
+                                    docKey = ""
+                                    On Error Resume Next
+                                    docKey = parentDoc.FullName
+                                    If docKey = "" Then docKey = parentDoc.Name
+                                    Err.Clear
+                                    On Error GoTo 0
+
+                                    ' 仅在尚未处理时执行隐藏（去重）
+                                    If docKey <> "" Then
+                                        If InStr(processedDocs, "|" & docKey & "|") = 0 Then
+                                            processedDocs = processedDocs & docKey & "|"
+                                            HideWireframeInPart parentDoc
+                                        End If
+                                    End If
+
+                                ElseIf childDocType = "ProductDocument" Then
+
+                                    ' 子节点为子装配体：递归向下处理
+                                    RecurseProduct refProd, processedDocs
+
+                                End If
+
+                            End If
+                        End If
+
+                    End If
+                End If
+
+            End If
+        End If
+
+    Next
+
+End Sub
