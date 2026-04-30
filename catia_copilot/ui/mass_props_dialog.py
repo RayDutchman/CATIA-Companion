@@ -859,7 +859,6 @@ class MassPropsDialog(QDialog):
             item.setData(0, _ITEM_LOCKED_ROLE, True)
 
         # Row colouring
-        fn_col = self._columns.index("Filename") if "Filename" in self._columns else -1
         if row_locked:
             grey = QColor(160, 160, 160)
             if not_found:
@@ -874,14 +873,13 @@ class MassPropsDialog(QDialog):
             for ci in range(len(self._columns)):
                 item.setForeground(ci, grey)
                 item.setBackground(ci, bg)
-            if fn_col >= 0:
-                item.setToolTip(fn_col, tip)
+                item.setToolTip(ci, tip)
         elif no_file:
             bg_unsaved = QColor(255, 245, 180)
+            no_file_tip = "该零件尚未保存到磁盘，质量特性数据可能不完整。"
             for ci in range(len(self._columns)):
                 item.setBackground(ci, bg_unsaved)
-            if fn_col >= 0:
-                item.setToolTip(fn_col, "该零件尚未保存到磁盘，质量特性数据可能不完整。")
+                item.setToolTip(ci, no_file_tip)
         elif node_type in ("产品", "部件"):
             bg = QColor(240, 242, 245)
             for ci in range(len(self._columns)):

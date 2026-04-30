@@ -903,6 +903,11 @@ def collect_mass_props_rows(
         _traverse(root_product, rows, level=0, parent_filepath="",
                   parent_mat4=_identity_4x4(), documents=documents)
         _post_process_rows(rows)
+        # 遍历过程中 VBS 可能激活了各子零件文档；恢复活动文档为根产品
+        try:
+            product_doc.com_object.Activate()
+        except Exception as e:
+            logger.debug(f"恢复根文档激活状态失败（无害）: {e}")
         return rows
 
     src = Path(file_path).resolve()
@@ -938,4 +943,9 @@ def collect_mass_props_rows(
     _traverse(root_product, rows, level=0, parent_filepath="",
               parent_mat4=_identity_4x4(), documents=documents)
     _post_process_rows(rows)
+    # 遍历过程中 VBS 可能激活了各子零件文档；恢复活动文档为根产品
+    try:
+        target_doc.com_object.Activate()
+    except Exception as e:
+        logger.debug(f"恢复根文档激活状态失败（无害）: {e}")
     return rows
