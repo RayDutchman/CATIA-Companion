@@ -80,7 +80,7 @@ _HELP_HTML = f"""\
     （物料编码、物料名称、规格型号、物料来源、数据状态、
     存货类别、重量、备注）。</td></tr>
 <tr><td><b>宏</b></td>
-    <td>自动扫描 macros 文件夹中的 .catvbs / .catscript 文件，
+    <td>自动扫描 macros 文件夹中的 .catvbs / .catscript / .catvba 文件，
     可直接在菜单中运行。支持打开宏文件夹和刷新宏列表。</td></tr>
 <tr><td><b>紧固件快速装配</b></td>
     <td>使用 VBA 宏快速批量装配紧固件到产品孔位。<br/>
@@ -129,13 +129,13 @@ _HELP_HTML = f"""\
 <tr><td><b>Q: 重启后仍然无法连接 CATIA，怀疑 COM 缓存损坏？</b></td>
     <td>A: <b>win32com 早绑定缓存（gen_py）污染</b>可能导致 COM 连接异常。<br/>
     <b>原因：</b>其他工具或脚本曾调用 <code>win32com.client.gencache.EnsureDispatch()</code>，
-    在 <code>%LOCALAPPDATA%\Temp\gen_py\</code> 写入了 CATIA 类型库的早绑定缓存文件，
+    在 <code>%LOCALAPPDATA%\\Temp\\gen_py\\</code> 写入了 CATIA 类型库的早绑定缓存文件，
     导致后续所有晚绑定调用（本程序所使用的方式）受到干扰。<br/>
     <b>本程序已内置自动修复：</b>每次启动时会自动删除该缓存目录，正常情况下无需手动处理。<br/>
     <b>手动修复步骤（若异常发生在程序启动期间）：</b>
     <ol>
       <li>关闭 CATIA 和所有 Python 进程</li>
-      <li>删除目录 <code>%LOCALAPPDATA%\Temp\gen_py\</code>（整个文件夹）</li>
+      <li>删除目录 <code>%LOCALAPPDATA%\\Temp\\gen_py\\</code>（整个文件夹）</li>
       <li>重新启动本程序和 CATIA</li>
     </ol>
     </td></tr>
@@ -145,7 +145,7 @@ _HELP_HTML = f"""\
 <tr><td><b>Q: BOM 导出的 Excel 打开后乱码？</b></td>
     <td>A: 导出使用 UTF-8 编码，请确保使用较新版本的 Excel 打开。</td></tr>
 <tr><td><b>Q: 如何添加自定义宏？</b></td>
-    <td>A: 点击菜单"宏 → 打开宏文件夹"，将 .catvbs 或 .catscript
+    <td>A: 点击菜单"宏 → 打开宏文件夹"，将 .catvbs 或 .catscript 或 .catvba（CATMain函数须位于'模块1'中）
     文件放入该文件夹，然后点击"刷新宏列表"即可。</td></tr>
 <tr><td><b>Q: 质量特性统计为何某些零件显示"测量失败"？</b></td>
     <td>A: 质量特性统计功能需要在 CATIA 中为每个零件通过

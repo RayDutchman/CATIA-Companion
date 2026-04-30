@@ -4,16 +4,16 @@ Option Explicit
 ' Called by CATIA Companion -- Drawing > Generate Drawing from CATPart/CATProduct.
 '
 ' CATIA Companion passes the selected CATDrawing template path as a plain
-' string in iParameters.  The macro uses it directly as templatePath.
+' string in TemplatePath.  The macro uses it directly as tp.
 ' When invoked without a parameter, CATIA itself prompts the user.
 '
 ' ----------------------------------------------------------------------------
 
-Sub CATMain(iParameters)
+Sub CATMain(TemplatePath)
 
 	'--- 1. 定义模板路径 ---
-	Dim templatePath
-	templatePath = iParameters
+	Dim tp
+	tp = TemplatePath
 	
 	'--- 2. 验证当前活动文档是否为零件 ---
 	If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then
@@ -24,7 +24,7 @@ Sub CATMain(iParameters)
 	Set partDoc = CATIA.ActiveDocument
 	'--- 3. 用 NewFrom 创建新图纸 ---
 	Dim drawingDoc
-	Set drawingDoc = CATIA.Documents.NewFrom(CStr(templatePath))
+	Set drawingDoc = CATIA.Documents.NewFrom(CStr(tp))
 
 	If TypeName(drawingDoc) <> "DrawingDocument" Then
 		MsgBox "NewFrom 返回类型错误：" & TypeName(drawingDoc), vbCritical
