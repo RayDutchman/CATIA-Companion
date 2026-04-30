@@ -13,6 +13,7 @@
 
 import logging
 import math
+import subprocess
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -21,7 +22,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QGroupBox, QMessageBox, QApplication,
     QFileDialog, QProgressDialog, QLineEdit, QGridLayout, QFrame,
     QRadioButton, QButtonGroup, QWidget, QComboBox,
-    QStyledItemDelegate,
+    QStyledItemDelegate, QMenu,
 )
 from PySide6.QtGui import QColor
 from PySide6.QtCore import Qt, QSettings
@@ -420,6 +421,8 @@ class MassPropsDialog(QDialog):
         self._table.setStyleSheet("QTreeWidget::item { min-height: 24px; }")
         self._table.setItemDelegate(_MassPropsDelegate(lambda: self._columns, self._table))
         self._table.itemChanged.connect(self._on_item_changed)
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._on_tree_context_menu)
         hdr.sectionResized.connect(self._on_section_resized)
         layout.addWidget(self._table, 1)
 
@@ -1331,3 +1334,106 @@ class MassPropsDialog(QDialog):
     def _on_section_resized(self, logical_index: int, _old: int, new_size: int) -> None:
         if logical_index < len(self._columns):
             self._col_widths[self._columns[logical_index]] = new_size
+
+    # ── 右键上下文菜单 ─────────────────────────────────────────────────────
+
+    def _on_tree_context_menu(self, pos) -> None:
+        """显示表格行的右键上下文菜单。"""
+        item = self._table.itemAt(pos)
+        if item is None:
+            return
+        row_idx = item.data(0, _ROW_IDX_ROLE)
+        if row_idx is None:
+            return
+
+        row_data     = self._rows[row_idx]
+        fp           = str(row_data.get("_filepath", ""))
+        fp_path      = Path(fp) if fp else None
+        is_component = row_data.get("Type") == "部件"
+        not_found    = bool(row_data.get("_not_found"))
+        unreadable   = bool(row_data.get("_unreadable"))
+
+        if not item.isSelected():
+            self._table.clearSelection()
+            item.setSelected(True)
+
+        menu = QMenu(self)
+
+        # ── 打开路径 ──────────────────────────────────────────────────────
+        act_open_path = menu.addAction("打开路径")
+        path_available = bool(fp) and fp_path is not None and (
+            fp_path.exists() or fp_path.parent.exists()
+        )
+        act_open_path.setEnabled(path_available)
+
+        # ── 复制路径 ──────────────────────────────────────────────────────
+        act_copy_path = menu.addAction("复制路径")
+        act_copy_path.setEnabled(bool(fp))
+
+        # ── 在CATIA中打开 ─────────────────────────────────────────────────
+        act_open_catia = menu.addAction("在CATIA中打开")
+        catia_available = (
+            not is_component and not not_found and not unreadable
+            and fp_path is not None and fp_path.exists()
+        )
+        act_open_catia.setEnabled(catia_available)
+
+        action = menu.exec(self._table.viewport().mapToGlobal(pos))
+
+        if action == act_open_path:
+            self._open_path(fp)
+        elif action == act_copy_path:
+            QApplication.clipboard().setText(fp)
+        elif action == act_open_catia:
+            self._open_in_catia(fp)
+
+    def _open_path(self, fp: str) -> None:
+        """在 Windows 资源管理器中打开包含 *fp* 的文件夹，并高亮选中该文件。"""
+        p = Path(fp).resolve()
+        try:
+            if p.exists():
+                subprocess.Popen(f'explorer /select,"{p}"', shell=True)
+            elif p.parent.exists():
+                subprocess.Popen(f'explorer "{p.parent}"', shell=True)
+        except Exception as exc:
+            logger.warning(f"Failed to open path in Explorer: {exc}")
+
+    def _open_in_catia(self, fp: str) -> None:
+        """通过 ``documents.open`` 在CATIA中打开 *fp* 指向的文档。
+
+        打开后，若 ``win32gui`` 可用，则将CATIA V5主窗口置于Windows前台。
+        """
+        try:
+            from pycatia import catia as _pycatia  # noqa: PLC0415
+            caa         = _pycatia()
+            application = caa.application
+            application.visible = True
+            documents   = application.documents
+
+            fp_resolved = Path(fp).resolve()
+            documents.open(str(fp_resolved))
+
+            try:
+                import win32gui  # noqa: PLC0415
+                import win32con  # noqa: PLC0415
+
+                def _raise_catia_window(hwnd, _extra):
+                    if not win32gui.IsWindowVisible(hwnd):
+                        return
+                    title = win32gui.GetWindowText(hwnd)
+                    if title.startswith("CATIA V5"):
+                        try:
+                            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                            win32gui.SetForegroundWindow(hwnd)
+                        except Exception:
+                            pass
+                        return False
+
+                win32gui.EnumWindows(_raise_catia_window, None)
+            except ImportError:
+                pass
+            except Exception:
+                pass
+
+        except Exception as e:
+            QMessageBox.warning(self, "在CATIA中打开失败", f"无法在CATIA中打开文件：\n{e}")
