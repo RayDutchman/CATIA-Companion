@@ -1706,6 +1706,7 @@ class BomEditDialog(QDialog):
         fp_path      = Path(fp) if fp else None
         is_component = row_data.get("Type") == "部件"
         not_found    = bool(row_data.get("_not_found"))
+        no_file      = bool(row_data.get("_no_file"))
         unreadable   = bool(row_data.get("_unreadable"))
         pn           = str(row_data.get("Part Number", ""))
 
@@ -1746,14 +1747,15 @@ class BomEditDialog(QDialog):
 
         # ── 打开路径 ──────────────────────────────────────────────────────────
         act_open_path = menu.addAction("打开路径")
-        path_available = bool(fp) and fp_path is not None and (
-            fp_path.exists() or fp_path.parent.exists()
+        path_available = (
+            bool(fp) and not no_file and fp_path is not None
+            and (fp_path.exists() or fp_path.parent.exists())
         )
         act_open_path.setEnabled(path_available)
 
         # ── 复制路径 ──────────────────────────────────────────────────────────
         act_copy_path = menu.addAction("复制路径")
-        act_copy_path.setEnabled(bool(fp))
+        act_copy_path.setEnabled(bool(fp) and not no_file)
 
         # ── 在CATIA中打开 ─────────────────────────────────────────────────────
         # 仅当文件在磁盘上存在且不是损坏/轻量化引用时启用。

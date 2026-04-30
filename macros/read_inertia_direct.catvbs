@@ -1,0 +1,196 @@
+Option Explicit
+
+' ============================================================
+' read_inertia_direct.catvbs   (VBScript / CATScript)
+'
+' 功能概述：
+'   诊断宏——遍历 Part.Parameters，找出所有含"惯量包络体"的参数，
+'   列出其完整名称、类型和当前值，帮助确认 CATIA 内部的实际参数
+'   命名规则（是否含零件号前缀、字段名是否为中文等）。
+'
+' iParameters 用法（由 SystemService.ExecuteScript 传入，也可手动运行）：
+'   iParameters — 目标零件的零件号（PartNumber 字符串，可选）。
+'     · 若提供且非空：在已打开的 PartDocument 中按 PartNumber 定位。
+'     · 若为空或省略：使用当前活动文档。
+' ============================================================
+
+Sub CATMain(PartNumber)
+
+    ' ── 获取 CATIA 应用对象 ───────────────────────────────────────────────────
+    Dim CATIA
+    Set CATIA = GetObject(, "CATIA.Application")
+
+    ' ── 解析 iParameters：目标零件号（PartNumber，可选）─────────────────────
+    Dim targetPN
+    targetPN = ""
+    On Error Resume Next
+    targetPN = CStr(iParameters)
+    Err.Clear
+    On Error GoTo 0
+
+    ' ── 定位目标 PartDocument ────────────────────────────────────────────────
+    Dim partDoc
+    Set partDoc = Nothing
+
+    If targetPN <> "" Then
+        Dim i, found
+        found = False
+        On Error Resume Next
+        For i = 1 To CATIA.Documents.Count
+            Dim doc
+            Set doc = CATIA.Documents.Item(i)
+            If TypeName(doc) = "PartDocument" Then
+                Dim pn
+                pn = doc.Product.PartNumber
+                If pn = targetPN Then
+                    Set partDoc = doc
+                    partDoc.Activate
+                    found = True
+                    Exit For
+                End If
+            End If
+        Next
+        On Error GoTo 0
+        If Not found Then
+            MsgBox "未找到零件号为 [" & targetPN & "] 的 PartDocument，已退出。", _
+                   vbExclamation, "read_inertia_direct"
+            Exit Sub
+        End If
+    Else
+        If CATIA.Documents.Count = 0 Then
+            MsgBox "没有已打开的文档，已退出。", vbExclamation, "read_inertia_direct"
+            Exit Sub
+        End If
+        If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then
+            MsgBox "当前活动文档不是 PartDocument（类型=" & TypeName(CATIA.ActiveDocument) & "），已退出。", _
+                   vbExclamation, "read_inertia_direct"
+            Exit Sub
+        End If
+        Set partDoc = CATIA.ActiveDocument
+    End If
+
+    Dim part
+    Set part = partDoc.Part
+
+    Dim actualPN
+    On Error Resume Next
+    actualPN = part.PartNumber
+    If Err.Number <> 0 Then actualPN = "(读取失败)"
+    Err.Clear
+    On Error GoTo 0
+
+    ' =========================================================================
+    ' 路径 A：遍历 Part.Parameters，找出所有含"惯量包络体"的参数
+    ' =========================================================================
+    Call EnumParameters(part, actualPN)
+
+End Sub
+
+
+' =============================================================================
+' 路径 A — 遍历 Part.Parameters，找出所有含"惯量包络体"的参数
+'
+' CATIA 内部对 Keep 测量参数的命名规则因版本和语言包而异，
+' 本路径直接枚举全部参数并过滤，得到实际可用的完整名称和当前值，
+' 是确认其他路径中前缀/字段名是否正确的基础。
+'
+' 注：Keep 参数值由 CATIA 以混合单位存储（质量 kg、坐标 mm、惯量 kg·m²）；
+'     程序读取后将坐标 ÷1000 换算为 m，实现全 SI 内部存储。
+' =============================================================================
+Private Sub EnumParameters(part, actualPN)
+    On Error Resume Next
+
+    Dim params
+    Set params = part.Parameters
+
+    Dim total
+    total = 0
+    On Error Resume Next
+    total = params.Count
+    Err.Clear
+    On Error GoTo 0
+
+    If total = 0 Then
+        MsgBox "Part.Parameters 为空或读取失败，跳过。", _
+               vbExclamation, "直接读取质量信息"
+        Exit Sub
+    End If
+
+    ' 用字符串拼接收集匹配结果（VBScript 无内置 List）
+    Dim hits
+    hits = ""
+    Dim hitCount
+    hitCount = 0
+
+    Dim j
+    For j = 1 To total
+        On Error Resume Next
+        Dim p
+        Set p = params.Item(j)
+        If Err.Number <> 0 Or Not IsObject(p) Then
+            Err.Clear
+        Else
+            Dim pName, pType, pVal
+            pName = ""
+            pType = ""
+            pVal  = ""
+
+            pName = p.Name
+            If Err.Number <> 0 Then pName = "?(Name错误)": Err.Clear
+
+            ' 用 TypeName 获取 COM 类型字符串，通常为 "RealParam"、"LengthParam" 等
+            pType = TypeName(p)
+            If Err.Number <> 0 Then pType = "?(Type错误)": Err.Clear
+
+            On Error Resume Next
+            pVal = CStr(p.Value)
+            If Err.Number <> 0 Then pVal = "?(Value错误)": Err.Clear
+
+            ' 过滤：参数名包含"惯量包络体"或"IoxG"/"IoyG" 等典型惯量字段名
+            Dim nameUp
+            nameUp = UCase(pName)
+            If InStr(nameUp, "惯量包络体") > 0 _
+               Or InStr(nameUp, "IOXG") > 0 _
+               Or InStr(nameUp, "IOYG") > 0 _
+               Or InStr(nameUp, "IOZG") > 0 _
+               Or InStr(nameUp, "IXYG") > 0 Then
+                hitCount = hitCount + 1
+                hits = hits & hitCount & ". " & pName & vbCrLf & _
+                       "   类型=" & pType & "  值=" & pVal & vbCrLf
+            End If
+        End If
+        Err.Clear
+    Next
+    On Error GoTo 0
+
+    If hitCount = 0 Then
+        ' 若无命中，再扫描一遍，输出前 30 个参数名供人工核查
+        Dim sample
+        sample = ""
+        Dim sCount
+        sCount = 0
+        For j = 1 To total
+            If sCount >= 30 Then Exit For
+            On Error Resume Next
+            Dim ps
+            Set ps = params.Item(j)
+            If Err.Number = 0 And IsObject(ps) Then
+                Dim psName
+                psName = ps.Name
+                If Err.Number = 0 Then
+                    sample = sample & psName & vbCrLf
+                    sCount = sCount + 1
+                End If
+            End If
+            Err.Clear
+        Next
+        On Error GoTo 0
+        MsgBox "未找到含""惯量包络体""的参数（共 " & total & " 个参数）。" & vbCrLf & vbCrLf & _
+               "前 " & sCount & " 个参数名（供参考）：" & vbCrLf & sample, _
+               vbExclamation, "直接读取质量信息"
+    Else
+        MsgBox "找到 " & hitCount & " 个匹配参数：" & vbCrLf & vbCrLf & hits, _
+               vbInformation, "直接读取质量信息"
+    End If
+End Sub
+

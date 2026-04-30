@@ -44,7 +44,7 @@ def rollup_mass_properties(rows: list[dict]) -> dict:
 
     返回：
         字典 ``{"total_weight": float, "cog": [x, y, z], "inertia": [[3×3]]}``，
-        单位分别为 g、mm、g·mm²。若无有效零件则返回全零结果。
+        单位分别为 kg、m、kg·m²。若无有效零件则返回全零结果。
     """
     M_total      = 0.0
     sum_mr       = [0.0, 0.0, 0.0]      # Σ(m_i · r_i)

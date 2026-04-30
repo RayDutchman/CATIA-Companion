@@ -10,11 +10,13 @@ import os
 import shutil
 import subprocess
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QMessageBox, QPushButton, QFileDialog, QGroupBox, QInputDialog,
+    QDialog,
 )
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt
@@ -299,7 +301,25 @@ class MainWindow(QMainWindow):
 
     def _show_help(self) -> None:
         """显示帮助文档对话框。"""
-        HelpDialog(self).exec()
+        self._show_dialog("_dlg_help", lambda: HelpDialog(self))
+
+    # ── 非模态对话框管理 ──────────────────────────────────────────────────
+
+    def _show_dialog(self, attr: str, factory: Callable[[], QDialog]) -> None:
+        """以非模态方式打开对话框，若已存在则将其置于前台。
+
+        :param attr: 用于在 MainWindow 上缓存对话框实例的属性名。
+        :param factory: 无参可调用对象，返回新的 QDialog 实例。
+        """
+        dlg = getattr(self, attr, None)
+        if dlg is None:
+            dlg = factory()
+            dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            dlg.destroyed.connect(lambda _=None, a=attr: setattr(self, a, None))
+            setattr(self, attr, dlg)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     # ── 宏菜单辅助方法 ────────────────────────────────────────────────────
 
@@ -379,7 +399,7 @@ class MainWindow(QMainWindow):
     # ── Dialog launchers ───────────────────────────────────────────────────
 
     def _open_convert_part_dialog(self) -> None:
-        FileConvertDialog(
+        self._show_dialog("_dlg_convert_part", lambda: FileConvertDialog(
             parent=self,
             title="将CATPart/CATProduct导出为STP",
             file_label="已选CATPart/CATProduct文件:",
@@ -390,10 +410,10 @@ class MainWindow(QMainWindow):
             show_prefix_option=True,
             prefix="MD_",
             note="暂时留空",
-        ).exec()
+        ))
 
     def _open_convert_drawing_dialog(self) -> None:
-        FileConvertDialog(
+        self._show_dialog("_dlg_convert_drawing", lambda: FileConvertDialog(
             parent=self,
             title="将CATDrawing导出为PDF",
             file_label="已选CATDrawing文件:",
@@ -409,19 +429,19 @@ class MainWindow(QMainWindow):
                 "\u201c将多页文档保存在单向量文件中\u201d"
                 "（工具->选项->常规->兼容性->图形格式->导出（另存为））"
             ),
-        ).exec()
+        ))
 
     def _open_export_bom_dialog(self) -> None:
-        ExportBomDialog(self).exec()
+        self._show_dialog("_dlg_export_bom", lambda: ExportBomDialog(self))
 
     def _open_bom_edit_dialog(self) -> None:
-        BomEditDialog(self).exec()
+        self._show_dialog("_dlg_bom_edit", lambda: BomEditDialog(self))
 
     def _open_mass_props_dialog(self) -> None:
-        MassPropsDialog(self).exec()
+        self._show_dialog("_dlg_mass_props", lambda: MassPropsDialog(self))
 
     def _open_stamp_part_template_dialog(self) -> None:
-        FileConvertDialog(
+        self._show_dialog("_dlg_stamp_template", lambda: FileConvertDialog(
             parent=self,
             title="刷写零件模板",
             file_label="已选CATPart文件:",
@@ -430,10 +450,10 @@ class MainWindow(QMainWindow):
             conversion_fn=apply_part_template,
             settings_key="StampPartTemplate",
             show_active_doc_option=True,
-        ).exec()
+        ))
 
     def _open_find_dependencies_dialog(self) -> None:
-        FindDependenciesDialog(self).exec()
+        self._show_dialog("_dlg_find_deps", lambda: FindDependenciesDialog(self))
 
     def _open_fastener_assembly_dialog(self) -> None:
         """直接运行 macros 文件夹中的 fastener_assembly.catvba VBA 宏。"""
