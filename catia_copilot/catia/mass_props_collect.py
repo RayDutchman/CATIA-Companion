@@ -26,17 +26,17 @@
 质量特性读取
 -----------
 直接读取 CATIA SPA "测量惯量 + 保持测量" 写入的 "惯量包络体.1" Keep 参数：
-  惯量包络体.1\\质量    → 质量（g）
-  惯量包络体.1\\Gx/Gy/Gz → 重心坐标（mm）
-  惯量包络体.1\\IoxG/IoyG/IozG/IxyG/IxzG/IyzG → 转动惯量分量（g·mm²）
-零件文档须使用 g/mm 单位制，参数值即为目标单位下的数值，无需换算。
+  惯量包络体.1\\质量    → 质量，SI 原始值（kg）
+  惯量包络体.1\\Gx/Gy/Gz → 重心坐标，SI 原始值（m）
+  惯量包络体.1\\IoxG/IoyG/IozG/IxyG/IxzG/IyzG → 转动惯量分量，SI 原始值（kg·m²）
+CATIA Keep 参数以 SI 单位存储，程序直接使用，无需换算。
 
-单位制
-------
-  质量   ：g
-  长度   ：mm
-  惯量   ：g·mm²
-整个流程使用统一单位，不做中间转换。
+单位制（内部存储）
+------------------
+  质量   ：kg
+  长度   ：m
+  惯量   ：kg·m²
+整个流程使用 SI 单位，显示时再由 UI 层按用户选择换算。
 """
 
 import logging
@@ -150,15 +150,17 @@ def _position_to_mat4(product) -> list[list[float]]:
         return _identity_4x4()
 
     # 将列主序 12 元素数组重新排列为行主序 4×4 矩阵：
-    #   第 0 行 = [arr[0], arr[3], arr[6], arr[ 9]]  ← X 分量
-    #   第 1 行 = [arr[1], arr[4], arr[7], arr[10]]  ← Y 分量
-    #   第 2 行 = [arr[2], arr[5], arr[8], arr[11]]  ← Z 分量
-    #   第 3 行 = [    0,      0,      0,      1  ]  ← 齐次行
+    #   第 0 行 = [arr[0], arr[3], arr[6], arr[ 9]/1000]  ← X 分量
+    #   第 1 行 = [arr[1], arr[4], arr[7], arr[10]/1000]  ← Y 分量
+    #   第 2 行 = [arr[2], arr[5], arr[8], arr[11]/1000]  ← Z 分量
+    #   第 3 行 = [    0,      0,      0,         1    ]  ← 齐次行
+    # 注：CATIA Position.GetComponents 返回的平移分量单位为 mm，
+    #     此处除以 1000 将其转换为 m，与内部 SI 单位制（m）保持一致。
     mat = [
-        [arr[0], arr[3], arr[6], arr[9]],
-        [arr[1], arr[4], arr[7], arr[10]],
-        [arr[2], arr[5], arr[8], arr[11]],
-        [0.0,    0.0,    0.0,    1.0   ],
+        [arr[0], arr[3], arr[6], arr[9]  / 1000.0],
+        [arr[1], arr[4], arr[7], arr[10] / 1000.0],
+        [arr[2], arr[5], arr[8], arr[11] / 1000.0],
+        [0.0,    0.0,    0.0,    1.0               ],
     ]
     logger.debug(
         f"[MAT4] {product_name}: R[0]={mat[0][:3]}, T={[mat[0][3], mat[1][3], mat[2][3]]}"
@@ -181,17 +183,17 @@ def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") 
       1. "{part_number}\\惯量包络体.1\\"  ← CATIA 以零件号作为顶层命名空间
       2. "惯量包络体.1\\"                  ← 当前文档上下文回退前缀
 
-    CATIA Keep 参数的原始单位为 SI 制，需按以下规则换算到内部 g/mm/g·mm² 单位制：
-      质量                            SI: kg   → 内部: g      换算: × 1 000
-      Gx / Gy / Gz                    SI: m    → 内部: mm     换算: × 1 000
-      IoxG / IoyG / IozG              SI: kg·m² → 内部: g·mm² 换算: × 1 000 000 000
-      IxyG / IxzG / IyzG              SI: kg·m² → 内部: g·mm² 换算: × 1 000 000 000
+    CATIA Keep 参数的原始单位为 SI 制，程序直接使用，无需换算：
+      质量                            SI: kg   （内部存储单位）
+      Gx / Gy / Gz                    SI: m    （内部存储单位）
+      IoxG / IoyG / IozG              SI: kg·m² （内部存储单位）
+      IxyG / IxzG / IyzG              SI: kg·m² （内部存储单位）
 
     返回值结构：
       {
-        "weight":  float,               # 质量，g
-        "cog":     [x, y, z],           # 重心，mm（零件局部坐标系）
-        "inertia": [[Ixx, Ixy, Ixz],    # 转动惯量张量（3×3 对称矩阵），g·mm²
+        "weight":  float,               # 质量，kg
+        "cog":     [x, y, z],           # 重心，m（零件局部坐标系）
+        "inertia": [[Ixx, Ixy, Ixz],    # 转动惯量张量（3×3 对称矩阵），kg·m²
                     [Ixy, Iyy, Iyz],
                     [Ixz, Iyz, Izz]],
       }
@@ -240,28 +242,13 @@ def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") 
             logger.debug(f"{tag}部分 惯量包络体.1 参数缺失，返回 None")
             return None
 
-        # ── 单位换算：SI → g / mm / g·mm² ──────────────────────────────────
-        # 质量：1 kg = 1 000 g
-        # 坐标：1 m  = 1 000 mm
-        # 惯量：1 kg·m² = 1 000 g × (1 000 mm)² = 1 000 × 10⁶ g·mm² = 10⁹ g·mm²
-        mass_g = mass_si * 1_000
-        gx  = gx_si  * 1_000
-        gy  = gy_si  * 1_000
-        gz  = gz_si  * 1_000
-        ixx = ixx_si * 1_000_000_000
-        iyy = iyy_si * 1_000_000_000
-        izz = izz_si * 1_000_000_000
-        ixy = ixy_si * 1_000_000_000
-        ixz = ixz_si * 1_000_000_000
-        iyz = iyz_si * 1_000_000_000
-
         return {
-            "weight": mass_g,
-            "cog":    [gx, gy, gz],
+            "weight": mass_si,
+            "cog":    [gx_si, gy_si, gz_si],
             "inertia": [
-                [ixx, ixy, ixz],
-                [ixy, iyy, iyz],
-                [ixz, iyz, izz],
+                [ixx_si, ixy_si, ixz_si],
+                [ixy_si, iyy_si, iyz_si],
+                [ixz_si, iyz_si, izz_si],
             ],
         }
     except Exception as e:
@@ -272,9 +259,7 @@ def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") 
 def _measure_part_mass_props(part_com, part_number: str = "") -> dict | None:
     """测量零件质量特性。
 
-    直接读取 CATIA SPA Keep 测量写入的"惯量包络体.1"参数，无需运行 VBS 脚本。
-
-    所有返回值均使用 **g / mm / g·mm²** 单位制（文档须采用 g/mm 单位制）。
+    所有返回值均使用 **SI 单位制（kg / m / kg·m²）**。
 
     先决条件：
       零件已在 SPA 中执行"测量惯量"并勾选"保持测量"，
@@ -286,11 +271,11 @@ def _measure_part_mass_props(part_com, part_number: str = "") -> dict | None:
 
     返回字典：
       {
-        "weight":  float,          # 总质量，g
-        "cog":     [x, y, z],      # 重心坐标（零件局部坐标系），mm
+        "weight":  float,          # 总质量，kg
+        "cog":     [x, y, z],      # 重心坐标（零件局部坐标系），m
         "inertia": [[Ixx,Ixy,Ixz],
                     [Iyx,Iyy,Iyz],
-                    [Izx,Izy,Izz]], # 重心处转动惯量（零件局部坐标轴），g·mm²
+                    [Izx,Izy,Izz]], # 重心处转动惯量（零件局部坐标轴），kg·m²
       }
     若"惯量包络体.1"参数不存在（零件未执行 Keep 测量）则返回 None。
     """
