@@ -1,5 +1,5 @@
 """
-质量特性数据收集模块。
+重量、重心、惯量统计数据收集模块。
 
 提供：
 - collect_mass_props_rows() – 遍历产品树，读取每个零件实例的质量/重心/转动惯量，
@@ -25,10 +25,11 @@
 
 质量特性读取
 -----------
-直接读取 CATIA SPA "测量惯量 + 保持测量" 写入的 "惯量包络体.1" Keep 参数：
-  惯量包络体.1\\质量    → 质量，CATIA 原始单位 kg（已为 SI，直接存储）
-  惯量包络体.1\\Gx/Gy/Gz → 重心坐标，CATIA 原始单位 mm（÷1000 换算为 m 后存储）
-  惯量包络体.1\\IoxG/IoyG/IozG/IxyG/IxzG/IyzG → 转动惯量分量，CATIA 原始单位 kg·m²（已为 SI，直接存储）
+依次读取 CATIA SPA "测量惯量 + 保持测量" 写入的 "惯量包络体.1" 至
+"惯量包络体.{MAX_INERTIA_INDEX}" Keep 参数，在零件级按平行轴定理汇总后存储：
+  惯量包络体.N\\质量    → 质量，CATIA 原始单位 kg（已为 SI，直接存储）
+  惯量包络体.N\\Gx/Gy/Gz → 重心坐标，CATIA 原始单位 mm（÷1000 换算为 m 后存储）
+  惯量包络体.N\\IoxG/IoyG/IozG/IxyG/IxzG/IyzG → 转动惯量分量，CATIA 原始单位 kg·m²（已为 SI，直接存储）
 
 单位制（内部存储，全程 SI）
 --------------------------
@@ -47,6 +48,14 @@ from pathlib import Path
 from catia_copilot.constants import FILENAME_NOT_FOUND, FILENAME_UNSAVED
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# 可调参数：惯量包络体编号上限
+# ---------------------------------------------------------------------------
+
+# 每个零件最多读取"惯量包络体.1"到"惯量包络体.MAX_INERTIA_INDEX"的保持测量。
+# 编号不要求连续；所有编号在此范围内存在的测量均会被读取并在零件级汇总。
+MAX_INERTIA_INDEX: int = 50
 
 
 # ---------------------------------------------------------------------------
@@ -175,14 +184,16 @@ def _position_to_mat4(product) -> list[list[float]]:
 
 
 def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") -> dict | None:
-    """直接读取 CATIA SPA Keep 测量写入的"惯量包络体.1"参数。
+    """读取 CATIA SPA Keep 测量写入的"惯量包络体.1"至"惯量包络体.MAX_INERTIA_INDEX"参数，
+    并在零件级按平行轴定理汇总为单一质量特性。
 
     先决条件：零件已在 SPA（惯量分析）中执行"测量惯量"并勾选"保持测量"，
-    使参数树中出现 "惯量包络体.1\\质量"、"惯量包络体.1\\Gx" 等字段。
+    使参数树中出现 "惯量包络体.N\\质量"、"惯量包络体.N\\Gx" 等字段（N ≥ 1）。
 
-    前缀策略（依次尝试，取第一个能读到有效质量的前缀）：
-      1. "{part_number}\\惯量包络体.1\\"  ← CATIA 以零件号作为顶层命名空间
-      2. "惯量包络体.1\\"                  ← 当前文档上下文回退前缀
+    读取策略（对每个编号 N，依次尝试以下前缀，取第一个能读到有效质量的前缀）：
+      1. "{part_number}\\惯量包络体.N\\"  ← CATIA 以零件号作为顶层命名空间
+      2. "惯量包络体.N\\"                  ← 当前文档上下文回退前缀
+    编号不要求连续，所有 1 ≤ N ≤ MAX_INERTIA_INDEX 中存在的测量均会被读取。
 
     CATIA Keep 参数的原始单位（注意坐标为 mm，非 m）：
       质量                            CATIA 原始: kg   → 内部存储: kg  （无需换算）
@@ -190,15 +201,20 @@ def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") 
       IoxG / IoyG / IozG              CATIA 原始: kg·m² → 内部存储: kg·m²（无需换算）
       IxyG / IxzG / IyzG              CATIA 原始: kg·m² → 内部存储: kg·m²（无需换算）
 
+    零件级汇总算法（标准刚体力学，均在零件局部坐标系下）：
+      1. 累积各测量的质量及"惯量移到局部坐标原点"的贡献。
+      2. 计算总重心：r_c = Σ(m_i · r_i) / M。
+      3. 平行轴定理从原点移回总重心，得汇总惯量张量。
+
     返回值结构（内部 SI 单位）：
       {
-        "weight":  float,               # 质量，kg
-        "cog":     [x, y, z],           # 重心，m（零件局部坐标系，已由 mm 换算）
-        "inertia": [[Ixx, Ixy, Ixz],    # 转动惯量张量（3×3 对称矩阵），kg·m²
+        "weight":  float,               # 总质量，kg
+        "cog":     [x, y, z],           # 总重心，m（零件局部坐标系，已由 mm 换算）
+        "inertia": [[Ixx, Ixy, Ixz],    # 总重心处转动惯量张量（3×3 对称矩阵），kg·m²
                     [Ixy, Iyy, Iyz],
                     [Ixz, Iyz, Izz]],
       }
-    若"惯量包络体.1\\质量"不存在、值 ≤ 0，或任意惯量分量缺失，则返回 None。
+    若所有编号均未找到有效质量，则返回 None。
     """
     tag = f"[MP] {label} " if label else "[MP] "
     try:
@@ -210,57 +226,99 @@ def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") 
             except Exception:
                 return None
 
-        # 按前缀依次尝试，取第一个能读到有效质量的前缀
-        prefixes = []
-        if part_number:
-            prefixes.append(f"{part_number}\\惯量包络体.1\\")
-        prefixes.append("惯量包络体.1\\")
+        # ── 逐编号读取，收集所有有效测量 ──────────────────────────────────────────
+        measurements: list[dict] = []
+        for idx in range(1, MAX_INERTIA_INDEX + 1):
+            envelope_name = f"惯量包络体.{idx}"
+            prefixes = []
+            if part_number:
+                prefixes.append(f"{part_number}\\{envelope_name}\\")
+            prefixes.append(f"{envelope_name}\\")
 
-        prefix_ok = None
-        mass_si = None
-        for pfix in prefixes:
-            v = _get(pfix, "质量")
-            if v is not None and v > 0.0:
-                prefix_ok = pfix
-                mass_si = v
-                break
+            prefix_ok = None
+            mass_si = None
+            for pfix in prefixes:
+                v = _get(pfix, "质量")
+                if v is not None and v > 0.0:
+                    prefix_ok = pfix
+                    mass_si = v
+                    break
 
-        if prefix_ok is None:
-            logger.debug(f"{tag}未找到 惯量包络体.1\\质量，返回 None")
+            if prefix_ok is None:
+                continue  # 该编号不存在，跳过
+
+            gx_si  = _get(prefix_ok, "Gx")
+            gy_si  = _get(prefix_ok, "Gy")
+            gz_si  = _get(prefix_ok, "Gz")
+            ixx_si = _get(prefix_ok, "IoxG")
+            iyy_si = _get(prefix_ok, "IoyG")
+            izz_si = _get(prefix_ok, "IozG")
+            ixy_si = _get(prefix_ok, "IxyG")
+            ixz_si = _get(prefix_ok, "IxzG")
+            iyz_si = _get(prefix_ok, "IyzG")
+
+            # 惯量分量允许为 0（球对称体），但不允许任意分量读取失败
+            if any(v is None for v in (gx_si, gy_si, gz_si,
+                                       ixx_si, iyy_si, izz_si,
+                                       ixy_si, ixz_si, iyz_si)):
+                logger.debug(f"{tag}{envelope_name} 部分参数缺失，跳过该测量")
+                continue
+
+            measurements.append({
+                "weight": mass_si,
+                # Gx/Gy/Gz 由 CATIA 以 mm 存储，÷1000 换算为内部 SI 单位（m）
+                "cog": [gx_si / 1000.0, gy_si / 1000.0, gz_si / 1000.0],
+                "inertia": [
+                    [ixx_si, ixy_si, ixz_si],
+                    [ixy_si, iyy_si, iyz_si],
+                    [ixz_si, iyz_si, izz_si],
+                ],
+            })
+
+        if not measurements:
+            logger.debug(f"{tag}未找到任何有效的惯量包络体参数，返回 None")
             return None
 
-        def _req(name: str) -> float | None:
-            return _get(prefix_ok, name)
+        if len(measurements) == 1:
+            # 仅一个测量，无需汇总，直接返回
+            return measurements[0]
 
-        gx_si  = _req("Gx")
-        gy_si  = _req("Gy")
-        gz_si  = _req("Gz")
-        ixx_si = _req("IoxG")
-        iyy_si = _req("IoyG")
-        izz_si = _req("IozG")
-        ixy_si = _req("IxyG")
-        ixz_si = _req("IxzG")
-        iyz_si = _req("IyzG")
+        # ── 零件级汇总：平行轴定理（均在零件局部坐标系下）────────────────────────
+        M_total   = 0.0
+        sum_mr    = [0.0, 0.0, 0.0]
+        I_at_orig = [[0.0] * 3 for _ in range(3)]
 
-        # 惯量分量允许为 0（球对称体），但不允许任意分量读取失败
-        if any(v is None for v in (gx_si, gy_si, gz_si,
-                                   ixx_si, iyy_si, izz_si,
-                                   ixy_si, ixz_si, iyz_si)):
-            logger.debug(f"{tag}部分 惯量包络体.1 参数缺失，返回 None")
-            return None
+        for meas in measurements:
+            m  = float(meas["weight"])
+            r  = meas["cog"]
+            Ic = meas["inertia"]
+            r2 = sum(r[k] ** 2 for k in range(3))
+            for ii in range(3):
+                for jj in range(3):
+                    delta = (1.0 if ii == jj else 0.0) * r2 - r[ii] * r[jj]
+                    I_at_orig[ii][jj] += Ic[ii][jj] + m * delta
+            M_total += m
+            for k in range(3):
+                sum_mr[k] += m * r[k]
 
-        return {
-            "weight": mass_si,
-            # Gx/Gy/Gz 由 CATIA 以 mm 存储，÷1000 换算为内部 SI 单位（m）
-            "cog":    [gx_si / 1000.0, gy_si / 1000.0, gz_si / 1000.0],
-            "inertia": [
-                [ixx_si, ixy_si, ixz_si],
-                [ixy_si, iyy_si, iyz_si],
-                [ixz_si, iyz_si, izz_si],
-            ],
-        }
+        cog_total = [sum_mr[k] / M_total for k in range(3)]
+
+        rc  = cog_total
+        rc2 = sum(rc[k] ** 2 for k in range(3))
+        I_final = [[0.0] * 3 for _ in range(3)]
+        for ii in range(3):
+            for jj in range(3):
+                delta = (1.0 if ii == jj else 0.0) * rc2 - rc[ii] * rc[jj]
+                I_final[ii][jj] = I_at_orig[ii][jj] - M_total * delta
+
+        logger.debug(
+            f"{tag}汇总 {len(measurements)} 个惯量包络体测量: "
+            f"weight={M_total:.4g} kg, cog={[round(v,4) for v in cog_total]} m"
+        )
+        return {"weight": M_total, "cog": cog_total, "inertia": I_final}
+
     except Exception as e:
-        logger.debug(f"{tag}惯量包络体.1 参数读取异常: {e}")
+        logger.debug(f"{tag}惯量包络体参数读取异常: {e}")
         return None
 
 
@@ -271,7 +329,8 @@ def _measure_part_mass_props(part_com, part_number: str = "") -> dict | None:
 
     先决条件：
       零件已在 SPA 中执行"测量惯量"并勾选"保持测量"，
-      从而在参数树中生成 "惯量包络体.1\\质量" 等 Keep 参数。
+      从而在参数树中生成 "惯量包络体.N\\质量" 等 Keep 参数（N ≥ 1）。
+      所有编号 1 ≤ N ≤ MAX_INERTIA_INDEX 的测量均会被读取并在零件级汇总。
 
     参数：
         part_com:    COM 对象（Part 层）。
@@ -285,7 +344,7 @@ def _measure_part_mass_props(part_com, part_number: str = "") -> dict | None:
                     [Iyx,Iyy,Iyz],
                     [Izx,Izy,Izz]], # 重心处转动惯量（零件局部坐标轴），kg·m²
       }
-    若"惯量包络体.1"参数不存在（零件未执行 Keep 测量）则返回 None。
+    若所有惯量包络体参数均不存在（零件未执行 Keep 测量）则返回 None。
     """
     return _read_keep_inertia_params(part_com, part_number)
 
@@ -728,7 +787,8 @@ def collect_mass_props_rows(
                 revision     = _get_prop(product, "Revision")
 
         # ── 质量特性测量（仅对叶子零件节点）────────────────────────────────────
-        # 直接读取"惯量包络体.1" Keep 测量参数（零件须已执行 SPA 保持测量）。
+        # 依次读取"惯量包络体.1"至"惯量包络体.MAX_INERTIA_INDEX"的 Keep 测量参数，
+        # 在零件级汇总后存储（零件须已执行 SPA 保持测量）。
         mass_props: dict | None = None
         meas_failed = False
 
@@ -770,7 +830,7 @@ def collect_mass_props_rows(
                             f"Ixx={_mp_dbg.get('inertia',[[0]])[0][0]:.3g}g·mm²"
                         )
                     else:
-                        logger.debug(f"[TRAV] {pn} 惯量包络体.1 参数不存在或读取失败")
+                        logger.debug(f"[TRAV] {pn} 惯量包络体参数不存在或读取失败")
 
                     # 写入缓存（即使测量失败也缓存 None，防止重复尝试）
                     _mass_cache[filepath] = mass_props
@@ -815,7 +875,7 @@ def collect_mass_props_rows(
             "_not_found":   not_found,  # True：CATIA 无法解析文件引用（路径丢失）
             "_no_file":     no_file,    # True：路径有效但文件尚未保存到磁盘
             "_unreadable":  not is_readable,
-            "_meas_failed": meas_failed,  # True：零件文档可访问但 惯量包络体.1 参数不存在
+            "_meas_failed": meas_failed,  # True：零件文档可访问但惯量包络体参数不存在
             "_mass_props":  mass_props,   # 原始测量值，供联动修改时使用
         }
 

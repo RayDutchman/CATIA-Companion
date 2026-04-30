@@ -109,7 +109,7 @@ class MainWindow(QMainWindow):
         btn_bom_edit.setToolTip("在表格中编辑 BOM 属性并写回 CATIA")
         btn_bom_edit.clicked.connect(self._open_bom_edit_dialog)
 
-        btn_mass_props = QPushButton("质量特性汇总")
+        btn_mass_props = QPushButton("重量、重心、惯量统计")
         btn_mass_props.setToolTip(
             "遍历产品树，读取零件质量/重心/转动惯量，计算装配体总质量特性并导出"
         )

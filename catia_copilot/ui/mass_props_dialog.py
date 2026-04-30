@@ -1,5 +1,5 @@
 """
-质量特性汇总对话框模块。
+重量、重心、惯量统计对话框模块。
 
 提供：
 - MassPropsDialog – 遍历产品树，展示每个零件实例的质量/重心/转动惯量，
@@ -37,7 +37,7 @@ from catia_copilot.constants import (
 )
 from catia_copilot.catia.mass_props_collect import (
     collect_mass_props_rows, _row_inertia_to_root, recompute_product_rows,
-    save_rows, load_rows,
+    save_rows, load_rows, MAX_INERTIA_INDEX,
 )
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
 from catia_copilot.ui.bom_widgets import _BomTreeWidget
@@ -107,7 +107,7 @@ def _fmt(value) -> str:
 
 
 class MassPropsDialog(QDialog):
-    """质量特性汇总对话框。
+    """重量、重心、惯量统计对话框。
 
     - 遍历 CATProduct 树，每个节点（零件/产品/部件实例）单独显示一行（层级BOM模式）。
       Weight / CogX / CogY / CogZ / Ixx–Iyz 均在根产品坐标系下显示，与装配位置有关。
@@ -123,7 +123,7 @@ class MassPropsDialog(QDialog):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("质量特性汇总")
+        self.setWindowTitle("重量、重心、惯量统计")
         self.setMinimumSize(1100, 650)
         self.resize(1300, 750)
         self.setWindowFlags(
@@ -745,6 +745,20 @@ class MassPropsDialog(QDialog):
         self._calc_btn.setEnabled(True)
         self._export_btn.setEnabled(True)
         self._save_json_btn.setEnabled(True)
+
+        failed_count = sum(1 for r in rows if r.get("_meas_failed") and r.get("Type") == "零件")
+        if failed_count:
+            QMessageBox.information(
+                self, "部分零件测量失败",
+                f"有 {failed_count} 个零件节点无法完成质量特性测量（显示橙色背景）。\n\n"
+                "可能原因：\n"
+                "  • 零件文档未加载到CATIA会话中\n"
+                f"  • 零件无有效的保持测量的「惯量包络体」（编号 1–{MAX_INERTIA_INDEX}）\n"
+                "  • 零件未成功运行「创建质量关系」宏（MP_* 参数不存在）\n\n"
+                "未能测量的零件不参与最终汇总计算。",
+            )
+
+
         # 加载完成后自动计算汇总结果
         self._calculate()
 
