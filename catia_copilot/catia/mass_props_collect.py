@@ -23,6 +23,14 @@
    · 第二轮：对每个产品 / 部件节点，按平行轴定理汇总子孙零件的质量特性，
      计算该节点在根坐标系下的总质量、总重心和总转动惯量。
 
+质量特性读取
+-----------
+直接读取 CATIA SPA "测量惯量 + 保持测量" 写入的 "惯量包络体.1" Keep 参数：
+  惯量包络体.1\\质量    → 质量（g）
+  惯量包络体.1\\Gx/Gy/Gz → 重心坐标（mm）
+  惯量包络体.1\\IoxG/IoyG/IozG/IxyG/IxzG/IyzG → 转动惯量分量（g·mm²）
+零件文档须使用 g/mm 单位制，参数值即为目标单位下的数值，无需换算。
+
 单位制
 ------
   质量   ：g
@@ -163,85 +171,76 @@ def _position_to_mat4(product) -> list[list[float]]:
 # ---------------------------------------------------------------------------
 
 
-def _try_mp_params(part_com, label: str = "") -> dict | None:
-    """读取由 create_mass_relations.catvbs 写入的 MP_* 用户参数。
+def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") -> dict | None:
+    """直接读取 CATIA SPA Keep 测量写入的"惯量包络体.1"参数。
 
-    create_mass_relations.catvbs 在零件文档中以"用户参数"的形式存储质量特性，
-    参数名与程序内部单位制严格一致，无需换算：
-      MP_Mass_g                   → 质量，g
-      MP_COGx/y/z_mm              → 重心坐标（零件局部坐标系），mm
-      MP_Ixx/yy/zz/xy/xz/yz_gxmm2 → 重心处转动惯量（零件局部坐标轴），g·mm²
+    先决条件：零件已在 SPA（惯量分析）中执行"测量惯量"并勾选"保持测量"，
+    使参数树中出现 "惯量包络体.1\\质量"、"惯量包络体.1\\Gx" 等字段。
 
-    返回值结构（与 _measure_part_mass_props 一致）：
+    前缀策略（依次尝试，取第一个能读到有效质量的前缀）：
+      1. "{part_number}\\惯量包络体.1\\"  ← CATIA 以零件号作为顶层命名空间
+      2. "惯量包络体.1\\"                  ← 当前文档上下文回退前缀
+
+    读取字段及内部单位（文档使用 g/mm 单位制，无需换算）：
+      质量                            → 质量，g
+      Gx / Gy / Gz                    → 重心坐标（零件局部坐标系），mm
+      IoxG / IoyG / IozG              → 主惯量（Ixx / Iyy / Izz），g·mm²
+      IxyG / IxzG / IyzG              → 惯量积（Ixy / Ixz / Iyz），g·mm²
+
+    返回值结构：
       {
         "weight":  float,               # 质量，g
-        "cog":     [x, y, z],           # 重心，mm（局部坐标系）
+        "cog":     [x, y, z],           # 重心，mm（零件局部坐标系）
         "inertia": [[Ixx, Ixy, Ixz],    # 转动惯量张量（3×3 对称矩阵），g·mm²
-                    [Ixy, Iyy, Iyz],    # 注意：Ixy=Iyx、Ixz=Izx、Iyz=Izy（对称性）
+                    [Ixy, Iyy, Iyz],
                     [Ixz, Iyz, Izz]],
       }
-
-    以下任一条件成立时返回 None，触发路径 2（运行 VBS 绑定脚本）：
-      · 10 个必要参数（质量、3 个重心分量、6 个惯量分量）中有任意一个不存在；
-      · 质量参数值 ≤ 0（无效值）；
-      · 代表性公式 F_MP_Mass_g 不存在于 Part.Relations（参数未与 Keep 测量绑定，
-        值可能过时）。
+    若"惯量包络体.1\\质量"不存在、值 ≤ 0，或任意惯量分量缺失，则返回 None。
     """
     tag = f"[MP] {label} " if label else "[MP] "
     try:
         params = part_com.Parameters
 
-        def _get(name: str) -> float | None:
-            """按参数名读取单个用户参数值，失败返回 None。"""
+        def _get(prefix: str, name: str) -> float | None:
             try:
-                return float(params.Item(name).Value)
+                return float(params.Item(prefix + name).Value)
             except Exception:
                 return None
 
-        # ── 完整性检查：所有必要参数均须存在 ───────────────────────────────
-        # 任何一个参数缺失均触发路径 2，确保不遗漏不完整的数据。
-        _REQUIRED = (
-            "MP_Mass_g",
-            "MP_COGx_mm", "MP_COGy_mm", "MP_COGz_mm",
-            "MP_Ixx_gxmm2", "MP_Iyy_gxmm2", "MP_Izz_gxmm2",
-            "MP_Ixy_gxmm2", "MP_Ixz_gxmm2", "MP_Iyz_gxmm2",
-        )
-        values: dict[str, float] = {}
-        for pname in _REQUIRED:
-            v = _get(pname)
-            if v is None:
-                logger.debug(f"{tag}参数 {pname} 不存在，返回 None 触发 VBS 绑定")
-                return None
-            values[pname] = v
+        # 按前缀依次尝试，取第一个能读到有效质量的前缀
+        prefixes = []
+        if part_number:
+            prefixes.append(f"{part_number}\\惯量包络体.1\\")
+        prefixes.append("惯量包络体.1\\")
 
-        mass_g = values["MP_Mass_g"]
-        if mass_g <= 0.0:
-            logger.debug(f"{tag}MP_Mass_g 为零或负数，跳过")
+        prefix_ok = None
+        mass_g = None
+        for pfix in prefixes:
+            v = _get(pfix, "质量")
+            if v is not None and v > 0.0:
+                prefix_ok = pfix
+                mass_g = v
+                break
+
+        if prefix_ok is None:
+            logger.debug(f"{tag}未找到 惯量包络体.1\\质量，返回 None")
             return None
 
-        # ── 公式关系检查：确保参数由 Keep 测量公式驱动 ──────────────────────
-        # 若 F_MP_Mass_g 公式不存在，说明参数是手动创建的或 VBS 从未运行，
-        # 其值可能与实际测量脱节——返回 None 以触发 VBS 重新绑定。
-        try:
-            part_com.Relations.Item("F_MP_Mass_g")
-        except Exception:
-            logger.debug(f"{tag}公式 F_MP_Mass_g 不存在，参数值可能与测量脱节，返回 None 触发 VBS 绑定")
-            return None
+        def _req(name: str) -> float | None:
+            return _get(prefix_ok, name)
 
-        cogx = values["MP_COGx_mm"]
-        cogy = values["MP_COGy_mm"]
-        cogz = values["MP_COGz_mm"]
-        ixx  = values["MP_Ixx_gxmm2"]
-        iyy  = values["MP_Iyy_gxmm2"]
-        izz  = values["MP_Izz_gxmm2"]
-        ixy  = values["MP_Ixy_gxmm2"]
-        ixz  = values["MP_Ixz_gxmm2"]
-        iyz  = values["MP_Iyz_gxmm2"]
+        gx  = _req("Gx");   gy  = _req("Gy");   gz  = _req("Gz")
+        ixx = _req("IoxG"); iyy = _req("IoyG"); izz = _req("IozG")
+        ixy = _req("IxyG"); ixz = _req("IxzG"); iyz = _req("IyzG")
+
+        # 惯量分量允许为 0（球对称体），但不允许任意分量读取失败
+        if any(v is None for v in (gx, gy, gz, ixx, iyy, izz, ixy, ixz, iyz)):
+            logger.debug(f"{tag}部分 惯量包络体.1 参数缺失，返回 None")
+            return None
 
         return {
-            "weight":  mass_g,
-            "cog":     [cogx, cogy, cogz],
-            # 构建 3×3 对称惯量张量：上三角 = 下三角（Iij = Iji）
+            "weight": mass_g,
+            "cog":    [gx, gy, gz],
             "inertia": [
                 [ixx, ixy, ixz],
                 [ixy, iyy, iyz],
@@ -249,91 +248,24 @@ def _try_mp_params(part_com, label: str = "") -> dict | None:
             ],
         }
     except Exception as e:
-        logger.debug(f"{tag}MP_* 参数读取异常: {e}")
+        logger.debug(f"{tag}惯量包络体.1 参数读取异常: {e}")
         return None
 
 
-def _run_mass_vbs_and_read(
-    doc_com, part_com, label: str = "", part_number: str = ""
-) -> dict | None:
-    """若 MP_* 参数尚不存在，自动运行 create_mass_relations.catvbs，
-    再尝试读取 VBS 写入的 MP_* 参数。
-
-    工作流程：
-      1. 定位 ``macros/create_mass_relations.catvbs`` 脚本文件；
-      2. 激活目标零件文档（doc_com.Activate()），确保 CATIA 聚焦到正确文档；
-      3. 通过 ``ExecuteScript`` 调用 VBS，将零件号 (part_number) 作为
-         ``iParameters`` 传入，VBS 按此在已打开的文档中定位并激活目标零件；
-      4. VBS 运行完毕后再次调用 ``_try_mp_params()`` 读取写入的参数。
-
-    注意事项：
-      · 若目标零件未包含 "惯量包络体.1\\质量" 这个 Keep 测量参数，
-        VBS 会静默退出，不弹出任何对话框，本函数最终返回 None。
-      · part_number 使用零件号而非文件路径，是为了兼容"文档尚未保存"的情形。
-
-    参数：
-        doc_com:     COM 对象（PartDocument 层），用于激活文档并执行脚本。
-        part_com:    COM 对象（Part 层），用于读取 MP_* 参数。
-        label:       调试标签，用于 debug 日志前缀。
-        part_number: 零件号（PartNumber），作为 iParameter[0] 传给 VBS。
-    """
-    tag = f"[MP] {label} " if label else "[MP] "
-
-    try:
-        from catia_copilot.utils import resource_path
-        vbs_path = resource_path("macros/create_mass_relations.catvbs")
-        if not vbs_path.is_file():
-            logger.debug(f"{tag}找不到 VBS 文件: {vbs_path}，跳过")
-            return None
-
-        logger.debug(f"{tag}激活零件文档并运行 {vbs_path.name}，part_number={part_number!r}")
-        doc_com.Activate()
-
-        # ExecuteScript 参数说明：
-        #   参数 0：脚本所在目录（str）
-        #   参数 1：语言类型（1 = VBScript）
-        #   参数 2：脚本文件名（不含路径）
-        #   参数 3：入口 Sub 名称（"CATMain"）
-        #   参数 4：传递给 Sub 的参数数组（iParameters）
-        # 此处将零件号作为 iParameters 传入，让 VBS 按 PartNumber 定位目标文档。
-        doc_com.Application.SystemService.ExecuteScript(
-            str(vbs_path.parent), 1, vbs_path.name, "CATMain", [part_number]
-        )
-
-        # 强制更新零件，确保 VBS 新建的公式立即完成求值，
-        # 否则 MP_* 参数可能仍保持初始值 0（公式延迟计算）。
-        try:
-            part_com.Update()
-            logger.debug(f"{tag}Part.Update() 完成")
-        except Exception as e_upd:
-            logger.warning(f"{tag}Part.Update() 失败，惯量参数可能仍为初始值: {e_upd}")
-
-        result = _try_mp_params(part_com, label)
-        if result is not None:
-            logger.debug(f"{tag}VBS 执行后 MP_* 参数读取成功")
-        else:
-            logger.debug(f"{tag}VBS 执行后 MP_* 参数仍不可用（零件可能无 Keep 惯量测量）")
-        return result
-    except Exception as e:
-        logger.debug(f"{tag}VBS 路径失败: {e}")
-        return None
-
-
-def _measure_part_mass_props(doc_com, part_com, part_number: str = "") -> dict | None:
+def _measure_part_mass_props(part_com, part_number: str = "") -> dict | None:
     """测量零件质量特性。
 
-    所有返回值均使用 **g / mm / g·mm²** 单位制（与 create_mass_relations.catvbs 一致）。
+    直接读取 CATIA SPA Keep 测量写入的"惯量包络体.1"参数，无需运行 VBS 脚本。
 
-    路径优先级：
-      1. **MP_* 参数**：直接读取由 ``create_mass_relations.catvbs`` 写入的
-         ``MP_Mass_g``、``MP_COGx/y/z_mm``、``MP_Ixx/yy/zz/xy/xz/yz_gmm2`` 参数。
-      2. **VBS 自动绑定**：若路径 1 失败，自动运行 VBS 脚本尝试创建 MP_* 参数后
-         再读取。若零件无 Keep 惯量测量，脚本会静默退出，不阻塞。
+    所有返回值均使用 **g / mm / g·mm²** 单位制（文档须采用 g/mm 单位制）。
+
+    先决条件：
+      零件已在 SPA 中执行"测量惯量"并勾选"保持测量"，
+      从而在参数树中生成 "惯量包络体.1\\质量" 等 Keep 参数。
 
     参数：
-        doc_com:     COM 对象（PartDocument 层）。
         part_com:    COM 对象（Part 层）。
-        part_number: 零件号（PartNumber），传给 VBS 脚本以定位目标文档。
+        part_number: 零件号（PartNumber），用于构造参数前缀。
 
     返回字典：
       {
@@ -343,19 +275,9 @@ def _measure_part_mass_props(doc_com, part_com, part_number: str = "") -> dict |
                     [Iyx,Iyy,Iyz],
                     [Izx,Izy,Izz]], # 重心处转动惯量（零件局部坐标轴），g·mm²
       }
-    若所有路径均失败则返回 None。
+    若"惯量包络体.1"参数不存在（零件未执行 Keep 测量）则返回 None。
     """
-    # ── 路径 1：读取 MP_* 用户参数（由 create_mass_relations.catvbs 写入）──────
-    _mp = _try_mp_params(part_com, "直接读取")
-    if _mp is not None:
-        return _mp
-
-    # ── 路径 2：自动运行 VBS 绑定脚本（要求零件已有 Keep 测量）─────────────────────
-    _mp = _run_mass_vbs_and_read(doc_com, part_com, "VBS绑定", part_number)
-    if _mp is not None:
-        return _mp
-
-    return None
+    return _read_keep_inertia_params(part_com, part_number)
 
 
 # ---------------------------------------------------------------------------
@@ -774,8 +696,7 @@ def collect_mass_props_rows(
                 revision     = _get_prop(product, "Revision")
 
         # ── 质量特性测量（仅对叶子零件节点）────────────────────────────────────
-        # 测量路径：1) 读取 MP_* 用户参数；2) 自动运行 VBS 绑定脚本后再读取。
-        # 两种路径均不使用 CATIA SPA（已移除）。
+        # 直接读取"惯量包络体.1" Keep 测量参数（零件须已执行 SPA 保持测量）。
         mass_props: dict | None = None
         meas_failed = False
 
@@ -801,7 +722,7 @@ def collect_mass_props_rows(
                         # 通过 COM 获取 Part 对象（仅 PartDocument 拥有 .Part 属性）
                         part_doc_com  = target_doc.com_object
                         part_com      = part_doc_com.Part
-                        mass_props    = _measure_part_mass_props(part_doc_com, part_com, pn)
+                        mass_props    = _measure_part_mass_props(part_com, pn)
                     except Exception as e:
                         logger.debug(f"无法测量零件 {filepath}: {e}")
                         mass_props  = None
@@ -817,7 +738,7 @@ def collect_mass_props_rows(
                             f"Ixx={_mp_dbg.get('inertia',[[0]])[0][0]:.3g}g·mm²"
                         )
                     else:
-                        logger.debug(f"[TRAV] {pn} 所有测量路径均失败")
+                        logger.debug(f"[TRAV] {pn} 惯量包络体.1 参数不存在或读取失败")
 
                     # 写入缓存（即使测量失败也缓存 None，防止重复尝试）
                     _mass_cache[filepath] = mass_props
@@ -862,7 +783,7 @@ def collect_mass_props_rows(
             "_not_found":   not_found,  # True：CATIA 无法解析文件引用（路径丢失）
             "_no_file":     no_file,    # True：路径有效但文件尚未保存到磁盘
             "_unreadable":  not is_readable,
-            "_meas_failed": meas_failed,  # True：零件文档可访问但质量特性测量失败（MP_*/VBS 均无数据）
+            "_meas_failed": meas_failed,  # True：零件文档可访问但 惯量包络体.1 参数不存在
             "_mass_props":  mass_props,   # 原始测量值，供联动修改时使用
         }
 
