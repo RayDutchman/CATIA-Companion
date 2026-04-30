@@ -90,9 +90,9 @@ def _fmt(value) -> str:
         return "—"
     try:
         v = float(value)
-        if math.isclose(v, round(v), rel_tol=0.0, abs_tol=1e-6):
+        if math.isclose(v, round(v), rel_tol=0.0, abs_tol=1e-9):
             return f"{v:.0f}"
-        if abs(v) >= 1e4 or (v != 0.0 and abs(v) < 0.001):
+        if abs(v) >= 1e5 or (v != 0.0 and abs(v) < 0.001):
             return f"{v:.3e}"
         return f"{v:.3f}"
     except (TypeError, ValueError):

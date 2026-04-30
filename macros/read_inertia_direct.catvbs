@@ -14,7 +14,7 @@ Option Explicit
 '     · 若为空或省略：使用当前活动文档。
 ' ============================================================
 
-Sub CATMain(iParameters)
+Sub CATMain(PartNumber)
 
     ' ── 获取 CATIA 应用对象 ───────────────────────────────────────────────────
     Dim CATIA
@@ -82,7 +82,7 @@ Sub CATMain(iParameters)
     ' =========================================================================
     ' 路径 A：遍历 Part.Parameters，找出所有含"惯量包络体"的参数
     ' =========================================================================
-    Call PathA_EnumParameters(part, actualPN)
+    Call EnumParameters(part, actualPN)
 
 End Sub
 
@@ -97,7 +97,7 @@ End Sub
 ' 注：Keep 参数值由 CATIA 以混合单位存储（质量 kg、坐标 mm、惯量 kg·m²）；
 '     程序读取后将坐标 ÷1000 换算为 m，实现全 SI 内部存储。
 ' =============================================================================
-Private Sub PathA_EnumParameters(part, actualPN)
+Private Sub EnumParameters(part, actualPN)
     On Error Resume Next
 
     Dim params
@@ -111,8 +111,8 @@ Private Sub PathA_EnumParameters(part, actualPN)
     On Error GoTo 0
 
     If total = 0 Then
-        MsgBox "[路径 A] Part.Parameters 为空或读取失败，跳过。", _
-               vbExclamation, "路径 A"
+        MsgBox "Part.Parameters 为空或读取失败，跳过。", _
+               vbExclamation, "直接读取质量信息"
         Exit Sub
     End If
 
@@ -185,12 +185,12 @@ Private Sub PathA_EnumParameters(part, actualPN)
             Err.Clear
         Next
         On Error GoTo 0
-        MsgBox "[路径 A] 未找到含"惯量包络体"的参数（共 " & total & " 个参数）。" & vbCrLf & vbCrLf & _
+        MsgBox "未找到含""惯量包络体""的参数（共 " & total & " 个参数）。" & vbCrLf & vbCrLf & _
                "前 " & sCount & " 个参数名（供参考）：" & vbCrLf & sample, _
-               vbExclamation, "路径 A"
+               vbExclamation, "直接读取质量信息"
     Else
-        MsgBox "[路径 A] 找到 " & hitCount & " 个匹配参数：" & vbCrLf & vbCrLf & hits, _
-               vbInformation, "路径 A"
+        MsgBox "找到 " & hitCount & " 个匹配参数：" & vbCrLf & vbCrLf & hits, _
+               vbInformation, "直接读取质量信息"
     End If
 End Sub
 
