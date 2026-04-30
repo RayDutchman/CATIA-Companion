@@ -12,7 +12,7 @@ import catia_copilot.logging_setup  # noqa: F401
 
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
-from catia_copilot.utils import resource_path
+from catia_copilot.utils import resource_path, ensure_clean_gencache
 from catia_copilot.constants import STYLESHEET_RELATIVE_PATH, APP_ICON_PATH
 from catia_copilot.ui.main_window import MainWindow
 
@@ -22,8 +22,11 @@ def main() -> None:
 
     初始化 Qt 应用程序，加载样式表和图标，显示主窗口。
     """
+    # 清理 win32com 早绑定缓存，防止 gencache 污染 COM 连接
+    ensure_clean_gencache()
+
     app = QApplication(sys.argv)
-    app.setApplicationName("CATIA Copilot 1.4.1")
+    app.setApplicationName("CATIA Copilot 1.5.0")
 
     # 应用统一的 QSS 样式表
     qss_path = resource_path(STYLESHEET_RELATIVE_PATH)

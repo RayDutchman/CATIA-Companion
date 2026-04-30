@@ -84,3 +84,18 @@ QStatusBar {
     color: #555;
 }
 
+/* ── CATIA connection indicator ── */
+QLabel#catiaStatusLabel {
+    padding: 0 8px;
+    font-size: 8.5pt;
+}
+QLabel#catiaStatusLabel[catiaConnected="true"] {
+    color: #2a9d2a;
+}
+QLabel#catiaStatusLabel[catiaConnected="false"] {
+    color: #cc2222;
+}
+QLabel#catiaStatusLabel[catiaConnected="broken"] {
+    color: #c97a00;
+}
+

@@ -2,19 +2,28 @@
 CATIA Copilot 实用工具函数模块。
 
 提供：
-- resource_path()        – 解析打包资源文件路径（支持 PyInstaller）
-- detect_catia_root()    – 通过注册表自动检测 CATIA 安装目录
-- estimate_column_width() – 估算 Excel 列宽度（支持中日韩字符）
+- resource_path()               – 解析打包资源文件路径（支持 PyInstaller）
+- detect_catia_root()           – 通过注册表自动检测 CATIA 安装目录
+- check_catia_connection()      – 3 态 COM 连接检测（"connected"/"broken"/"disconnected"）
+- diagnose_catia_connection()   – 详细 COM 诊断，返回含版本、文档数等信息的字典
+- ensure_clean_gencache()       – 启动时清理 win32com 早绑定缓存（gen_py 目录）
+- estimate_column_width()       – 估算 Excel 列宽度（支持中日韩字符）
 """
 
 import ctypes
 import ctypes.wintypes as _wt
+import shutil
 import struct
 import sys
 import unicodedata
 import winreg
 import logging
 from pathlib import Path
+
+try:
+    import win32com.client as _win32com_client
+except ImportError:
+    _win32com_client = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +94,142 @@ def detect_catia_root() -> str | None:
 
     logger.debug("No valid CATIA installation detected.")
     return None
+
+
+def check_catia_connection() -> str:
+    """检测 CATIA V5 是否正在运行并可通过 COM 访问。
+
+    返回以下三种状态之一：
+
+    - ``"connected"``     — CATIA 已运行，COM 对象可获取，且功能性测试通过。
+    - ``"broken"``        — COM 对象可获取（GetActiveObject 成功），但访问属性时
+                            抛出异常，说明连接存在异常（例如早绑定缓存污染）。
+    - ``"disconnected"``  — CATIA 未运行或 COM 完全不可用。
+    """
+    if _win32com_client is None:
+        return "disconnected"
+    try:
+        app = _win32com_client.GetActiveObject("CATIA.Application")
+    except Exception:
+        return "disconnected"
+    try:
+        _ = app.Name  # 功能性测试：确认 COM 对象实际可用
+        return "connected"
+    except Exception:
+        return "broken"
+
+
+def diagnose_catia_connection() -> dict:
+    """对 CATIA COM 连接进行详细诊断，返回包含各项检测结果的字典。
+
+    返回字典包含以下键：
+
+    - ``status``         (str)            — "connected" / "broken" / "disconnected"
+    - ``error``          (str | None)     — 最近一次异常描述（如有）
+    - ``app_name``       (str | None)     — CATIA 应用名称（如 "CATIA"）
+    - ``app_version``    (str | None)     — CATIA 版本字符串
+    - ``active_doc``     (str | None)     — 当前活动文档名称
+    - ``doc_count``      (int | None)     — 已打开文档数量
+    - ``gen_py_path``    (str)            — win32com gen_py 缓存目录路径
+    - ``gen_py_exists``  (bool)           — gen_py 缓存目录是否存在
+    """
+    result: dict = {
+        "status": "disconnected",
+        "error": None,
+        "app_name": None,
+        "app_version": None,
+        "active_doc": None,
+        "doc_count": None,
+        "gen_py_path": "",
+        "gen_py_exists": False,
+    }
+
+    # ── gen_py 缓存目录 ────────────────────────────────────────────────────
+    gen_py_path: Path | None = None
+    if _win32com_client is not None:
+        try:
+            from win32com.client import gencache as _gencache
+            gen_py_path = Path(_gencache.GetGeneratePath())
+        except Exception:
+            pass
+    if gen_py_path is None:
+        gen_py_path = Path.home() / "AppData" / "Local" / "Temp" / "gen_py"
+    result["gen_py_path"] = str(gen_py_path)
+    result["gen_py_exists"] = gen_py_path.exists()
+
+    # ── COM 连接检测 ──────────────────────────────────────────────────────
+    if _win32com_client is None:
+        result["error"] = "win32com 未安装，无法进行 COM 调用"
+        return result
+
+    try:
+        app = _win32com_client.GetActiveObject("CATIA.Application")
+    except Exception as exc:
+        result["status"] = "disconnected"
+        result["error"] = str(exc)
+        return result
+
+    # GetActiveObject 成功 — 继续功能性测试
+    try:
+        result["app_name"] = app.Name
+    except Exception as exc:
+        result["status"] = "broken"
+        result["error"] = f"GetActiveObject 成功但无法访问 .Name：{exc}"
+        return result
+
+    result["status"] = "connected"
+
+    try:
+        result["app_version"] = str(app.Version)
+    except Exception:
+        pass
+
+    try:
+        result["doc_count"] = int(app.Documents.Count)
+    except Exception:
+        pass
+
+    try:
+        result["active_doc"] = str(app.ActiveDocument.Name)
+    except Exception:
+        pass  # 无活动文档时正常
+
+    return result
+
+
+def ensure_clean_gencache() -> None:
+    """启动时清理 win32com 早绑定缓存目录（gen_py）。
+
+    win32com 的 ``EnsureDispatch`` 会在 ``%LOCALAPPDATA%\\Temp\\gen_py\\``
+    写入 CATIA 类型库的早绑定缓存。一旦该缓存存在，后续所有晚绑定调用
+    （包括本程序使用的 ``GetActiveObject``）都可能受到干扰，导致无法连接 CATIA。
+
+    本程序仅使用晚绑定，因此在每次启动时主动删除该目录可彻底消除上述隐患。
+    删除操作是幂等的：目录不存在时静默跳过。
+    """
+    gen_py_path: Path | None = None
+
+    # 优先通过 gencache 模块获取实际路径
+    if _win32com_client is not None:
+        try:
+            from win32com.client import gencache as _gencache
+            gen_py_path = Path(_gencache.GetGeneratePath())
+        except Exception:
+            pass
+
+    # 回退到默认路径
+    if gen_py_path is None:
+        local_app_data = Path.home() / "AppData" / "Local"
+        gen_py_path = local_app_data / "Temp" / "gen_py"
+
+    if gen_py_path.exists():
+        try:
+            shutil.rmtree(gen_py_path, ignore_errors=True)
+            logger.debug(f"[gencache] 已清理早绑定缓存目录：{gen_py_path}")
+        except Exception as exc:
+            logger.warning(f"[gencache] 清理缓存目录失败（{gen_py_path}）：{exc}")
+    else:
+        logger.debug(f"[gencache] 缓存目录不存在，无需清理：{gen_py_path}")
 
 
 def estimate_column_width(text: str) -> int:
