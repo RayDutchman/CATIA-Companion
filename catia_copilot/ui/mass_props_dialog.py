@@ -32,8 +32,9 @@ from catia_copilot.constants import (
     MASS_PROPS_HIDEABLE_COLUMNS,
     MASS_PROPS_READONLY_COLUMNS,
     FILENAME_NOT_FOUND,
+    FILENAME_UNSAVED,
 )
-from catia_copilot.catia.mass_props_collect import collect_mass_props_rows, _row_inertia_to_root
+from catia_copilot.catia.mass_props_collect import collect_mass_props_rows, _row_inertia_to_root, recompute_product_rows
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
 from catia_copilot.ui.bom_widgets import _BomTreeWidget
 
@@ -98,8 +99,11 @@ def _fmt(value) -> str:
 class MassPropsDialog(QDialog):
     """质量特性汇总对话框。
 
-    - 遍历 CATProduct 树，每个零件实例单独显示一行（层级BOM模式）。
-    - 汇总BOM模式：相同零件编号的实例合并为一行，并显示数量。
+    - 遍历 CATProduct 树，每个节点（零件/产品/部件实例）单独显示一行（层级BOM模式）。
+      Weight / CogX / CogY / CogZ / Ixx–Iyz 均在根产品坐标系下显示，与装配位置有关。
+    - 汇总BOM模式：相同零件编号的零件实例合并为一行，并显示数量（Quantity）；
+      仅列出零件（不含产品和部件）；Weight / CogX / CogY / CogZ / Ixx–Iyz
+      在零件自身坐标系下显示，与装配位置无关。
     - 仅零件节点的"重量"列可编辑；修改后等比缩放该行惯量，
       并同步更新所有相同零件编号的行（及 _rows 中全部同PN数据）。
     - 单位可在 kg/g 间切换（影响重量列与转动惯量列的显示和导出）。
@@ -135,13 +139,13 @@ class MassPropsDialog(QDialog):
 
         self._summarize: bool = self._settings.value("summarize", False, type=bool)
         self._unit: str = self._settings.value("unit", "g")
-        # 内部单位为 g / g·mm²；kg 显示时乘以 0.001，g 显示时乘以 1.0
-        self._unit_factor: float = 1.0 if self._unit == "g" else 0.001
+        # 内部单位为 g / g·mm²；根据所选单位制设置换算因子：
+        #   "g"     → mass: ×1,      inertia: ×1         (g,     g·mm²)
+        #   "kg"    → mass: ×0.001,  inertia: ×0.001     (kg,    kg·mm²)
+        #   "kg_m2" → mass: ×0.001,  inertia: ×1e-9      (kg,    kg·m²)
+        self._unit_factor, self._inertia_unit_factor = self._calc_unit_factors(self._unit)
 
         # ── 汇总BOM专用选项 ───────────────────────────────────────────────────
-        self._summary_include_assemblies: bool = self._settings.value(
-            "summary_include_assemblies", True, type=bool
-        )
         self._summary_sort_column: str = self._settings.value(
             "summary_sort_column", ""
         )
@@ -163,6 +167,33 @@ class MassPropsDialog(QDialog):
         self._build_ui()
 
     # ── Column management ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _calc_unit_factors(unit: str) -> tuple[float, float]:
+        """根据单位制字符串返回 (mass_factor, inertia_factor)。
+
+        Returns:
+            mass_factor:    g → 显示单位的换算因子（重量列）
+            inertia_factor: g·mm² → 显示单位的换算因子（惯量列）
+        """
+        if unit == "g":
+            return 1.0, 1.0
+        if unit == "kg_m2":
+            return 1e-3, 1e-9
+        # "kg" (kg / kg·mm²)
+        return 1e-3, 1e-3
+
+    def _weight_unit_label(self) -> str:
+        """返回重量列的单位标签字符串。"""
+        return "g" if self._unit == "g" else "kg"
+
+    def _inertia_unit_label(self) -> str:
+        """返回惯量列的单位标签字符串。"""
+        if self._unit == "g":
+            return "g·mm²"
+        if self._unit == "kg_m2":
+            return "kg·m²"
+        return "kg·mm²"
 
     def _build_columns(self) -> list[str]:
         """根据当前可见性设置和 BOM 模式，构建列名列表。
@@ -188,25 +219,35 @@ class MassPropsDialog(QDialog):
 
     def _column_header(self, col_name: str) -> str:
         """返回列名的中文显示名（含当前单位后缀）。"""
-        if self._unit == "g":
-            if col_name == "Weight":
-                return "重量 (g)"
-            if col_name in _INERTIA_IDX:
-                return f"{col_name} (g·mm²)"
+        if col_name == "Weight":
+            return f"重量 ({self._weight_unit_label()})"
+        if col_name in _INERTIA_IDX:
+            return f"{col_name} ({self._inertia_unit_label()})"
         return MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col_name, col_name)
 
     def _display_headers(self) -> list[str]:
         return [self._column_header(c) for c in self._columns]
 
     def _fmt_mass_val(self, value) -> str:
-        """将质量/惯量原始值（g / g·mm²）乘以 _unit_factor 并格式化为字符串。
-
-        _unit_factor = 1.0 时以 g / g·mm² 显示；= 0.001 时以 kg / kg·mm² 显示。
-        """
+        """将质量原始值（g）乘以 _unit_factor 并格式化为字符串（重量列专用）。"""
         if value is None:
             return "—"
         try:
             v = float(value) * self._unit_factor
+            if math.isclose(v, round(v), rel_tol=0.0, abs_tol=1e-6):
+                return f"{v:.0f}"
+            if abs(v) >= 1e4 or (v != 0.0 and abs(v) < 0.001):
+                return f"{v:.3e}"
+            return f"{v:.3f}"
+        except (TypeError, ValueError):
+            return str(value)
+
+    def _fmt_inertia_val(self, value) -> str:
+        """将惯量原始值（g·mm²）乘以 _inertia_unit_factor 并格式化为字符串（惯量列专用）。"""
+        if value is None:
+            return "—"
+        try:
+            v = float(value) * self._inertia_unit_factor
             if math.isclose(v, round(v), rel_tol=0.0, abs_tol=1e-6):
                 return f"{v:.0f}"
             if abs(v) >= 1e4 or (v != 0.0 and abs(v) < 0.001):
@@ -266,31 +307,29 @@ class MassPropsDialog(QDialog):
         unit_lbl = QLabel("单位：")
         row1.addWidget(unit_lbl)
         self._unit_group = QButtonGroup(self)
-        self._radio_kg = QRadioButton("kg / kg·mm²")
-        self._radio_g = QRadioButton("g / g·mm²")
+        self._radio_kg    = QRadioButton("kg / kg·mm²")
+        self._radio_g     = QRadioButton("g / g·mm²")
+        self._radio_kg_m2 = QRadioButton("kg / kg·m²")
         self._radio_kg.setChecked(self._unit == "kg")
         self._radio_g.setChecked(self._unit == "g")
+        self._radio_kg_m2.setChecked(self._unit == "kg_m2")
         self._unit_group.addButton(self._radio_kg)
         self._unit_group.addButton(self._radio_g)
+        self._unit_group.addButton(self._radio_kg_m2)
         self._radio_kg.toggled.connect(self._on_unit_changed)
+        self._radio_g.toggled.connect(self._on_unit_changed)
+        self._radio_kg_m2.toggled.connect(self._on_unit_changed)
         row1.addWidget(self._radio_kg)
         row1.addWidget(self._radio_g)
+        row1.addWidget(self._radio_kg_m2)
 
-        # 汇总BOM专用选项（is_include_assemblies + 排序列）
+        # 汇总BOM专用选项（排序列）
         self._summary_opts_widget = QWidget()
         summary_opts_layout = QHBoxLayout(self._summary_opts_widget)
         summary_opts_layout.setContentsMargins(0, 0, 0, 0)
         summary_opts_layout.setSpacing(8)
         summary_opts_layout.addSpacing(16)
 
-        self._include_assemblies_chk = QCheckBox("是否包含产品和部件")
-        self._include_assemblies_chk.setToolTip(
-            "勾选后，汇总BOM中也会列出产品和部件（子装配体），而不仅限于零件。"
-        )
-        self._include_assemblies_chk.setChecked(self._summary_include_assemblies)
-        self._include_assemblies_chk.toggled.connect(self._on_include_assemblies_toggled)
-        summary_opts_layout.addWidget(self._include_assemblies_chk)
-        summary_opts_layout.addSpacing(8)
         summary_opts_layout.addWidget(QLabel("排序列:"))
         self._sort_col_combo = QComboBox()
         self._sort_col_combo.addItem("（不排序）", "")
@@ -325,6 +364,15 @@ class MassPropsDialog(QDialog):
         opts_main.addLayout(row2)
 
         layout.addWidget(opts_group)
+
+        # ── BOM说明标签 ─────────────────────────────────────────────────────
+        self._bom_desc_lbl = QLabel(self._bom_desc_text())
+        self._bom_desc_lbl.setWordWrap(True)
+        self._bom_desc_lbl.setStyleSheet(
+            "QLabel { background-color: #EEF4FC; border: 1px solid #B8D0F0;"
+            " border-radius: 4px; padding: 4px 8px; color: #2B4C7E; font-size: 11px; }"
+        )
+        layout.addWidget(self._bom_desc_lbl)
 
         # ── 树形表格 ────────────────────────────────────────────────────────
         self._table = _BomTreeWidget()
@@ -435,6 +483,24 @@ class MassPropsDialog(QDialog):
 
         layout.addLayout(btn_row)
 
+    # ── BOM 说明文字 ───────────────────────────────────────────────────────
+
+    def _bom_desc_text(self) -> str:
+        """返回当前 BOM 模式对应的说明文字。"""
+        if self._summarize:
+            return (
+                "【汇总BOM】按零件编号合并，仅列出零件（不含产品和部件）。"
+                "Weight / CogX / CogY / CogZ / Ixx–Iyz "
+                "在零件自身坐标系下显示，与装配位置无关。"
+                "底部「汇总结果」在根产品坐标系下计算。"
+            )
+        return (
+            "【层级BOM】展示零件节点和产品/部件节点。"
+            "Weight / CogX / CogY / CogZ / Ixx–Iyz "
+            "在根产品坐标系下显示，与零件的装配位置有关。"
+            "底部「汇总结果」在根产品坐标系下计算。"
+        )
+
     # ── 文件/活动文档切换 ──────────────────────────────────────────────────
 
     def _toggle_file_row(self, use_active: bool) -> None:
@@ -458,12 +524,17 @@ class MassPropsDialog(QDialog):
         self._summarize = self._radio_summ.isChecked()
         self._settings.setValue("summarize", self._summarize)
         self._summary_opts_widget.setVisible(self._summarize)
+        self._bom_desc_lbl.setText(self._bom_desc_text())
         self._rebuild_columns_and_table()
 
     def _on_unit_changed(self, checked: bool) -> None:
-        self._unit = "g" if self._radio_g.isChecked() else "kg"
-        # 内部单位为 g / g·mm²；kg 显示时乘以 0.001，g 显示时乘以 1.0
-        self._unit_factor = 1.0 if self._unit == "g" else 0.001
+        if self._radio_g.isChecked():
+            self._unit = "g"
+        elif self._radio_kg_m2.isChecked():
+            self._unit = "kg_m2"
+        else:
+            self._unit = "kg"
+        self._unit_factor, self._inertia_unit_factor = self._calc_unit_factors(self._unit)
         self._settings.setValue("unit", self._unit)
         if self._rows:
             self._refresh_unit_display()
@@ -477,12 +548,6 @@ class MassPropsDialog(QDialog):
         self._settings.setValue("visible_hideable_cols",
                                 list(self._visible_hideable_cols))
         self._rebuild_columns_and_table()
-
-    def _on_include_assemblies_toggled(self, checked: bool) -> None:
-        self._summary_include_assemblies = checked
-        self._settings.setValue("summary_include_assemblies", checked)
-        if self._summarize and self._rows:
-            self._rebuild_columns_and_table()
 
     def _on_sort_col_changed(self, _index: int) -> None:
         col = self._sort_col_combo.currentData()
@@ -531,7 +596,10 @@ class MassPropsDialog(QDialog):
             for col_name, col_idx in mass_col_indices:
                 raw = row_data.get(col_name)
                 if raw is not None:
-                    item.setText(col_idx, self._fmt_mass_val(raw))
+                    if col_name == "Weight":
+                        item.setText(col_idx, self._fmt_mass_val(raw))
+                    else:
+                        item.setText(col_idx, self._fmt_inertia_val(raw))
         self._is_updating = False
 
         # Update summary labels if result is available
@@ -614,15 +682,15 @@ class MassPropsDialog(QDialog):
         self._calc_btn.setEnabled(True)
         self._export_btn.setEnabled(True)
 
-        failed_count = sum(1 for r in rows if r.get("_spa_failed") and r.get("Type") == "零件")
+        failed_count = sum(1 for r in rows if r.get("_meas_failed") and r.get("Type") == "零件")
         if failed_count:
             QMessageBox.information(
                 self, "部分零件测量失败",
-                f"有 {failed_count} 个零件节点无法完成SPA质量测量（显示橙色背景）。\n\n"
+                f"有 {failed_count} 个零件节点无法完成质量特性测量（显示橙色背景）。\n\n"
                 "可能原因：\n"
                 "  • 零件文档未加载到CATIA会话中\n"
-                "  • CATIA SPA工作台不可用\n"
-                "  • 零件无几何实体\n\n"
+                "  • 零件无有效的保持测量的「惯量包络体.1」\n"
+                "  • 零件未成功运行「创建质量关系」宏（MP_* 参数不存在）\n\n"
                 "未能测量的零件不参与最终汇总计算。",
             )
 
@@ -635,7 +703,32 @@ class MassPropsDialog(QDialog):
         """返回当前模式下应显示的行列表。"""
         if self._summarize:
             return self._build_summary_rows()
-        return self._rows
+        # 层级BOM：展示全部节点（零件、产品、部件），使用根产品坐标系下的值。
+        # 每行附加 _rows_idx，指向 self._rows 中的原始索引，
+        # 以确保 _make_item / _on_item_changed 能正确回写数据。
+        # 对零件行，将 _root_mp 中的根坐标系 COG / 惯量值覆盖显示字段；
+        # 产品/部件行的显示字段已由 _post_process_rows() 写入根坐标系汇总值。
+        result = []
+        for i, row in enumerate(self._rows):
+            r = dict(row)
+            r["_rows_idx"] = i
+            if r.get("Type") == "零件":
+                rmp = r.get("_root_mp")
+                if rmp:
+                    cog = rmp.get("cog", [None, None, None])
+                    r["CogX"] = cog[0]
+                    r["CogY"] = cog[1]
+                    r["CogZ"] = cog[2]
+                    I = rmp.get("inertia")
+                    if I:
+                        r["Ixx"] = I[0][0]
+                        r["Iyy"] = I[1][1]
+                        r["Izz"] = I[2][2]
+                        r["Ixy"] = I[0][1]
+                        r["Ixz"] = I[0][2]
+                        r["Iyz"] = I[1][2]
+            result.append(r)
+        return result
 
     def _build_summary_rows(self) -> list[dict]:
         """汇总模式：将相同零件编号的行合并，增加 Quantity 字段。
@@ -666,9 +759,8 @@ class MassPropsDialog(QDialog):
             r["Quantity"] = qty[pn]
             result.append(r)
 
-        # 若不包含产品和部件，仅保留零件行
-        if not self._summary_include_assemblies:
-            result = [r for r in result if r.get("Type") == "零件"]
+        # 仅保留零件行（汇总BOM不显示产品和部件）
+        result = [r for r in result if r.get("Type") == "零件"]
 
         # 按排序列排序
         if self._summary_sort_column:
@@ -709,12 +801,13 @@ class MassPropsDialog(QDialog):
         item = QTreeWidgetItem()
         item.setData(0, _ROW_IDX_ROLE, row_idx)
 
-        pn        = str(row_data.get("Part Number", ""))
-        not_found = bool(row_data.get("_not_found"))
-        unreadable = bool(row_data.get("_unreadable"))
-        spa_failed = bool(row_data.get("_spa_failed"))
-        node_type  = str(row_data.get("Type", ""))
-        row_locked = unreadable or not_found
+        pn          = str(row_data.get("Part Number", ""))
+        not_found   = bool(row_data.get("_not_found"))
+        no_file     = bool(row_data.get("_no_file"))
+        unreadable  = bool(row_data.get("_unreadable"))
+        meas_failed = bool(row_data.get("_meas_failed"))
+        node_type   = str(row_data.get("Type", ""))
+        row_locked  = unreadable or not_found or meas_failed
 
         if pn:
             self._pn_to_items.setdefault(pn, []).append(item)
@@ -729,9 +822,14 @@ class MassPropsDialog(QDialog):
             elif col_name == "Filename":
                 fp = str(row_data.get("_filepath", ""))
                 fn = str(row_data.get("Filename", ""))
-                value = Path(fp).name if fp else fn
+                if no_file:
+                    value = FILENAME_UNSAVED
+                else:
+                    value = Path(fp).name if fp else fn
                 item.setText(col_idx, value)
-                if fp:
+                if no_file:
+                    pass  # tooltip 由下方 no_file 块统一设置
+                elif fp:
                     item.setToolTip(col_idx, fp)
             elif col_name == "Quantity":
                 item.setText(col_idx, str(row_data.get("Quantity", 1)))
@@ -747,7 +845,7 @@ class MassPropsDialog(QDialog):
                     item.setText(col_idx, "—" if node_type == "零件" else "")
                 else:
                     if col_name in _INERTIA_IDX:
-                        item.setText(col_idx, self._fmt_mass_val(raw))
+                        item.setText(col_idx, self._fmt_inertia_val(raw))
                     else:
                         item.setText(col_idx, _fmt(raw))
             else:
@@ -761,16 +859,29 @@ class MassPropsDialog(QDialog):
             item.setData(0, _ITEM_LOCKED_ROLE, True)
 
         # Row colouring
+        fn_col = self._columns.index("Filename") if "Filename" in self._columns else -1
         if row_locked:
             grey = QColor(160, 160, 160)
-            bg   = QColor(255, 205, 205) if not_found else QColor(245, 245, 245)
+            if not_found:
+                bg  = QColor(255, 205, 205)
+                tip = "该零件/装配体的文件未被CATIA检索到，行内容不可编辑。"
+            elif meas_failed:
+                bg  = QColor(255, 210, 160)
+                tip = "该零件的质量特性测量失败，行内容不可编辑。"
+            else:
+                bg  = QColor(245, 245, 245)
+                tip = "该零件/装配体处于轻量化模式，无法读取属性。"
             for ci in range(len(self._columns)):
                 item.setForeground(ci, grey)
                 item.setBackground(ci, bg)
-        elif spa_failed and node_type == "零件":
-            bg = QColor(255, 210, 160)
+            if fn_col >= 0:
+                item.setToolTip(fn_col, tip)
+        elif no_file:
+            bg_unsaved = QColor(255, 245, 180)
             for ci in range(len(self._columns)):
-                item.setBackground(ci, bg)
+                item.setBackground(ci, bg_unsaved)
+            if fn_col >= 0:
+                item.setToolTip(fn_col, "该零件尚未保存到磁盘，质量特性数据可能不完整。")
         elif node_type in ("产品", "部件"):
             bg = QColor(240, 242, 245)
             for ci in range(len(self._columns)):
@@ -790,9 +901,10 @@ class MassPropsDialog(QDialog):
         """层级BOM模式：按 Level 构建树形结构。"""
         parent_stack: list[tuple[int, QTreeWidgetItem | None]] = [(-1, None)]
 
-        for rows_idx, row_data in enumerate(display_rows):
+        for di, row_data in enumerate(display_rows):
             level = int(row_data.get("Level", 0))
-            # In hierarchical mode display_rows IS self._rows, so rows_idx == _rows index
+            # 使用 _rows_idx（若存在）映射回 self._rows，保持与 _populate_flat 一致
+            rows_idx = row_data.get("_rows_idx", di)
 
             while len(parent_stack) > 1 and parent_stack[-1][0] >= level:
                 parent_stack.pop()
@@ -874,14 +986,12 @@ class MassPropsDialog(QDialog):
                     if rmp is not None:
                         rmp["inertia"] = I_root
                         rmp["weight"]  = new_weight_stored
-                    # 更新行级惯量显示字段（根坐标系）
+                    # 更新行级惯量显示字段（零件自身坐标系）
+                    I_local_new = mp.get("inertia", [[0.0] * 3 for _ in range(3)])
                     for ic_name, (ir2, ic2) in _INERTIA_IDX.items():
-                        r[ic_name] = I_root[ir2][ic2]
+                        r[ic_name] = I_local_new[ir2][ic2]
                 else:
-                    # 仅更新质量，惯量不变
-                    I_root = _row_inertia_to_root(r)
-                    for ic_name, (ir2, ic2) in _INERTIA_IDX.items():
-                        r[ic_name] = I_root[ir2][ic2]
+                    # 仅更新质量，惯量不变（显示字段为局部坐标系值，无需重新计算）
                     rmp = r.get("_root_mp")
                     if rmp is not None:
                         rmp["weight"] = new_weight_stored
@@ -909,9 +1019,19 @@ class MassPropsDialog(QDialog):
             for ic_name, (ir, ic) in _INERTIA_IDX.items():
                 if ic_name in self._columns:
                     ic_idx = self._columns.index(ic_name)
-                    raw_i = vis_row.get(ic_name)
+                    if self._summarize:
+                        # 汇总BOM：显示零件自身坐标系值
+                        raw_i = vis_row.get(ic_name)
+                    else:
+                        # 层级BOM：显示根产品坐标系值
+                        rmp = vis_row.get("_root_mp")
+                        raw_i = (
+                            rmp["inertia"][ir][ic]
+                            if rmp and rmp.get("inertia")
+                            else vis_row.get(ic_name)
+                        )
                     if raw_i is not None:
-                        vis_item.setText(ic_idx, self._fmt_mass_val(raw_i))
+                        vis_item.setText(ic_idx, self._fmt_inertia_val(raw_i))
 
         self._is_updating = False
         self._rollup_result = None
@@ -922,6 +1042,9 @@ class MassPropsDialog(QDialog):
     def _calculate(self) -> None:
         if not self._rows:
             return
+        # 先重新计算产品/部件行（使用更新后的 _root_mp），刷新表格
+        recompute_product_rows(self._rows)
+        self._refresh_product_items()
         try:
             result = rollup_mass_properties(self._rows)
         except Exception as e:
@@ -931,6 +1054,37 @@ class MassPropsDialog(QDialog):
         self._rollup_result = result
         self._update_summary_labels(result)
 
+    def _refresh_product_items(self) -> None:
+        """刷新树形表格中所有产品/部件行的显示值（仅层级BOM模式有效）。
+
+        在 _calculate() 调用 recompute_product_rows() 更新 self._rows 后，
+        调用本方法将新的汇总值写回对应的 QTreeWidgetItem，以保持表格与数据同步。
+        汇总BOM不含产品/部件行，故直接返回。
+        """
+        if self._summarize:
+            return
+        self._is_updating = True
+        try:
+            for item in self._item_by_row:
+                row_idx = item.data(0, _ROW_IDX_ROLE)
+                if row_idx is None:
+                    continue
+                row_data = self._rows[row_idx]
+                if row_data.get("Type") not in ("产品", "部件"):
+                    continue
+                for col_idx, col_name in enumerate(self._columns):
+                    if col_name == "Weight":
+                        raw = row_data.get("Weight")
+                        item.setText(col_idx, self._fmt_mass_val(raw) if raw is not None else "")
+                    elif col_name in ("CogX", "CogY", "CogZ"):
+                        raw = row_data.get(col_name)
+                        item.setText(col_idx, _fmt(raw) if raw is not None else "")
+                    elif col_name in _INERTIA_IDX:
+                        raw = row_data.get(col_name)
+                        item.setText(col_idx, self._fmt_inertia_val(raw) if raw is not None else "")
+        finally:
+            self._is_updating = False
+
     def _clear_summary_labels(self) -> None:
         for lbl in (self._lbl_weight, self._lbl_cx, self._lbl_cy, self._lbl_cz,
                     self._lbl_ixx, self._lbl_iyy, self._lbl_izz,
@@ -938,8 +1092,8 @@ class MassPropsDialog(QDialog):
             lbl.setText("—")
 
     def _update_summary_labels(self, result: dict) -> None:
-        unit_lbl = self._unit  # "kg" or "g"
-        inertia_unit = f"{unit_lbl}·mm²"
+        unit_lbl     = self._weight_unit_label()
+        inertia_unit = self._inertia_unit_label()
         w_val = result.get("total_weight", 0.0)
         self._lbl_weight.setText(f"{self._fmt_mass_val(w_val)} {unit_lbl}")
         cog = result.get("cog", [0.0, 0.0, 0.0])
@@ -947,12 +1101,12 @@ class MassPropsDialog(QDialog):
         self._lbl_cy.setText(f"{_fmt(cog[1])} mm")
         self._lbl_cz.setText(f"{_fmt(cog[2])} mm")
         I = result.get("inertia", [[0.0] * 3 for _ in range(3)])
-        self._lbl_ixx.setText(f"{self._fmt_mass_val(I[0][0])} {inertia_unit}")
-        self._lbl_iyy.setText(f"{self._fmt_mass_val(I[1][1])} {inertia_unit}")
-        self._lbl_izz.setText(f"{self._fmt_mass_val(I[2][2])} {inertia_unit}")
-        self._lbl_ixy.setText(f"{self._fmt_mass_val(I[0][1])} {inertia_unit}")
-        self._lbl_ixz.setText(f"{self._fmt_mass_val(I[0][2])} {inertia_unit}")
-        self._lbl_iyz.setText(f"{self._fmt_mass_val(I[1][2])} {inertia_unit}")
+        self._lbl_ixx.setText(f"{self._fmt_inertia_val(I[0][0])} {inertia_unit}")
+        self._lbl_iyy.setText(f"{self._fmt_inertia_val(I[1][1])} {inertia_unit}")
+        self._lbl_izz.setText(f"{self._fmt_inertia_val(I[2][2])} {inertia_unit}")
+        self._lbl_ixy.setText(f"{self._fmt_inertia_val(I[0][1])} {inertia_unit}")
+        self._lbl_ixz.setText(f"{self._fmt_inertia_val(I[0][2])} {inertia_unit}")
+        self._lbl_iyz.setText(f"{self._fmt_inertia_val(I[1][2])} {inertia_unit}")
 
     # ── 导出 ───────────────────────────────────────────────────────────────
 
@@ -1026,7 +1180,7 @@ class MassPropsDialog(QDialog):
                         value = ""
                 elif col_name in _INERTIA_IDX:
                     try:
-                        value = float(raw) * self._unit_factor
+                        value = float(raw) * self._inertia_unit_factor
                     except (TypeError, ValueError):
                         value = ""
                 elif col_name in ("CogX", "CogY", "CogZ"):
@@ -1053,12 +1207,12 @@ class MassPropsDialog(QDialog):
                 "CogX":         cog[0],
                 "CogY":         cog[1],
                 "CogZ":         cog[2],
-                "Ixx":          I[0][0] * self._unit_factor,
-                "Iyy":          I[1][1] * self._unit_factor,
-                "Izz":          I[2][2] * self._unit_factor,
-                "Ixy":          I[0][1] * self._unit_factor,
-                "Ixz":          I[0][2] * self._unit_factor,
-                "Iyz":          I[1][2] * self._unit_factor,
+                "Ixx":          I[0][0] * self._inertia_unit_factor,
+                "Iyy":          I[1][1] * self._inertia_unit_factor,
+                "Izz":          I[2][2] * self._inertia_unit_factor,
+                "Ixy":          I[0][1] * self._inertia_unit_factor,
+                "Ixz":          I[0][2] * self._inertia_unit_factor,
+                "Iyz":          I[1][2] * self._inertia_unit_factor,
             }
             summary_fill = PatternFill(fill_type="solid", fgColor="C6EFCE")
             for ci, col_name in enumerate(export_cols, start=1):
@@ -1093,9 +1247,14 @@ class MassPropsDialog(QDialog):
         def _cell_value(col_name: str, raw) -> str:
             if raw is None:
                 return ""
-            if col_name in ("Weight",) + tuple(_INERTIA_IDX.keys()):
+            if col_name == "Weight":
                 try:
                     return str(float(raw) * self._unit_factor)
+                except (TypeError, ValueError):
+                    return ""
+            if col_name in _INERTIA_IDX:
+                try:
+                    return str(float(raw) * self._inertia_unit_factor)
                 except (TypeError, ValueError):
                     return ""
             return str(raw)
@@ -1117,12 +1276,12 @@ class MassPropsDialog(QDialog):
                     "CogX":         str(cog[0]),
                     "CogY":         str(cog[1]),
                     "CogZ":         str(cog[2]),
-                    "Ixx":          str(I[0][0] * self._unit_factor),
-                    "Iyy":          str(I[1][1] * self._unit_factor),
-                    "Izz":          str(I[2][2] * self._unit_factor),
-                    "Ixy":          str(I[0][1] * self._unit_factor),
-                    "Ixz":          str(I[0][2] * self._unit_factor),
-                    "Iyz":          str(I[1][2] * self._unit_factor),
+                    "Ixx":          str(I[0][0] * self._inertia_unit_factor),
+                    "Iyy":          str(I[1][1] * self._inertia_unit_factor),
+                    "Izz":          str(I[2][2] * self._inertia_unit_factor),
+                    "Ixy":          str(I[0][1] * self._inertia_unit_factor),
+                    "Ixz":          str(I[0][2] * self._inertia_unit_factor),
+                    "Iyz":          str(I[1][2] * self._inertia_unit_factor),
                 }
                 writer.writerow([summary.get(c, "") for c in export_cols])
         logger.info(f"质量特性表格已导出 (csv) -> {dest}")

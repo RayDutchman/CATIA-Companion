@@ -4,23 +4,58 @@
 提供：
 - collect_mass_props_rows() – 遍历产品树，读取每个零件实例的质量/重心/转动惯量，
                               不对兄弟零件进行数量合并（每个实例单独记录一行）。
+
+数据流概述
+----------
+1. collect_mass_props_rows() 打开或复用已打开的 .CATProduct 文档，
+   调用内部递归函数 _traverse() 深度优先遍历整棵产品树。
+
+2. _traverse() 对每个节点：
+   a. 判断节点类型（零件 / 部件 / 产品）；
+   b. 通过 _position_to_mat4() 读取该节点相对父节点的局部变换矩阵，
+      与父节点的累积矩阵相乘，得到"局部→根"的绝对变换矩阵（_placement）；
+   c. 若节点为叶子零件，调用 _measure_part_mass_props() 测量质量特性
+      （重心坐标和转动惯量在零件局部坐标系下给出），并写入行字典。
+
+3. _post_process_rows() 对收集到的行列表进行两轮后处理：
+   · 第一轮：用 _placement 中的旋转矩阵 R 和平移向量 T，
+     将零件局部坐标系下的重心和转动惯量变换到根产品坐标系。
+   · 第二轮：对每个产品 / 部件节点，按平行轴定理汇总子孙零件的质量特性，
+     计算该节点在根坐标系下的总质量、总重心和总转动惯量。
+
+单位制
+------
+  质量   ：g
+  长度   ：mm
+  惯量   ：g·mm²
+整个流程使用统一单位，不做中间转换。
 """
 
 import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from catia_copilot.constants import FILENAME_NOT_FOUND
+from catia_copilot.constants import FILENAME_NOT_FOUND, FILENAME_UNSAVED
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Pure-Python 4×4 matrix helpers (no numpy dependency)
+# 纯 Python 4×4 齐次变换矩阵辅助函数（不依赖 numpy）
+#
+# 矩阵布局（行主序，4 行 4 列）：
+#   [ R[0][0]  R[0][1]  R[0][2]  Tx ]
+#   [ R[1][0]  R[1][1]  R[1][2]  Ty ]
+#   [ R[2][0]  R[2][1]  R[2][2]  Tz ]
+#   [    0        0        0      1  ]
+# 其中 R 为 3×3 旋转矩阵，T = (Tx, Ty, Tz) 为平移向量。
+#
+# 变换关系：P_parent = R @ P_local + T
+# 累积（父×子）：M_abs = M_parent @ M_local
 # ---------------------------------------------------------------------------
 
 def _identity_4x4() -> list[list[float]]:
-    """返回 4×4 单位矩阵。"""
+    """返回 4×4 单位矩阵（对应"无旋转、无平移"的恒等变换）。"""
     return [
         [1.0, 0.0, 0.0, 0.0],
         [0.0, 1.0, 0.0, 0.0],
@@ -30,7 +65,11 @@ def _identity_4x4() -> list[list[float]]:
 
 
 def _mat4_mul(A: list[list[float]], B: list[list[float]]) -> list[list[float]]:
-    """4×4 矩阵乘法，返回 A @ B。"""
+    """4×4 矩阵乘法，返回 C = A @ B。
+
+    用于将两个齐次变换矩阵复合：若 A 描述"父→祖父"变换，
+    B 描述"子→父"变换，则 A @ B 描述"子→祖父"变换。
+    """
     C = [[0.0] * 4 for _ in range(4)]
     for i in range(4):
         for j in range(4):
@@ -39,20 +78,51 @@ def _mat4_mul(A: list[list[float]], B: list[list[float]]) -> list[list[float]]:
     return C
 
 
+def _row_inertia_to_root(row: dict) -> list[list[float]]:
+    """将行的 _mass_props.inertia（零件局部坐标系）旋转变换到根坐标系。
+
+    公式：I_root = R @ I_local @ R^T
+    其中 R 为从行的 _placement 矩阵中提取的 3×3 旋转子矩阵。
+
+    若 _placement 或 _mass_props 缺失，返回 3×3 零矩阵。
+    """
+    placement = row.get("_placement")
+    mp = row.get("_mass_props")
+    if placement is None or mp is None:
+        return [[0.0] * 3 for _ in range(3)]
+    I_local = mp.get("inertia", [[0.0] * 3 for _ in range(3)])
+    R  = [[placement[i][j] for j in range(3)] for i in range(3)]
+    RT = [[R[j][i] for j in range(3)] for i in range(3)]          # R^T
+    RI = [
+        [sum(R[i][k] * I_local[k][j] for k in range(3)) for j in range(3)]
+        for i in range(3)
+    ]
+    I_root = [
+        [sum(RI[i][k] * RT[k][j] for k in range(3)) for j in range(3)]
+        for i in range(3)
+    ]
+    return I_root
+
+
 def _position_to_mat4(product) -> list[list[float]]:
-    """从 pycatia Product 包装对象的 position.get_components() 读取位置，返回 4×4 矩阵。
+    """从 pycatia Product 包装对象的 position.get_components() 读取位置，返回 4×4 变换矩阵。
 
     接收 pycatia Product 包装对象（非 com_object），无参调用
     ``product.position.get_components()``，捕获返回的 12 个 double 分量。
-    存储约定（列主序）：
-      arr[0..2]  = 旋转矩阵第一列 (R[:,0])
-      arr[3..5]  = 旋转矩阵第二列 (R[:,1])
-      arr[6..8]  = 旋转矩阵第三列 (R[:,2])
-      arr[9..11] = 平移向量 T
 
-    变换关系：P_parent = R @ P_local + T
+    CATIA Position.GetComponents 数组布局（**列主序**，共 12 个元素）：
+      arr[ 0.. 2] = X 轴方向向量（旋转矩阵第 1 列）
+      arr[ 3.. 5] = Y 轴方向向量（旋转矩阵第 2 列）
+      arr[ 6.. 8] = Z 轴方向向量（旋转矩阵第 3 列）
+      arr[ 9..11] = 原点平移向量 T = (Tx, Ty, Tz)
 
-    若调用失败，返回 4×4 单位矩阵（视作零件位于父坐标系原点）。
+    组装为行主序 4×4 矩阵：
+      mat[i][j] 对应旋转矩阵第 i 行、第 j 列，即 arr[j*3 + i]
+      mat[i][3] 对应平移分量 arr[9 + i]
+
+    变换含义：P_parent = R @ P_local + T
+
+    若调用失败或返回值无效，返回 4×4 单位矩阵（等价于零件位于父坐标系原点，无旋转）。
     """
     try:
         product_name = getattr(product, "name", repr(product))
@@ -71,6 +141,11 @@ def _position_to_mat4(product) -> list[list[float]]:
         )
         return _identity_4x4()
 
+    # 将列主序 12 元素数组重新排列为行主序 4×4 矩阵：
+    #   第 0 行 = [arr[0], arr[3], arr[6], arr[ 9]]  ← X 分量
+    #   第 1 行 = [arr[1], arr[4], arr[7], arr[10]]  ← Y 分量
+    #   第 2 行 = [arr[2], arr[5], arr[8], arr[11]]  ← Z 分量
+    #   第 3 行 = [    0,      0,      0,      1  ]  ← 齐次行
     mat = [
         [arr[0], arr[3], arr[6], arr[9]],
         [arr[1], arr[4], arr[7], arr[10]],
@@ -84,25 +159,35 @@ def _position_to_mat4(product) -> list[list[float]]:
 
 
 # ---------------------------------------------------------------------------
-# SPA measurement helpers
+# 质量特性读取辅助函数
 # ---------------------------------------------------------------------------
 
 
 def _try_mp_params(part_com, label: str = "") -> dict | None:
-    """读取由 create_inertia_relations.catvbs 写入的 MP_* 用户参数。
+    """读取由 create_mass_relations.catvbs 写入的 MP_* 用户参数。
 
-    参数单位与程序内部单位一致（无需转换）：
-      - MP_Mass_g                   → g（直接使用）
-      - MP_COGx/y/z_mm              → mm（直接使用）
-      - MP_Ixx/yy/zz/xy/xz/yz_gmm2 → g·mm²（直接使用）
+    create_mass_relations.catvbs 在零件文档中以"用户参数"的形式存储质量特性，
+    参数名与程序内部单位制严格一致，无需换算：
+      MP_Mass_g                   → 质量，g
+      MP_COGx/y/z_mm              → 重心坐标（零件局部坐标系），mm
+      MP_Ixx/yy/zz/xy/xz/yz_gxmm2 → 重心处转动惯量（零件局部坐标轴），g·mm²
 
-    返回与 _measure_part_mass_props 相同结构的字典，或 None（参数不存在或质量≤0）。
+    返回值结构（与 _measure_part_mass_props 一致）：
+      {
+        "weight":  float,               # 质量，g
+        "cog":     [x, y, z],           # 重心，mm（局部坐标系）
+        "inertia": [[Ixx, Ixy, Ixz],    # 转动惯量张量（3×3 对称矩阵），g·mm²
+                    [Ixy, Iyy, Iyz],    # 注意：Ixy=Iyx、Ixz=Izx、Iyz=Izy（对称性）
+                    [Ixz, Iyz, Izz]],
+      }
+    若 MP_Mass_g 参数不存在或质量≤0，返回 None（触发路径 2）。
     """
     tag = f"[MP] {label} " if label else "[MP] "
     try:
         params = part_com.Parameters
 
         def _get(name: str) -> float | None:
+            """按参数名读取单个用户参数值，失败返回 None。"""
             try:
                 return float(params.Item(name).Value)
             except Exception:
@@ -110,22 +195,39 @@ def _try_mp_params(part_com, label: str = "") -> dict | None:
 
         mass_g = _get("MP_Mass_g")
         if mass_g is None or mass_g <= 0.0:
+            # 质量参数不存在或无效，整体放弃（后续由路径 2 处理）
             logger.debug(f"{tag}MP_Mass_g 不存在或为零，跳过")
             return None
 
+        # 重心坐标——缺失时默认 0（位于零件原点）
         cogx = _get("MP_COGx_mm") or 0.0
         cogy = _get("MP_COGy_mm") or 0.0
         cogz = _get("MP_COGz_mm") or 0.0
-        ixx  = _get("MP_Ixx_gmm2") or 0.0
-        iyy  = _get("MP_Iyy_gmm2") or 0.0
-        izz  = _get("MP_Izz_gmm2") or 0.0
-        ixy  = _get("MP_Ixy_gmm2") or 0.0
-        ixz  = _get("MP_Ixz_gmm2") or 0.0
-        iyz  = _get("MP_Iyz_gmm2") or 0.0
+
+        # 转动惯量张量分量
+        # 对角分量（主惯量）——先保留原始 None 标记，用于判断参数是否缺失
+        ixx_raw = _get("MP_Ixx_gxmm2")
+        iyy_raw = _get("MP_Iyy_gxmm2")
+        izz_raw = _get("MP_Izz_gxmm2")
+
+        # 若三个对角分量全部缺失（参数从未被 VBS 写入），
+        # 返回 None 以触发路径 2（运行 VBS 创建并评估惯量公式）。
+        if ixx_raw is None and iyy_raw is None and izz_raw is None:
+            logger.debug(f"{tag}惯量参数（MP_Ixx/Iyy/Izz_gxmm2）不存在，返回 None 触发 VBS 绑定")
+            return None
+
+        ixx = ixx_raw if ixx_raw is not None else 0.0
+        iyy = iyy_raw if iyy_raw is not None else 0.0
+        izz = izz_raw if izz_raw is not None else 0.0
+        # 非对角分量（惯性积，通常为负值）
+        ixy  = _get("MP_Ixy_gxmm2") or 0.0
+        ixz  = _get("MP_Ixz_gxmm2") or 0.0
+        iyz  = _get("MP_Iyz_gxmm2") or 0.0
 
         return {
             "weight":  mass_g,
             "cog":     [cogx, cogy, cogz],
+            # 构建 3×3 对称惯量张量：上三角 = 下三角（Iij = Iji）
             "inertia": [
                 [ixx, ixy, ixz],
                 [ixy, iyy, iyz],
@@ -137,40 +239,60 @@ def _try_mp_params(part_com, label: str = "") -> dict | None:
         return None
 
 
-def _run_inertia_vbs_and_read(
+def _run_mass_vbs_and_read(
     doc_com, part_com, label: str = "", part_number: str = ""
 ) -> dict | None:
-    """若 MP_* 参数不存在，自动运行 create_inertia_relations.catvbs，
-    再读取写入的 MP_* 参数。
+    """若 MP_* 参数尚不存在，自动运行 create_mass_relations.catvbs，
+    再尝试读取 VBS 写入的 MP_* 参数。
 
-    VBS 脚本路径：``macros/create_inertia_relations.catvbs``（相对于项目根）。
-    若零件没有 "惯量包络体.1\\质量"（Keep 测量）参数，脚本会静默退出，不弹框。
+    工作流程：
+      1. 定位 ``macros/create_mass_relations.catvbs`` 脚本文件；
+      2. 激活目标零件文档（doc_com.Activate()），确保 CATIA 聚焦到正确文档；
+      3. 通过 ``ExecuteScript`` 调用 VBS，将零件号 (part_number) 作为
+         ``iParameters`` 传入，VBS 按此在已打开的文档中定位并激活目标零件；
+      4. VBS 运行完毕后再次调用 ``_try_mp_params()`` 读取写入的参数。
+
+    注意事项：
+      · 若目标零件未包含 "惯量包络体.1\\质量" 这个 Keep 测量参数，
+        VBS 会静默退出，不弹出任何对话框，本函数最终返回 None。
+      · part_number 使用零件号而非文件路径，是为了兼容"文档尚未保存"的情形。
 
     参数：
-        doc_com:     COM 对象（PartDocument 层）。
+        doc_com:     COM 对象（PartDocument 层），用于激活文档并执行脚本。
         part_com:    COM 对象（Part 层），用于读取 MP_* 参数。
-        label:       调试标签，用于 debug 日志。
-        part_number: 零件号（PartNumber），作为 iParameter[0] 传给 VBS，
-                     VBS 按此在已打开文档中定位并激活目标零件文档。
-                     为空时 VBS 使用当前活动文档。
+        label:       调试标签，用于 debug 日志前缀。
+        part_number: 零件号（PartNumber），作为 iParameter[0] 传给 VBS。
     """
     tag = f"[MP] {label} " if label else "[MP] "
 
     try:
         from catia_copilot.utils import resource_path
-        vbs_path = resource_path("macros/create_inertia_relations.catvbs")
+        vbs_path = resource_path("macros/create_mass_relations.catvbs")
         if not vbs_path.is_file():
             logger.debug(f"{tag}找不到 VBS 文件: {vbs_path}，跳过")
             return None
 
         logger.debug(f"{tag}激活零件文档并运行 {vbs_path.name}，part_number={part_number!r}")
         doc_com.Activate()
-        # 将零件号作为 iParameter 传给 VBS，让脚本按 PartNumber 定位目标文档。
-        # 使用 PartNumber 而非文件路径，可避免受零件未保存（路径无效）的影响。
-        # ExecuteScript 参数：(脚本目录, 语言类型=1表示VBScript, 脚本文件名, 入口Sub名, 参数数组)
+
+        # ExecuteScript 参数说明：
+        #   参数 0：脚本所在目录（str）
+        #   参数 1：语言类型（1 = VBScript）
+        #   参数 2：脚本文件名（不含路径）
+        #   参数 3：入口 Sub 名称（"CATMain"）
+        #   参数 4：传递给 Sub 的参数数组（iParameters）
+        # 此处将零件号作为 iParameters 传入，让 VBS 按 PartNumber 定位目标文档。
         doc_com.Application.SystemService.ExecuteScript(
             str(vbs_path.parent), 1, vbs_path.name, "CATMain", [part_number]
         )
+
+        # 强制更新零件，确保 VBS 新建的公式立即完成求值，
+        # 否则 MP_* 参数可能仍保持初始值 0（公式延迟计算）。
+        try:
+            part_com.Update()
+            logger.debug(f"{tag}Part.Update() 完成")
+        except Exception as e_upd:
+            logger.warning(f"{tag}Part.Update() 失败，惯量参数可能仍为初始值: {e_upd}")
 
         result = _try_mp_params(part_com, label)
         if result is not None:
@@ -186,10 +308,10 @@ def _run_inertia_vbs_and_read(
 def _measure_part_mass_props(doc_com, part_com, part_number: str = "") -> dict | None:
     """测量零件质量特性。
 
-    所有返回值均使用 **g / mm / g·mm²** 单位制（与 create_inertia_relations.catvbs 一致）。
+    所有返回值均使用 **g / mm / g·mm²** 单位制（与 create_mass_relations.catvbs 一致）。
 
     路径优先级：
-      1. **MP_* 参数**：直接读取由 ``create_inertia_relations.catvbs`` 写入的
+      1. **MP_* 参数**：直接读取由 ``create_mass_relations.catvbs`` 写入的
          ``MP_Mass_g``、``MP_COGx/y/z_mm``、``MP_Ixx/yy/zz/xy/xz/yz_gmm2`` 参数。
       2. **VBS 自动绑定**：若路径 1 失败，自动运行 VBS 脚本尝试创建 MP_* 参数后
          再读取。若零件无 Keep 惯量测量，脚本会静默退出，不阻塞。
@@ -209,203 +331,22 @@ def _measure_part_mass_props(doc_com, part_com, part_number: str = "") -> dict |
       }
     若所有路径均失败则返回 None。
     """
-    # ── 路径 1：读取 MP_* 用户参数（由 create_inertia_relations.catvbs 写入）──────
+    # ── 路径 1：读取 MP_* 用户参数（由 create_mass_relations.catvbs 写入）──────
     _mp = _try_mp_params(part_com, "直接读取")
     if _mp is not None:
         return _mp
 
     # ── 路径 2：自动运行 VBS 绑定脚本（要求零件已有 Keep 测量）─────────────────────
-    _mp = _run_inertia_vbs_and_read(doc_com, part_com, "VBS绑定", part_number)
+    _mp = _run_mass_vbs_and_read(doc_com, part_com, "VBS绑定", part_number)
     if _mp is not None:
         return _mp
 
-    total_mass = 0.0
-    weighted_cog = [0.0, 0.0, 0.0]
-    # 转动惯量（在零件原点处，零件局部坐标轴）
-    I_at_origin = [[0.0] * 3 for _ in range(3)]
-
-    def _get_cog(meas, label: str) -> list[float]:
-        """尝试从 Measurable 读取重心坐标，返回 [x, y, z]（失败时返回全零）。"""
-        try:
-            cog_arr = [0.0, 0.0, 0.0]
-            meas.GetCOG(cog_arr)
-            logger.debug(f"[SPA]   {label} GetCOG(arr) = {cog_arr}")
-            return list(cog_arr)
-        except Exception as e1:
-            logger.debug(f"[SPA]   {label} GetCOG(arr) 失败: {e1}，尝试无参")
-        try:
-            cog_result = meas.GetCOG()
-            cog = list(cog_result) if cog_result else [0.0, 0.0, 0.0]
-            logger.debug(f"[SPA]   {label} GetCOG() 无参 = {cog}")
-            return cog
-        except Exception as e2:
-            logger.debug(f"[SPA]   {label} GetCOG() 无参也失败: {e2}")
-        return [0.0, 0.0, 0.0]
-
-    def _get_inertia_matrix(meas, label: str) -> list[float]:
-        """尝试从 Measurable 读取转动惯量矩阵（9 元素），失败时返回全零。"""
-        try:
-            inertia_arr = [0.0] * 9
-            meas.GetInertiaMatrix(inertia_arr)
-            logger.debug(f"[SPA]   {label} GetInertiaMatrix(arr) = {inertia_arr}")
-            return list(inertia_arr)
-        except Exception as e1:
-            logger.debug(f"[SPA]   {label} GetInertiaMatrix(arr) 失败: {e1}，尝试无参")
-        try:
-            inertia_result = meas.GetInertiaMatrix()
-            inertia = list(inertia_result) if inertia_result else [0.0] * 9
-            logger.debug(f"[SPA]   {label} GetInertiaMatrix() 无参 = {inertia}")
-            return inertia
-        except Exception as e2:
-            logger.debug(f"[SPA]   {label} GetInertiaMatrix() 无参也失败: {e2}")
-        return [0.0] * 9
-
-    def _accumulate(mass: float, cog: list[float], inertia_9: list[float]):
-        """将一个 Body 的质量特性累积到 total_mass / weighted_cog / I_at_origin。"""
-        nonlocal total_mass
-        I_cog = [
-            [inertia_9[0], inertia_9[1], inertia_9[2]],
-            [inertia_9[3], inertia_9[4], inertia_9[5]],
-            [inertia_9[6], inertia_9[7], inertia_9[8]],
-        ]
-        r = cog
-        r2 = r[0]**2 + r[1]**2 + r[2]**2
-        for row in range(3):
-            for col in range(3):
-                delta = (1.0 if row == col else 0.0) * r2 - r[row] * r[col]
-                I_at_origin[row][col] += I_cog[row][col] + mass * delta
-        total_mass += mass
-        for j in range(3):
-            weighted_cog[j] += mass * cog[j]
-
-    # ── 逐一测量各 Body ───────────────────────────────────────────────────
-    for i in range(1, body_count + 1):
-        try:
-            body = bodies.Item(i)
-            try:
-                body_name = body.Name
-            except Exception:
-                body_name = f"Body_{i}"
-            label = f"Body_{i}({body_name})"
-            logger.debug(f"[SPA] {label} COM 类型: {type(body).__name__}")
-
-            meas, meas_src = _get_measurable(body, label)
-            if meas is None:
-                logger.debug(f"[SPA]   {label} 无法获取 Measurable，跳过")
-                continue
-
-            # ── 读取质量 ─────────────────────────────────────────────
-            mass = _read_mass(meas, label)
-
-            if mass is None or mass <= 0.0:
-                # ── 回退：体积 × 密度 ───────────────────────────────────
-                logger.debug(f"[SPA]   {label} 质量获取失败，尝试体积法回退")
-                vol = _read_volume(meas, label)
-
-                # 密度优先使用全局推算值；若仍为 None，尝试从本 Body 的
-                # Measurable 直接读取（材质仅应用于单个 Body 的场景）
-                effective_density = _part_density
-                if effective_density is None:
-                    effective_density = _read_density(meas, label)
-
-                if vol is not None and vol > 0.0 and effective_density is not None and effective_density > 0.0:
-                    mass = effective_density * vol
-                    logger.debug(
-                        f"[SPA]   {label} 体积法质量"
-                        f" = {effective_density:.6e} × {vol:.6g} = {mass:.6g} kg"
-                    )
-                else:
-                    logger.debug(
-                        f"[SPA]   {label} 体积法也无法获取质量"
-                        f"（vol={vol}, density={effective_density}），尝试 GetCOG 诊断探针"
-                    )
-                    # ── GetCOG 诊断探针 ─────────────────────────────────────
-                    # GetCOG 是纯几何量（几何重心），不依赖材质定义，可能在
-                    # GetMass / GetVolume 均失败的环境下仍然有效。
-                    # 此处仅探测并记录结果，以便下一步判断 SPA Measurable
-                    # 接口是否可用于几何属性。
-                    diag_cog = _get_cog(meas, label)
-                    if any(v != 0.0 for v in diag_cog):
-                        logger.debug(
-                            f"[SPA]   {label} GetCOG 探针成功: {diag_cog}"
-                            f"（但无质量数据，跳过累积）"
-                        )
-                    else:
-                        logger.debug(
-                            f"[SPA]   {label} GetCOG 探针返回全零或失败，跳过"
-                        )
-                    continue
-
-            # ── 读取重心 ───────────────────────────────────────────────
-            cog = _get_cog(meas, label)
-
-            # ── 读取转动惯量 ───────────────────────────────────────────
-            inertia_9 = _get_inertia_matrix(meas, label)
-
-            _accumulate(mass, cog, inertia_9)
-
-        except Exception as e:
-            logger.debug(f"[SPA] 访问 Body {i} 失败: {e}")
-
-    logger.debug(f"[SPA] 所有 Body 累计质量: {total_mass:.3g} kg")
-
-    if total_mass <= 0.0:
-        return {
-            "weight": 0.0,
-            "cog":    [0.0, 0.0, 0.0],
-            "inertia": [[0.0] * 3 for _ in range(3)],
-        }
-
-    # 计算零件重心（局部坐标系）
-    part_cog = [weighted_cog[j] / total_mass for j in range(3)]
-
-    # 平行轴定理：将转动惯量从原点移回重心
-    r = part_cog
-    r2 = r[0]**2 + r[1]**2 + r[2]**2
-    I_at_cog = [[0.0] * 3 for _ in range(3)]
-    for row in range(3):
-        for col in range(3):
-            delta = (1.0 if row == col else 0.0) * r2 - r[row] * r[col]
-            I_at_cog[row][col] = I_at_origin[row][col] - total_mass * delta
-
-    logger.debug(
-        f"[SPA] 最终结果: weight={total_mass * 1000.0:.3g}g, "
-        f"cog=[{', '.join(f'{v:.3g}' for v in part_cog)}]mm"
-    )
-    # SPA 返回值单位：质量 kg、坐标 mm、惯量 kg·mm²。
-    # 统一换算为程序内部单位 g / mm / g·mm²（质量和惯量各乘以 1000，坐标不变）。
-    return {
-        "weight":  total_mass * 1000.0,
-        "cog":     part_cog,
-        "inertia": [[I_at_cog[r][c] * 1000.0 for c in range(3)] for r in range(3)],
-    }
+    return None
 
 
 # ---------------------------------------------------------------------------
 # Post-processing helpers
 # ---------------------------------------------------------------------------
-
-def _row_inertia_to_root(row: dict) -> list[list[float]]:
-    """从行的 ``_mass_props`` 局部惯量和 ``_placement`` 变换矩阵，
-    计算并返回根坐标系下的惯量张量（3×3 列表）。
-
-    若无有效 placement，直接返回局部惯量。
-    """
-    mp      = row.get("_mass_props") or {}
-    I_local = mp.get("inertia", [[0.0] * 3 for _ in range(3)])
-    placement = row.get("_placement")
-    if placement is None:
-        return I_local
-    R  = [[placement[i][j] for j in range(3)] for i in range(3)]
-    RT = [[R[j][i] for j in range(3)] for i in range(3)]
-    RI = [
-        [sum(R[i][k] * I_local[k][j] for k in range(3)) for j in range(3)]
-        for i in range(3)
-    ]
-    return [
-        [sum(RI[i][k] * RT[k][j] for k in range(3)) for j in range(3)]
-        for i in range(3)
-    ]
 
 
 def _post_process_rows(rows: list[dict]) -> None:
@@ -427,7 +368,21 @@ def _post_process_rows(rows: list[dict]) -> None:
     """
     n = len(rows)
 
-    # ── 第一轮：零件行 → 变换到根坐标系 ─────────────────────────────────────
+    # ── 第一轮：零件行 → 将局部坐标系质量特性变换到根产品坐标系 ──────────────────────
+    #
+    # 每个零件行的 _placement 字段存储了"零件局部→根"的 4×4 齐次变换矩阵，
+    # 其中左上 3×3 块为旋转矩阵 R，右上 3×1 列为平移向量 T。
+    #
+    # （一）重心坐标变换
+    #   零件局部坐标系下的重心 r_local，变换到根坐标系：
+    #     r_root = R @ r_local + T
+    #
+    # （二）转动惯量旋转变换
+    #   转动惯量张量在不同坐标系下通过相似变换（旋转）互换：
+    #     I_root = R @ I_local @ R^T
+    #   注意：此处仅做坐标轴旋转，不做平移（平移修正由第二轮平行轴定理完成）。
+    #   I_local 是在零件重心处、沿零件局部坐标轴方向的惯量；
+    #   I_root  是在零件重心处、沿根产品坐标轴方向的惯量。
     for row in rows:
         if row.get("Type") != "零件":
             continue
@@ -438,19 +393,21 @@ def _post_process_rows(rows: list[dict]) -> None:
         if placement is None:
             continue
 
+        # 从 4×4 矩阵中提取 3×3 旋转矩阵 R 和平移向量 T
         R = [[placement[i][j] for j in range(3)] for i in range(3)]
         T = [placement[0][3], placement[1][3], placement[2][3]]
 
-        # 重心变换：r_root = R @ r_local + T
+        # ── （一）重心坐标变换：r_root[i] = Σ_k(R[i][k] * r_local[k]) + T[i] ──
         cog_local = mp.get("cog", [0.0, 0.0, 0.0])
         cog_root  = [
             sum(R[i][k] * cog_local[k] for k in range(3)) + T[i]
             for i in range(3)
         ]
 
-        # 惯量旋转：I_root = R @ I_local @ R^T（在重心处，仅旋转轴方向）
+        # ── （二）惯量旋转：I_root = R @ I_local @ R^T ────────────────────────
+        #   分两步计算：先求 RI = R @ I_local，再求 RI @ R^T
         I_local = mp.get("inertia", [[0.0] * 3 for _ in range(3)])
-        RT = [[R[j][i] for j in range(3)] for i in range(3)]
+        RT = [[R[j][i] for j in range(3)] for i in range(3)]  # R^T（转置）
         RI = [
             [sum(R[i][k] * I_local[k][j] for k in range(3)) for j in range(3)]
             for i in range(3)
@@ -460,25 +417,47 @@ def _post_process_rows(rows: list[dict]) -> None:
             for i in range(3)
         ]
 
-        # 更新显示字段为根坐标系值
-        row["CogX"] = cog_root[0]
-        row["CogY"] = cog_root[1]
-        row["CogZ"] = cog_root[2]
-        row["Ixx"]  = I_root[0][0]
-        row["Iyy"]  = I_root[1][1]
-        row["Izz"]  = I_root[2][2]
-        row["Ixy"]  = I_root[0][1]
-        row["Ixz"]  = I_root[0][2]
-        row["Iyz"]  = I_root[1][2]
+        # 将零件自身坐标系下的值写入显示字段（汇总BOM展示及后续缩放用）
+        # 注：汇总BOM 的单行显示以零件自身坐标系为准；
+        #     层级BOM 在 _get_display_rows() 中会以 _root_mp 值覆盖这些字段；
+        #     根坐标系数据缓存于 _root_mp，供第二轮汇总和底部计算面板使用。
+        row["CogX"] = cog_local[0]
+        row["CogY"] = cog_local[1]
+        row["CogZ"] = cog_local[2]
+        row["Ixx"]  = I_local[0][0]
+        row["Iyy"]  = I_local[1][1]
+        row["Izz"]  = I_local[2][2]
+        row["Ixy"]  = I_local[0][1]
+        row["Ixz"]  = I_local[0][2]
+        row["Iyz"]  = I_local[1][2]
 
-        # 缓存根坐标系数据，供父级汇总及编辑后重新写入使用
+        # 缓存根坐标系数据到 _root_mp，供第二轮汇总及底部计算面板使用
         row["_root_mp"] = {
             "weight":  mp.get("weight", 0.0),
             "cog":     cog_root,
             "inertia": I_root,
         }
 
-    # ── 第二轮：产品/部件行 → 汇总子孙零件 ───────────────────────────────────
+    # ── 第二轮：产品/部件行 → 按平行轴定理汇总子孙零件的质量特性 ──────────────────
+    #
+    # 算法步骤（所有计算均在根坐标系下进行）：
+    #
+    # 步骤 1：汇总总质量及质量×重心
+    #   M = Σ m_i
+    #   Σ(m_i * r_i)  （分 x/y/z 三分量分别累加）
+    #
+    # 步骤 2：以平行轴定理将各零件惯量移到根坐标原点
+    #   I_i_at_O = I_i_cog + m_i * (|r_i|² * E - r_i ⊗ r_i)
+    #     其中：E 为 3×3 单位矩阵；r_i ⊗ r_i 为外积（秩-1 矩阵）
+    #   I_total_at_O = Σ I_i_at_O
+    #
+    # 步骤 3：计算总重心
+    #   r_c = Σ(m_i * r_i) / M
+    #
+    # 步骤 4：以平行轴定理从根原点移回总重心
+    #   I_final = I_total_at_O - M * (|r_c|² * E - r_c ⊗ r_c)
+    #
+    # 注：步骤 2 和步骤 4 都用到了平行轴定理（Steiner 定理）。
     for i in range(n):
         row = rows[i]
         if row.get("Type") not in ("产品", "部件"):
@@ -486,36 +465,43 @@ def _post_process_rows(rows: list[dict]) -> None:
 
         level = int(row.get("Level", 0))
 
-        # 收集当前节点子树内所有已成功测量的零件的根坐标系质量特性
+        # 收集当前节点子树内所有已成功测量零件的根坐标系质量特性（_root_mp）
+        # 子树范围：行索引 i+1 开始，直到遇到层级 ≤ 当前层级的行为止
         child_parts: list[dict] = []
         for j in range(i + 1, n):
             desc = rows[j]
             if int(desc.get("Level", 0)) <= level:
-                break  # 已超出子树范围
+                break  # 已超出子树范围，停止遍历
             rmp = desc.get("_root_mp")
             if rmp and float(rmp.get("weight", 0.0)) > 0.0:
                 child_parts.append(rmp)
 
         if not child_parts:
+            # 子树内无有效零件质量数据，跳过本节点
             continue
 
-        # 汇总（与 rollup_mass_properties 算法一致）
-        M_total   = 0.0
-        sum_mr    = [0.0, 0.0, 0.0]
+        # ── 步骤 1 + 2：累积质量、质量×重心，同时将各零件惯量移到根坐标原点 ──
+        M_total   = 0.0        # 总质量，g
+        sum_mr    = [0.0, 0.0, 0.0]   # Σ(m_i * r_i)，g·mm
+        # I_at_orig：所有零件惯量移至根原点后的总和，g·mm²
         I_at_orig = [[0.0] * 3 for _ in range(3)]
 
         for rmp in child_parts:
             m  = float(rmp.get("weight", 0.0))
             if m <= 0.0:
                 continue
-            r  = rmp.get("cog", [0.0, 0.0, 0.0])
-            Ic = rmp.get("inertia", [[0.0] * 3 for _ in range(3)])
-            # 平行轴定理：从零件重心移到根原点
-            r2 = sum(r[k] ** 2 for k in range(3))
+            r  = rmp.get("cog", [0.0, 0.0, 0.0])    # 零件重心（根坐标系），mm
+            Ic = rmp.get("inertia", [[0.0] * 3 for _ in range(3)])  # 零件重心处惯量
+
+            # 平行轴定理（从零件重心 → 根坐标原点）：
+            #   I_i_at_O[ii][jj] = Ic[ii][jj] + m * (|r|² * δ[ii][jj] - r[ii]*r[jj])
+            #   δ 为 Kronecker delta，即当 ii==jj 时为 1，否则为 0
+            r2 = sum(r[k] ** 2 for k in range(3))  # |r|²
             for ii in range(3):
                 for jj in range(3):
                     delta = (1.0 if ii == jj else 0.0) * r2 - r[ii] * r[jj]
                     I_at_orig[ii][jj] += Ic[ii][jj] + m * delta
+
             M_total += m
             for k in range(3):
                 sum_mr[k] += m * r[k]
@@ -523,9 +509,94 @@ def _post_process_rows(rows: list[dict]) -> None:
         if M_total <= 0.0:
             continue
 
+        # ── 步骤 3：计算总重心 r_c = Σ(m_i * r_i) / M ───────────────────────
         cog_total = [sum_mr[k] / M_total for k in range(3)]
 
-        # 平行轴定理：从根原点移回汇总重心
+        # ── 步骤 4：以平行轴定理从根原点移回总重心 ─────────────────────────────
+        #   I_final[ii][jj] = I_at_orig[ii][jj] - M * (|r_c|² * δ[ii][jj] - r_c[ii]*r_c[jj])
+        rc  = cog_total
+        rc2 = sum(rc[k] ** 2 for k in range(3))  # |r_c|²
+        I_final = [[0.0] * 3 for _ in range(3)]
+        for ii in range(3):
+            for jj in range(3):
+                delta = (1.0 if ii == jj else 0.0) * rc2 - rc[ii] * rc[jj]
+                I_final[ii][jj] = I_at_orig[ii][jj] - M_total * delta
+
+        # 将汇总结果写入本节点的显示字段
+        row["Weight"] = M_total
+        row["CogX"]   = cog_total[0]
+        row["CogY"]   = cog_total[1]
+        row["CogZ"]   = cog_total[2]
+        row["Ixx"]    = I_final[0][0]
+        row["Iyy"]    = I_final[1][1]
+        row["Izz"]    = I_final[2][2]
+        row["Ixy"]    = I_final[0][1]
+        row["Ixz"]    = I_final[0][2]
+        row["Iyz"]    = I_final[1][2]
+
+
+def recompute_product_rows(rows: list[dict]) -> None:
+    """重新计算所有产品/部件行的汇总质量特性。
+
+    与 ``_post_process_rows()`` 第二轮逻辑相同，但可在初始加载后独立调用——
+    例如用户在对话框中手动修改了零件重量（同时更新了 ``_root_mp``），
+    点击"计算"按钮后需要刷新产品/部件行的汇总结果。
+
+    处理流程（与 _post_process_rows 第二轮完全一致）：
+      · 遍历 rows，对每个产品/部件节点，收集子树内全部零件的 ``_root_mp``；
+      · 按平行轴定理汇总质量、重心和转动惯量；
+      · 将结果写回该节点的显示字段（Weight / CogX/Y/Z / Ixx–Iyz）。
+    """
+    n = len(rows)
+    for i in range(n):
+        row = rows[i]
+        if row.get("Type") not in ("产品", "部件"):
+            continue
+
+        level = int(row.get("Level", 0))
+
+        # 收集子树内全部零件的根坐标系质量特性
+        child_parts: list[dict] = []
+        for j in range(i + 1, n):
+            desc = rows[j]
+            if int(desc.get("Level", 0)) <= level:
+                break
+            rmp = desc.get("_root_mp")
+            if rmp and float(rmp.get("weight", 0.0)) > 0.0:
+                child_parts.append(rmp)
+
+        if not child_parts:
+            continue
+
+        # 步骤 1 + 2：累积质量、质量×重心，同时将各零件惯量移到根坐标原点
+        M_total   = 0.0
+        sum_mr    = [0.0, 0.0, 0.0]
+        I_at_orig = [[0.0] * 3 for _ in range(3)]
+
+        for rmp in child_parts:
+            m = float(rmp.get("weight", 0.0))
+            if m <= 0.0:
+                continue
+            r  = rmp.get("cog", [0.0, 0.0, 0.0])
+            Ic = rmp.get("inertia", [[0.0] * 3 for _ in range(3)])
+
+            r2 = sum(r[k] ** 2 for k in range(3))
+            for ii in range(3):
+                for jj in range(3):
+                    delta = (1.0 if ii == jj else 0.0) * r2 - r[ii] * r[jj]
+                    I_at_orig[ii][jj] += Ic[ii][jj] + m * delta
+
+            M_total += m
+            for k in range(3):
+                sum_mr[k] += m * r[k]
+
+        if M_total <= 0.0:
+            continue
+
+        # 步骤 3：计算总重心
+        cog_total = [sum_mr[k] / M_total for k in range(3)]
+
+        # 步骤 4：从根原点移回总重心
         rc  = cog_total
         rc2 = sum(rc[k] ** 2 for k in range(3))
         I_final = [[0.0] * 3 for _ in range(3)]
@@ -534,6 +605,7 @@ def _post_process_rows(rows: list[dict]) -> None:
                 delta = (1.0 if ii == jj else 0.0) * rc2 - rc[ii] * rc[jj]
                 I_final[ii][jj] = I_at_orig[ii][jj] - M_total * delta
 
+        # 写回显示字段
         row["Weight"] = M_total
         row["CogX"]   = cog_total[0]
         row["CogY"]   = cog_total[1]
@@ -558,7 +630,8 @@ def collect_mass_props_rows(
 
     与 collect_bom_rows() 的关键区别：
       - **不对兄弟零件去重**——每个实例单独输出一行。
-      - 仅对类型为"零件"的叶子节点调用 SPA 测量；部件/产品节点跳过测量。
+      - 仅对类型为"零件"的叶子节点执行质量特性测量（通过 MP_* 用户参数或 VBS 绑定脚本），
+        部件/产品节点跳过测量，其质量由后处理阶段按平行轴定理汇总子树获得。
       - 每行额外包含 ``_placement`` 字段（4×4 列表），为该实例到根坐标系的变换矩阵。
 
     参数：
@@ -571,7 +644,7 @@ def collect_mass_props_rows(
         行字典列表，每行含以下键：
           Level, Type, Part Number, Filename, Nomenclature, Revision,
           Weight, CogX, CogY, CogZ, Ixx, Iyy, Izz, Ixy, Ixz, Iyz,
-          _filepath, _placement, _not_found, _unreadable, _spa_failed
+          _filepath, _placement, _not_found, _no_file, _unreadable, _meas_failed
     """
     from pycatia import catia, CatWorkModeType
     from pycatia.product_structure_interfaces.product_document import ProductDocument
@@ -608,24 +681,42 @@ def collect_mass_props_rows(
         parent_mat4: list[list[float]],
         documents,
     ) -> None:
+        """递归遍历产品树，将每个节点的质量特性信息追加到 rows。
+
+        参数：
+            product:          当前节点的 pycatia Product 对象。
+            rows:             行字典列表，结果追加于此。
+            level:            当前节点的层级深度（根节点为 0）。
+            parent_filepath:  父节点的文件路径（用于判断"嵌入式部件"）。
+            parent_mat4:      父节点到根的累积 4×4 变换矩阵。
+            documents:        CATIA Application.Documents 集合，用于查找零件文档。
+        """
         nonlocal _total_count
 
+        # 读取零件号（PartNumber）；失败时退而使用名称去掉扩展名
         try:
             pn = product.part_number
         except Exception:
             name = product.name
             pn   = name.rsplit(".", 1)[0] if "." in name else name
 
-        # 解析文件路径
+        # 解析本节点对应的磁盘文件路径（通过 COM ReferenceProduct.Parent.FullName）
         try:
             filepath = product.com_object.ReferenceProduct.Parent.FullName
         except Exception:
             filepath = ""
 
+        # filepath 为空 → CATIA 无法解析该节点的文件引用（引用丢失或文档未载入）
         not_found = not bool(filepath)
+        # filepath 非空但磁盘上不存在 → 文件尚未保存到磁盘（仍在 CATIA 内存中）
+        no_file   = bool(filepath) and not Path(filepath).exists()
 
-        # 判断节点类型 —— 依据支持文件扩展名而非子节点数量
-        # （子节点数为0的 CATProduct 也应被识别为"产品"，而非"零件"）
+        # ── 判断节点类型 ──────────────────────────────────────────────────────
+        # 规则：
+        #   1. filepath 为空             → 类型为 ""（未知/缺失）
+        #   2. 与父节点 filepath 相同    → "部件"（零件特征在同一文件中定义，即嵌入式子结构）
+        #   3. .catpart 文件             → "零件"（叶子节点，需进行质量测量）
+        #   4. .catproduct 或其他        → "产品"（中间装配节点，质量由子树汇总）
         is_embedded = (bool(filepath) and bool(parent_filepath)
                        and filepath == parent_filepath)
         if not_found:
@@ -640,16 +731,20 @@ def collect_mass_props_rows(
                 # .catproduct 或其他未知扩展名统一视为"产品"
                 node_type = "产品"
 
-        # 计算本节点到根的累积变换矩阵
+        # ── 计算本节点到根坐标系的累积变换矩阵 ──────────────────────────────
+        # local_mat4：本节点相对父节点的局部变换（由 CATIA Position 读取）
+        # abs_mat4  ：本节点到根的绝对变换 = parent_mat4 @ local_mat4
+        # 此矩阵存入 _placement 字段，后续 _post_process_rows 用它将局部质量特性变换到根系
         local_mat4 = _position_to_mat4(product)
         abs_mat4   = _mat4_mul(parent_mat4, local_mat4)
 
-        # 读取属性（仅 Nomenclature 和 Revision）
+        # ── 读取 Nomenclature / Revision 属性 ─────────────────────────────────
         is_readable = True
         nomenclature = ""
         revision     = ""
 
         if not not_found:
+            # 确保节点处于"设计模式"（非可视化/缓存模式），否则属性读取可能失败
             try:
                 current_mode = product.get_work_mode()
                 if current_mode != CatWorkModeType.DESIGN_MODE:
@@ -664,15 +759,18 @@ def collect_mass_props_rows(
                 nomenclature = _get_prop(product, "Nomenclature")
                 revision     = _get_prop(product, "Revision")
 
-        # SPA 测量（仅叶子零件）
+        # ── 质量特性测量（仅对叶子零件节点）────────────────────────────────────
+        # 测量路径：1) 读取 MP_* 用户参数；2) 自动运行 VBS 绑定脚本后再读取。
+        # 两种路径均不使用 CATIA SPA（已移除）。
         mass_props: dict | None = None
-        spa_failed = False
+        meas_failed = False
 
         if node_type == "零件" and is_readable and filepath:
             if filepath in _mass_cache:
+                # 同一文件路径已测量过（多实例复用），直接取缓存，避免重复耗时测量
                 mass_props = _mass_cache[filepath]
             else:
-                # 查找对应的文档
+                # 在已打开的文档集合中查找与本零件路径匹配的文档
                 target_doc = None
                 fp_resolved = Path(filepath).resolve()
                 for i in range(1, documents.count + 1):
@@ -686,16 +784,16 @@ def collect_mass_props_rows(
 
                 if target_doc is not None:
                     try:
-                        # 尝试获取 Part 对象（PartDocument 接口）
+                        # 通过 COM 获取 Part 对象（仅 PartDocument 拥有 .Part 属性）
                         part_doc_com  = target_doc.com_object
                         part_com      = part_doc_com.Part
                         mass_props    = _measure_part_mass_props(part_doc_com, part_com, pn)
                     except Exception as e:
                         logger.debug(f"无法测量零件 {filepath}: {e}")
                         mass_props  = None
-                        spa_failed  = True
+                        meas_failed  = True
 
-                    # ── DEBUG: 记录每个零件的测量结果概要 ─────────────────────
+                    # ── DEBUG：记录每个零件的测量结果概要 ────────────────────
                     if mass_props is not None:
                         _mp_dbg = mass_props
                         logger.debug(
@@ -707,15 +805,20 @@ def collect_mass_props_rows(
                     else:
                         logger.debug(f"[TRAV] {pn} 所有测量路径均失败")
 
+                    # 写入缓存（即使测量失败也缓存 None，防止重复尝试）
                     _mass_cache[filepath] = mass_props
                 else:
+                    # 文档未在 CATIA 中打开，无法完成测量
                     logger.debug(f"找不到已打开的文档: {filepath}")
-                    spa_failed = True
+                    meas_failed = True
 
+        # 若零件本应可测但最终无数据，标记 meas_failed（无论是找不到文档还是读参数失败）
         if mass_props is None:
-            spa_failed = spa_failed or (node_type == "零件" and is_readable and not not_found)
+            meas_failed = meas_failed or (node_type == "零件" and is_readable and not not_found)
 
-        # 组装行数据
+        # ── 组装行字典 ─────────────────────────────────────────────────────────
+        # CogX/Y/Z 和 Ixx 等此处存储的是零件局部坐标系下的原始测量值；
+        # _post_process_rows() 将在遍历结束后统一将其变换到根坐标系。
         mp = mass_props or {}
         cog = mp.get("cog", [0.0, 0.0, 0.0])
         inertia = mp.get("inertia", [[0.0]*3 for _ in range(3)])
@@ -724,7 +827,10 @@ def collect_mass_props_rows(
             "Level":        level,
             "Type":         node_type,
             "Part Number":  pn,
-            "Filename":     Path(filepath).stem if filepath else FILENAME_NOT_FOUND,
+            # Filename 三态：文件路径为空 → "未检索到"；路径非空但磁盘不存在 → "未保存"；正常 → 文件名（不含扩展名）
+            "Filename":     (FILENAME_UNSAVED   if no_file
+                             else Path(filepath).stem if filepath
+                             else FILENAME_NOT_FOUND),
             "Nomenclature": nomenclature,
             "Revision":     revision,
             "Weight":       mp.get("weight", None),
@@ -738,11 +844,12 @@ def collect_mass_props_rows(
             "Ixz":          inertia[0][2] if mp else None,
             "Iyz":          inertia[1][2] if mp else None,
             "_filepath":    filepath,
-            "_placement":   abs_mat4,
-            "_not_found":   not_found,
+            "_placement":   abs_mat4,   # 零件局部坐标系 → 根产品坐标系的 4×4 变换矩阵
+            "_not_found":   not_found,  # True：CATIA 无法解析文件引用（路径丢失）
+            "_no_file":     no_file,    # True：路径有效但文件尚未保存到磁盘
             "_unreadable":  not is_readable,
-            "_spa_failed":  spa_failed,
-            "_mass_props":  mass_props,  # 原始测量值，供联动修改时使用
+            "_meas_failed": meas_failed,  # True：零件文档可访问但质量特性测量失败（MP_*/VBS 均无数据）
+            "_mass_props":  mass_props,   # 原始测量值，供联动修改时使用
         }
 
         rows.append(row)
@@ -750,7 +857,9 @@ def collect_mass_props_rows(
         if progress_callback is not None:
             progress_callback(_total_count)
 
-        # 递归子节点（不去重，每个实例单独遍历）
+        # 递归遍历子节点
+        # 注意：不跳过重复实例——同一文件多次出现时每个实例单独记录一行，
+        # 质量特性通过 _mass_cache 共享，不会重复测量。
         try:
             count = product.products.count
             for i in range(1, count + 1):
@@ -765,22 +874,26 @@ def collect_mass_props_rows(
         except Exception:
             pass
 
-    # ── CATIA 连接 ──────────────────────────────────────────────────────────
+    # ── CATIA 连接与文档处理 ─────────────────────────────────────────────────
     caa         = catia()
     application = caa.application
-    application.visible = True
+    application.visible = True  # 确保 CATIA 窗口可见，避免后台静默状态下 COM 调用挂起
     documents   = application.documents
 
     if file_path is None:
+        # 使用当前 CATIA 活动文档（不做文件操作，直接读取）
         product_doc  = ProductDocument(application.active_document.com_object)
         root_product = product_doc.product
         rows: list[dict] = []
+        # 根节点的父矩阵为单位矩阵（无变换），从第 0 层开始遍历
         _traverse(root_product, rows, level=0, parent_filepath="",
                   parent_mat4=_identity_4x4(), documents=documents)
         _post_process_rows(rows)
         return rows
 
     src = Path(file_path).resolve()
+
+    # 记录 CATIA 中已打开的所有文档路径，避免重复打开同一文件
     already_open: set[Path] = set()
     for i in range(1, documents.count + 1):
         try:
@@ -791,6 +904,7 @@ def collect_mass_props_rows(
     if src not in already_open:
         documents.open(str(src))
 
+    # 在已打开文档列表中查找与目标路径匹配的文档对象
     target_doc = None
     for i in range(1, documents.count + 1):
         try:
@@ -806,6 +920,7 @@ def collect_mass_props_rows(
     product_doc  = ProductDocument(target_doc.com_object)
     root_product = product_doc.product
     rows = []
+    # 根节点的父矩阵为单位矩阵，从第 0 层开始遍历
     _traverse(root_product, rows, level=0, parent_filepath="",
               parent_mat4=_identity_4x4(), documents=documents)
     _post_process_rows(rows)
