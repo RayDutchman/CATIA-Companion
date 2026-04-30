@@ -443,33 +443,37 @@ class MassPropsDialog(QDialog):
             lb.setStyleSheet("font-family: monospace;")
             return lb
 
-        summary_layout.addWidget(_lbl("总质量："), 0, 0)
+        # 第0行：总重量（独占）
+        summary_layout.addWidget(_lbl("总重量："), 0, 0)
         self._lbl_weight = _val_lbl()
         summary_layout.addWidget(self._lbl_weight, 0, 1)
 
-        summary_layout.addWidget(_lbl("总重心 X："), 0, 2)
+        # 第1行：总重心 X / Y / Z
+        summary_layout.addWidget(_lbl("总重心 X："), 1, 0)
         self._lbl_cx = _val_lbl()
-        summary_layout.addWidget(self._lbl_cx, 0, 3)
+        summary_layout.addWidget(self._lbl_cx, 1, 1)
 
-        summary_layout.addWidget(_lbl("总重心 Y："), 0, 4)
+        summary_layout.addWidget(_lbl("总重心 Y："), 1, 2)
         self._lbl_cy = _val_lbl()
-        summary_layout.addWidget(self._lbl_cy, 0, 5)
+        summary_layout.addWidget(self._lbl_cy, 1, 3)
 
-        summary_layout.addWidget(_lbl("总重心 Z："), 0, 6)
+        summary_layout.addWidget(_lbl("总重心 Z："), 1, 4)
         self._lbl_cz = _val_lbl()
-        summary_layout.addWidget(self._lbl_cz, 0, 7)
+        summary_layout.addWidget(self._lbl_cz, 1, 5)
 
-        inertia_entries = [
-            ("Ixx:", "lbl_ixx"), ("Iyy:", "lbl_iyy"), ("Izz:", "lbl_izz"),
-            ("Ixy:", "lbl_ixy"), ("Ixz:", "lbl_ixz"), ("Iyz:", "lbl_iyz"),
-        ]
-        for i, (text, attr) in enumerate(inertia_entries):
-            r_i = 1 + i // 4
-            c_i = (i % 4) * 2
-            summary_layout.addWidget(_lbl(text), r_i, c_i)
+        # 第2行：Ixx / Iyy / Izz
+        for c_i, (text, attr) in enumerate([("Ixx:", "lbl_ixx"), ("Iyy:", "lbl_iyy"), ("Izz:", "lbl_izz")]):
+            summary_layout.addWidget(_lbl(text), 2, c_i * 2)
             lbl = _val_lbl()
             setattr(self, f"_{attr}", lbl)
-            summary_layout.addWidget(lbl, r_i, c_i + 1)
+            summary_layout.addWidget(lbl, 2, c_i * 2 + 1)
+
+        # 第3行：Ixy / Ixz / Iyz
+        for c_i, (text, attr) in enumerate([("Ixy:", "lbl_ixy"), ("Ixz:", "lbl_ixz"), ("Iyz:", "lbl_iyz")]):
+            summary_layout.addWidget(_lbl(text), 3, c_i * 2)
+            lbl = _val_lbl()
+            setattr(self, f"_{attr}", lbl)
+            summary_layout.addWidget(lbl, 3, c_i * 2 + 1)
 
         layout.addWidget(summary_group)
 
