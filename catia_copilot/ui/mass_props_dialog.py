@@ -695,6 +695,25 @@ class MassPropsDialog(QDialog):
         self._load_btn.setEnabled(True)
         self._load_btn.setText("重新加载")
 
+        self._apply_loaded_rows(rows)
+
+        failed_count = sum(1 for r in rows if r.get("_meas_failed") and r.get("Type") == "零件")
+        if failed_count:
+            QMessageBox.information(
+                self, "部分零件测量失败",
+                f"有 {failed_count} 个零件节点无法完成质量特性测量（显示橙色背景）。\n\n"
+                "可能原因：\n"
+                "  • 零件文档未加载到CATIA会话中\n"
+                "  • 零件无有效的保持测量的「惯量包络体.1」\n"
+                "  • 零件未成功运行「创建质量关系」宏（MP_* 参数不存在）\n\n"
+                "未能测量的零件不参与最终汇总计算。",
+            )
+
+    def _apply_loaded_rows(self, rows: list[dict]) -> None:
+        """将已就绪的行列表应用到对话框：重建表格、调整列宽、启用按钮并计算。
+
+        由 :meth:`_load_data` 和 :meth:`_load_data_from_json` 共用。
+        """
         # 重新填充前保存列宽
         if self._loaded:
             for col_idx, col_name in enumerate(self._columns):
@@ -724,19 +743,6 @@ class MassPropsDialog(QDialog):
         self._calc_btn.setEnabled(True)
         self._export_btn.setEnabled(True)
         self._save_json_btn.setEnabled(True)
-
-        failed_count = sum(1 for r in rows if r.get("_meas_failed") and r.get("Type") == "零件")
-        if failed_count:
-            QMessageBox.information(
-                self, "部分零件测量失败",
-                f"有 {failed_count} 个零件节点无法完成质量特性测量（显示橙色背景）。\n\n"
-                "可能原因：\n"
-                "  • 零件文档未加载到CATIA会话中\n"
-                "  • 零件无有效的保持测量的「惯量包络体.1」\n"
-                "  • 零件未成功运行「创建质量关系」宏（MP_* 参数不存在）\n\n"
-                "未能测量的零件不参与最终汇总计算。",
-            )
-
         # 加载完成后自动计算汇总结果
         self._calculate()
 
@@ -773,36 +779,7 @@ class MassPropsDialog(QDialog):
             logger.error(f"载入质量特性数据失败: {e}")
             QMessageBox.critical(self, "载入失败", f"载入数据时出错：\n{e}")
             return
-
-        # 重新填充前保存列宽
-        if self._loaded:
-            for col_idx, col_name in enumerate(self._columns):
-                self._col_widths[col_name] = self._table.columnWidth(col_idx)
-
-        self._rows = rows
-        self._rollup_result = None
-        self._clear_summary_labels()
-        self._columns = self._build_columns()
-        self._populate_table()
-
-        if not self._loaded:
-            for _c, col_name in enumerate(self._columns):
-                if col_name == "#":
-                    self._table.setColumnWidth(_c, 40)
-                    self._col_widths[col_name] = 40
-                else:
-                    self._table.resizeColumnToContents(_c)
-                    self._col_widths[col_name] = self._table.columnWidth(_c)
-            self._loaded = True
-        else:
-            for col_idx, col_name in enumerate(self._columns):
-                if col_name in self._col_widths:
-                    self._table.setColumnWidth(col_idx, self._col_widths[col_name])
-
-        self._calc_btn.setEnabled(True)
-        self._export_btn.setEnabled(True)
-        self._save_json_btn.setEnabled(True)
-        self._calculate()
+        self._apply_loaded_rows(rows)
 
     # ── 构建显示行 ─────────────────────────────────────────────────────────
 
