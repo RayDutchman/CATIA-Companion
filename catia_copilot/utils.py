@@ -9,6 +9,7 @@ CATIA Copilot 实用工具函数模块。
 
 import ctypes
 import ctypes.wintypes as _wt
+import shutil
 import struct
 import sys
 import unicodedata
@@ -105,6 +106,41 @@ def check_catia_connection() -> bool:
         return True
     except Exception:
         return False
+
+
+def ensure_clean_gencache() -> None:
+    """启动时清理 win32com 早绑定缓存目录（gen_py）。
+
+    win32com 的 ``EnsureDispatch`` 会在 ``%LOCALAPPDATA%\\Temp\\gen_py\\``
+    写入 CATIA 类型库的早绑定缓存。一旦该缓存存在，后续所有晚绑定调用
+    （包括本程序使用的 ``GetActiveObject``）都可能受到干扰，导致无法连接 CATIA。
+
+    本程序仅使用晚绑定，因此在每次启动时主动删除该目录可彻底消除上述隐患。
+    删除操作是幂等的：目录不存在时静默跳过。
+    """
+    gen_py_path: Path | None = None
+
+    # 优先通过 gencache 模块获取实际路径
+    if _win32com_client is not None:
+        try:
+            from win32com.client import gencache as _gencache
+            gen_py_path = Path(_gencache.GetGeneratePath())
+        except Exception:
+            pass
+
+    # 回退到默认路径
+    if gen_py_path is None:
+        local_app_data = Path.home() / "AppData" / "Local"
+        gen_py_path = local_app_data / "Temp" / "gen_py"
+
+    if gen_py_path.exists():
+        try:
+            shutil.rmtree(gen_py_path, ignore_errors=True)
+            logger.debug(f"[gencache] 已清理早绑定缓存目录：{gen_py_path}")
+        except Exception as exc:
+            logger.warning(f"[gencache] 清理缓存目录失败（{gen_py_path}）：{exc}")
+    else:
+        logger.debug(f"[gencache] 缓存目录不存在，无需清理：{gen_py_path}")
 
 
 def estimate_column_width(text: str) -> int:

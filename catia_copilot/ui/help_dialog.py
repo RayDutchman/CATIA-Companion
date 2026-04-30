@@ -99,6 +99,19 @@ _HELP_HTML = f"""\
 <tr><td><b>Q: 提示无法连接 CATIA？</b></td>
     <td>A: 请确认 CATIA V5 已启动并处于运行状态。程序通过 COM 自动化接口
     与 CATIA 通信，需要先打开 CATIA。</td></tr>
+<tr><td><b>Q: 重启后仍然无法连接 CATIA，怀疑 COM 缓存损坏？</b></td>
+    <td>A: <b>win32com 早绑定缓存（gen_py）污染</b>可能导致 COM 连接异常。<br/>
+    <b>原因：</b>其他工具或脚本曾调用 <code>win32com.client.gencache.EnsureDispatch()</code>，
+    在 <code>%LOCALAPPDATA%\Temp\gen_py\</code> 写入了 CATIA 类型库的早绑定缓存文件，
+    导致后续所有晚绑定调用（本程序所使用的方式）受到干扰。<br/>
+    <b>本程序已内置自动修复：</b>每次启动时会自动删除该缓存目录，正常情况下无需手动处理。<br/>
+    <b>手动修复步骤（若异常发生在程序启动期间）：</b>
+    <ol>
+      <li>关闭 CATIA 和所有 Python 进程</li>
+      <li>删除目录 <code>%LOCALAPPDATA%\Temp\gen_py\</code>（整个文件夹）</li>
+      <li>重新启动本程序和 CATIA</li>
+    </ol>
+    </td></tr>
 <tr><td><b>Q: 复制文件提示权限不足？</b></td>
     <td>A: CATIA 通常安装在 Program Files 目录，需要管理员权限才能写入。
     请右键以管理员身份运行本程序。</td></tr>
