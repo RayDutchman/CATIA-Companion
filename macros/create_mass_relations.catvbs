@@ -25,7 +25,7 @@ Option Explicit
 '   若该参数不存在，脚本静默退出（不弹对话框），以便外部批量调用。
 '
 ' iParameters 用法（由 SystemService.ExecuteScript 传入）：
-'   iParameters(0) — 目标零件的零件号（PartNumber 字符串，可选）。
+'   iParameters — 目标零件的零件号（PartNumber 字符串，可选）。
 '     · 若提供且非空：脚本遍历已打开的 PartDocument，找到
 '       doc.Product.PartNumber 与传入值匹配的文档并激活，再执行绑定。
 '     · 若为空或省略：弹出提示后对 CATIA 当前活动文档执行绑定。

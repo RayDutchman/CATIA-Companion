@@ -239,7 +239,7 @@ def _run_mass_vbs_and_read(
       1. 定位 ``macros/create_mass_relations.catvbs`` 脚本文件；
       2. 激活目标零件文档（doc_com.Activate()），确保 CATIA 聚焦到正确文档；
       3. 通过 ``ExecuteScript`` 调用 VBS，将零件号 (part_number) 作为
-         ``iParameters(0)`` 传入，VBS 按此在已打开的文档中定位并激活目标零件；
+         ``iParameters`` 传入，VBS 按此在已打开的文档中定位并激活目标零件；
       4. VBS 运行完毕后再次调用 ``_try_mp_params()`` 读取写入的参数。
 
     注意事项：
@@ -271,7 +271,7 @@ def _run_mass_vbs_and_read(
         #   参数 2：脚本文件名（不含路径）
         #   参数 3：入口 Sub 名称（"CATMain"）
         #   参数 4：传递给 Sub 的参数数组（iParameters）
-        # 此处将零件号作为 iParameters(0) 传入，让 VBS 按 PartNumber 定位目标文档。
+        # 此处将零件号作为 iParameters 传入，让 VBS 按 PartNumber 定位目标文档。
         doc_com.Application.SystemService.ExecuteScript(
             str(vbs_path.parent), 1, vbs_path.name, "CATMain", [part_number]
         )
