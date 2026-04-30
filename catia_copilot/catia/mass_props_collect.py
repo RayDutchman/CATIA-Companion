@@ -180,7 +180,12 @@ def _try_mp_params(part_com, label: str = "") -> dict | None:
                     [Ixy, Iyy, Iyz],    # 注意：Ixy=Iyx、Ixz=Izx、Iyz=Izy（对称性）
                     [Ixz, Iyz, Izz]],
       }
-    若 MP_Mass_g 参数不存在或质量≤0，返回 None（触发路径 2）。
+
+    以下任一条件成立时返回 None，触发路径 2（运行 VBS 绑定脚本）：
+      · 10 个必要参数（质量、3 个重心分量、6 个惯量分量）中有任意一个不存在；
+      · 质量参数值 ≤ 0（无效值）；
+      · 代表性公式 F_MP_Mass_g 不存在于 Part.Relations（参数未与 Keep 测量绑定，
+        值可能过时）。
     """
     tag = f"[MP] {label} " if label else "[MP] "
     try:
@@ -193,36 +198,45 @@ def _try_mp_params(part_com, label: str = "") -> dict | None:
             except Exception:
                 return None
 
-        mass_g = _get("MP_Mass_g")
-        if mass_g is None or mass_g <= 0.0:
-            # 质量参数不存在或无效，整体放弃（后续由路径 2 处理）
-            logger.debug(f"{tag}MP_Mass_g 不存在或为零，跳过")
+        # ── 完整性检查：所有必要参数均须存在 ───────────────────────────────
+        # 任何一个参数缺失均触发路径 2，确保不遗漏不完整的数据。
+        _REQUIRED = (
+            "MP_Mass_g",
+            "MP_COGx_mm", "MP_COGy_mm", "MP_COGz_mm",
+            "MP_Ixx_gxmm2", "MP_Iyy_gxmm2", "MP_Izz_gxmm2",
+            "MP_Ixy_gxmm2", "MP_Ixz_gxmm2", "MP_Iyz_gxmm2",
+        )
+        values: dict[str, float] = {}
+        for pname in _REQUIRED:
+            v = _get(pname)
+            if v is None:
+                logger.debug(f"{tag}参数 {pname} 不存在，返回 None 触发 VBS 绑定")
+                return None
+            values[pname] = v
+
+        mass_g = values["MP_Mass_g"]
+        if mass_g <= 0.0:
+            logger.debug(f"{tag}MP_Mass_g 为零或负数，跳过")
             return None
 
-        # 重心坐标——缺失时默认 0（位于零件原点）
-        cogx = _get("MP_COGx_mm") or 0.0
-        cogy = _get("MP_COGy_mm") or 0.0
-        cogz = _get("MP_COGz_mm") or 0.0
-
-        # 转动惯量张量分量
-        # 对角分量（主惯量）——先保留原始 None 标记，用于判断参数是否缺失
-        ixx_raw = _get("MP_Ixx_gxmm2")
-        iyy_raw = _get("MP_Iyy_gxmm2")
-        izz_raw = _get("MP_Izz_gxmm2")
-
-        # 若三个对角分量全部缺失（参数从未被 VBS 写入），
-        # 返回 None 以触发路径 2（运行 VBS 创建并评估惯量公式）。
-        if ixx_raw is None and iyy_raw is None and izz_raw is None:
-            logger.debug(f"{tag}惯量参数（MP_Ixx/Iyy/Izz_gxmm2）不存在，返回 None 触发 VBS 绑定")
+        # ── 公式关系检查：确保参数由 Keep 测量公式驱动 ──────────────────────
+        # 若 F_MP_Mass_g 公式不存在，说明参数是手动创建的或 VBS 从未运行，
+        # 其值可能与实际测量脱节——返回 None 以触发 VBS 重新绑定。
+        try:
+            part_com.Relations.Item("F_MP_Mass_g")
+        except Exception:
+            logger.debug(f"{tag}公式 F_MP_Mass_g 不存在，参数值可能与测量脱节，返回 None 触发 VBS 绑定")
             return None
 
-        ixx = ixx_raw if ixx_raw is not None else 0.0
-        iyy = iyy_raw if iyy_raw is not None else 0.0
-        izz = izz_raw if izz_raw is not None else 0.0
-        # 非对角分量（惯性积，通常为负值）
-        ixy  = _get("MP_Ixy_gxmm2") or 0.0
-        ixz  = _get("MP_Ixz_gxmm2") or 0.0
-        iyz  = _get("MP_Iyz_gxmm2") or 0.0
+        cogx = values["MP_COGx_mm"]
+        cogy = values["MP_COGy_mm"]
+        cogz = values["MP_COGz_mm"]
+        ixx  = values["MP_Ixx_gxmm2"]
+        iyy  = values["MP_Iyy_gxmm2"]
+        izz  = values["MP_Izz_gxmm2"]
+        ixy  = values["MP_Ixy_gxmm2"]
+        ixz  = values["MP_Ixz_gxmm2"]
+        iyz  = values["MP_Iyz_gxmm2"]
 
         return {
             "weight":  mass_g,

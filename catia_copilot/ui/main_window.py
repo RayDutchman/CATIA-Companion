@@ -16,6 +16,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QMessageBox, QPushButton, QFileDialog, QGroupBox, QInputDialog,
+    QDialog,
 )
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt
@@ -304,7 +305,7 @@ class MainWindow(QMainWindow):
 
     # ── 非模态对话框管理 ──────────────────────────────────────────────────
 
-    def _show_dialog(self, attr: str, factory: Callable[[], "QDialog"]) -> None:
+    def _show_dialog(self, attr: str, factory: Callable[[], QDialog]) -> None:
         """以非模态方式打开对话框，若已存在则将其置于前台。
 
         :param attr: 用于在 MainWindow 上缓存对话框实例的属性名。
