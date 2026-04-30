@@ -1105,7 +1105,7 @@ class MassPropsDialog(QDialog):
                         item.setText(col_idx, self._fmt_mass_val(raw) if raw is not None else "")
                     elif col_name in ("CogX", "CogY", "CogZ"):
                         raw = row_data.get(col_name)
-                        item.setText(col_idx, _fmt(raw) if raw is not None else "")
+                        item.setText(col_idx, self._fmt_cog_val(raw) if raw is not None else "")
                     elif col_name in _INERTIA_IDX:
                         raw = row_data.get(col_name)
                         item.setText(col_idx, self._fmt_inertia_val(raw) if raw is not None else "")
