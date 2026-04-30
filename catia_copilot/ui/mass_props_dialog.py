@@ -305,6 +305,7 @@ class MassPropsDialog(QDialog):
 
         # ── 显示选项（BOM类型 + 单位 + 列可见性）──────────────────────────
         opts_group = QGroupBox("显示选项")
+        opts_group.setMinimumHeight(90)  # 切换BOM类型时防止高度抖动
         opts_main = QVBoxLayout(opts_group)
         opts_main.setSpacing(6)
         opts_main.setContentsMargins(8, 6, 8, 6)
