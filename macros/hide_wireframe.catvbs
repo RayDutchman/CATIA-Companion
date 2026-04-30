@@ -18,9 +18,8 @@ Option Explicit
 '
 ' 实现方式：
 '   对目标 PartDocument 的 Selection 依次按几何类型搜索（Search），
-'   再调用 VisSwitch 将可见元素切换为隐藏状态。
-'   VisSwitch 为切换操作：若目标元素当前已处于隐藏状态，
-'   则执行后会变为可见。建议在目标元素均处于显示状态时运行。
+'   再调用 VisProperties.SetShow(catVisPropertyNoShowAttr) 将选中元素设置为隐藏状态。
+'   catVisPropertyNoShowAttr 为 CATIA V5 枚举值，表示"不显示/隐藏"。
 '
 ' 用法：
 '   在 CATIA 中打开零件或装配体并激活对应文档后，运行本脚本。
@@ -96,7 +95,7 @@ Private Sub HideWireframeInPart(oPartDoc)
         On Error GoTo 0
 
         If searchErr = 0 And oSel.Count > 0 Then
-            oSel.VisSwitch
+            oSel.VisProperties.SetShow catVisPropertyNoShowAttr
         End If
 
         oSel.Clear
