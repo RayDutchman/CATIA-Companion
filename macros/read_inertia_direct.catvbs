@@ -4,9 +4,11 @@ Option Explicit
 ' read_inertia_direct.catvbs   (VBScript / CATScript)
 '
 ' 功能概述：
-'   诊断宏——遍历 Part.Parameters，找出所有含"惯量包络体"的参数，
-'   列出其完整名称、类型和当前值，帮助确认 CATIA 内部的实际参数
-'   命名规则（是否含零件号前缀、字段名是否为中文等）。
+'   诊断宏——遍历 Part.Parameters，按关键字（SEARCH_KEYWORD）过滤参数，
+'   列出其完整名称、类型和当前值（每页 20 条，多页依次弹出），
+'   帮助确认 CATIA 内部的实际参数命名规则。
+'   · 将 SEARCH_KEYWORD 改为其他字符串可查找别的参数。
+'   · 将 SEARCH_KEYWORD 置为 "" 则显示全部参数。
 '
 ' iParameters 用法（由 SystemService.ExecuteScript 传入，也可手动运行）：
 '   iParameters — 目标零件的零件号（PartNumber 字符串，可选）。
@@ -80,7 +82,7 @@ Sub CATMain(PartNumber)
     On Error GoTo 0
 
     ' =========================================================================
-    ' 路径 A：遍历 Part.Parameters，找出所有含"惯量包络体"的参数
+    ' 路径 A：遍历 Part.Parameters，按 SEARCH_KEYWORD 过滤参数（分页输出）
     ' =========================================================================
     Call EnumParameters(part, actualPN)
 
@@ -88,7 +90,7 @@ End Sub
 
 
 ' =============================================================================
-' 路径 A — 遍历 Part.Parameters，找出所有含"惯量包络体"的参数
+' 路径 A — 遍历 Part.Parameters，找出所有含关键字的参数
 '
 ' CATIA 内部对 Keep 测量参数的命名规则因版本和语言包而异，
 ' 本路径直接枚举全部参数并过滤，得到实际可用的完整名称和当前值，
@@ -99,6 +101,14 @@ End Sub
 ' =============================================================================
 Private Sub EnumParameters(part, actualPN)
     On Error Resume Next
+
+    ' ── 搜索关键字 ──────────────────────────────────────────────────────────────
+    ' 修改此变量可查找其他参数；置为空字符串("")则显示全部参数
+    Dim SEARCH_KEYWORD
+    SEARCH_KEYWORD = "惯量包络体"
+
+    ' 每页最多显示的参数条数
+    Const PAGE_SIZE = 20
 
     Dim params
     Set params = part.Parameters
@@ -116,11 +126,14 @@ Private Sub EnumParameters(part, actualPN)
         Exit Sub
     End If
 
-    ' 用字符串拼接收集匹配结果（VBScript 无内置 List）
-    Dim hits
-    hits = ""
+    ' 收集所有匹配行到数组（VBScript 用 ReDim Preserve 动态扩容）
+    Dim hitLines()
+    ReDim hitLines(0)
     Dim hitCount
     hitCount = 0
+
+    Dim searchUpper
+    searchUpper = UCase(SEARCH_KEYWORD)
 
     Dim j
     For j = 1 To total
@@ -146,17 +159,22 @@ Private Sub EnumParameters(part, actualPN)
             pVal = CStr(p.Value)
             If Err.Number <> 0 Then pVal = "?(Value错误)": Err.Clear
 
-            ' 过滤：参数名包含"惯量包络体"或"IoxG"/"IoyG" 等典型惯量字段名
+            ' 过滤：SEARCH_KEYWORD 为空则匹配全部；否则参数名须含该关键字
             Dim nameUp
             nameUp = UCase(pName)
-            If InStr(nameUp, "惯量包络体") > 0 _
-               Or InStr(nameUp, "IOXG") > 0 _
-               Or InStr(nameUp, "IOYG") > 0 _
-               Or InStr(nameUp, "IOZG") > 0 _
-               Or InStr(nameUp, "IXYG") > 0 Then
+            Dim isMatch
+            isMatch = False
+            If SEARCH_KEYWORD = "" Then
+                isMatch = True
+            ElseIf InStr(nameUp, searchUpper) > 0 Then
+                isMatch = True
+            End If
+
+            If isMatch Then
                 hitCount = hitCount + 1
-                hits = hits & hitCount & ". " & pName & vbCrLf & _
-                       "   类型=" & pType & "  值=" & pVal & vbCrLf
+                ReDim Preserve hitLines(hitCount - 1)
+                hitLines(hitCount - 1) = hitCount & ". " & pName & vbCrLf & _
+                                         "   类型=" & pType & "  值=" & pVal
             End If
         End If
         Err.Clear
@@ -165,6 +183,13 @@ Private Sub EnumParameters(part, actualPN)
 
     If hitCount = 0 Then
         ' 若无命中，再扫描一遍，输出前 30 个参数名供人工核查
+        Dim filterDesc
+        If SEARCH_KEYWORD = "" Then
+            filterDesc = "（空关键字，共 " & total & " 个参数，全部读取失败）"
+        Else
+            filterDesc = "未找到含""" & SEARCH_KEYWORD & """的参数（共 " & total & " 个参数）"
+        End If
+
         Dim sample
         sample = ""
         Dim sCount
@@ -185,12 +210,38 @@ Private Sub EnumParameters(part, actualPN)
             Err.Clear
         Next
         On Error GoTo 0
-        MsgBox "未找到含""惯量包络体""的参数（共 " & total & " 个参数）。" & vbCrLf & vbCrLf & _
+        MsgBox filterDesc & "。" & vbCrLf & vbCrLf & _
                "前 " & sCount & " 个参数名（供参考）：" & vbCrLf & sample, _
                vbExclamation, "直接读取质量信息"
     Else
-        MsgBox "找到 " & hitCount & " 个匹配参数：" & vbCrLf & vbCrLf & hits, _
-               vbInformation, "直接读取质量信息"
+        ' 分页显示：每页 PAGE_SIZE 条
+        Dim totalPages
+        totalPages = Int((hitCount + PAGE_SIZE - 1) / PAGE_SIZE)
+
+        Dim pg
+        For pg = 1 To totalPages
+            Dim startIdx, endIdx
+            startIdx = (pg - 1) * PAGE_SIZE
+            endIdx   = startIdx + PAGE_SIZE - 1
+            If endIdx >= hitCount Then endIdx = hitCount - 1
+
+            Dim pageHdr
+            If SEARCH_KEYWORD = "" Then
+                pageHdr = "全部参数（第 " & pg & "/" & totalPages & " 页，共 " & hitCount & " 个）："
+            Else
+                pageHdr = "含""" & SEARCH_KEYWORD & """的参数（第 " & pg & "/" & totalPages & " 页，共 " & hitCount & " 个）："
+            End If
+
+            Dim pageBody
+            pageBody = ""
+            Dim k
+            For k = startIdx To endIdx
+                pageBody = pageBody & hitLines(k) & vbCrLf
+            Next
+
+            MsgBox pageHdr & vbCrLf & vbCrLf & pageBody, _
+                   vbInformation, "直接读取质量信息"
+        Next
     End If
 End Sub
 
