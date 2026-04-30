@@ -181,11 +181,11 @@ def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") 
       1. "{part_number}\\惯量包络体.1\\"  ← CATIA 以零件号作为顶层命名空间
       2. "惯量包络体.1\\"                  ← 当前文档上下文回退前缀
 
-    读取字段及内部单位（文档使用 g/mm 单位制，无需换算）：
-      质量                            → 质量，g
-      Gx / Gy / Gz                    → 重心坐标（零件局部坐标系），mm
-      IoxG / IoyG / IozG              → 主惯量（Ixx / Iyy / Izz），g·mm²
-      IxyG / IxzG / IyzG              → 惯量积（Ixy / Ixz / Iyz），g·mm²
+    CATIA Keep 参数的原始单位为 SI 制，需按以下规则换算到内部 g/mm/g·mm² 单位制：
+      质量                            SI: kg   → 内部: g      换算: × 1 000
+      Gx / Gy / Gz                    SI: m    → 内部: mm     换算: × 1 000
+      IoxG / IoyG / IozG              SI: kg·m² → 内部: g·mm² 换算: × 1 000 000 000
+      IxyG / IxzG / IyzG              SI: kg·m² → 内部: g·mm² 换算: × 1 000 000 000
 
     返回值结构：
       {
@@ -214,12 +214,12 @@ def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") 
         prefixes.append("惯量包络体.1\\")
 
         prefix_ok = None
-        mass_g = None
+        mass_si = None
         for pfix in prefixes:
             v = _get(pfix, "质量")
             if v is not None and v > 0.0:
                 prefix_ok = pfix
-                mass_g = v
+                mass_si = v
                 break
 
         if prefix_ok is None:
@@ -229,14 +229,31 @@ def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") 
         def _req(name: str) -> float | None:
             return _get(prefix_ok, name)
 
-        gx  = _req("Gx");   gy  = _req("Gy");   gz  = _req("Gz")
-        ixx = _req("IoxG"); iyy = _req("IoyG"); izz = _req("IozG")
-        ixy = _req("IxyG"); ixz = _req("IxzG"); iyz = _req("IyzG")
+        gx_si  = _req("Gx");   gy_si  = _req("Gy");   gz_si  = _req("Gz")
+        ixx_si = _req("IoxG"); iyy_si = _req("IoyG"); izz_si = _req("IozG")
+        ixy_si = _req("IxyG"); ixz_si = _req("IxzG"); iyz_si = _req("IyzG")
 
         # 惯量分量允许为 0（球对称体），但不允许任意分量读取失败
-        if any(v is None for v in (gx, gy, gz, ixx, iyy, izz, ixy, ixz, iyz)):
+        if any(v is None for v in (gx_si, gy_si, gz_si,
+                                   ixx_si, iyy_si, izz_si,
+                                   ixy_si, ixz_si, iyz_si)):
             logger.debug(f"{tag}部分 惯量包络体.1 参数缺失，返回 None")
             return None
+
+        # ── 单位换算：SI → g / mm / g·mm² ──────────────────────────────────
+        # 质量：1 kg = 1 000 g
+        # 坐标：1 m  = 1 000 mm
+        # 惯量：1 kg·m² = 1 000 g × (1 000 mm)² = 1 000 × 10⁶ g·mm² = 10⁹ g·mm²
+        mass_g = mass_si * 1_000
+        gx  = gx_si  * 1_000
+        gy  = gy_si  * 1_000
+        gz  = gz_si  * 1_000
+        ixx = ixx_si * 1_000_000_000
+        iyy = iyy_si * 1_000_000_000
+        izz = izz_si * 1_000_000_000
+        ixy = ixy_si * 1_000_000_000
+        ixz = ixz_si * 1_000_000_000
+        iyz = iyz_si * 1_000_000_000
 
         return {
             "weight": mass_g,
