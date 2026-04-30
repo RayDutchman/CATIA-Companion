@@ -61,6 +61,9 @@ _SUMMARY_SORT_COLUMNS: list[str] = [
     "CogX", "CogY", "CogZ",
 ]
 
+# 数值格式化：判断"接近整数"的绝对容差（用于 _fmt / _fmt_scaled）
+_INTEGER_ABS_TOL: float = 1e-9
+
 
 class _MassPropsDelegate(QStyledItemDelegate):
     """只允许对未锁定零件行的"Weight"列进行编辑，其余列一律只读。"""
@@ -91,7 +94,7 @@ def _fmt(value) -> str:
         return "—"
     try:
         v = float(value)
-        if math.isclose(v, round(v), rel_tol=0.0, abs_tol=1e-9):
+        if math.isclose(v, round(v), rel_tol=0.0, abs_tol=_INTEGER_ABS_TOL):
             return f"{v:.0f}"
         if abs(v) >= 1e5 or (v != 0.0 and abs(v) < 0.001):
             return f"{v:.3e}"
@@ -247,7 +250,7 @@ class MassPropsDialog(QDialog):
     def _fmt_scaled(value, factor: float) -> str:
         """将原始 SI 值乘以换算因子后格式化为字符串。
 
-        None → '—'；整数值（误差 < 1e-9）→ 无小数位；
+        None → '—'；整数值（误差 < _INTEGER_ABS_TOL）→ 无小数位；
         |v| ≥ 1e5 或绝对值极小（0 < |v| < 0.001）→ 科学计数法；
         其余 → 保留三位小数。
         """
@@ -255,7 +258,7 @@ class MassPropsDialog(QDialog):
             return "—"
         try:
             v = float(value) * factor
-            if math.isclose(v, round(v), rel_tol=0.0, abs_tol=1e-9):
+            if math.isclose(v, round(v), rel_tol=0.0, abs_tol=_INTEGER_ABS_TOL):
                 return f"{v:.0f}"
             if abs(v) >= 1e5 or (v != 0.0 and abs(v) < 0.001):
                 return f"{v:.3e}"
