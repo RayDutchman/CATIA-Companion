@@ -1,0 +1,690 @@
+Option Explicit
+
+' ============================================================
+' read_inertia_direct.catvbs   (VBScript / CATScript)
+'
+' 功能概述：
+'   诊断宏——尝试用多种方式直接读取 CATIA V5 零件文档中
+'   "惯量包络体.1" Keep 测量结果，无需借助 MP_* 参数或公式绑定。
+'   每种方法均有详细的 MsgBox 调试输出，便于确认哪条路径在目标
+'   CATIA 版本和语言环境中可行。
+'
+' 尝试路径（依次执行，互不依赖）：
+'   A — 遍历 Part.Parameters，找出所有含"惯量包络体"的参数，
+'       列出其完整名称、类型和当前值，帮助确认 CATIA 内部的
+'       实际参数命名规则（是否含零件号前缀、字段名是否为中文等）。
+'   B — 按已知字段名组合多种前缀变体，逐一用 Parameters.Item()
+'       尝试读取，记录哪些前缀组合命中。
+'   C — 通过 Part.Analyze（AnalyticSurface / PartAnalysis）
+'       直接读取质量、重心坐标和惯量张量。
+'   D — 通过 SPAWorkbench 对零件各实体（Body）调用 GetMeasurable，
+'       逐一尝试读取 Mass、Volume、GravityCenter、InertiaTensor。
+'   E — 遍历 Part.Relations，找出所有公式（Formula）对象，
+'       列出其名称和表达式，帮助理解 Keep 测量是否已通过公式绑定。
+'
+' iParameters 用法（由 SystemService.ExecuteScript 传入，也可手动运行）：
+'   iParameters — 目标零件的零件号（PartNumber 字符串，可选）。
+'     · 若提供且非空：在已打开的 PartDocument 中按 PartNumber 定位。
+'     · 若为空或省略：使用当前活动文档。
+' ============================================================
+
+Sub CATMain(iParameters)
+
+    ' ── 获取 CATIA 应用对象 ───────────────────────────────────────────────────
+    Dim CATIA
+    Set CATIA = GetObject(, "CATIA.Application")
+
+    ' ── 解析 iParameters：目标零件号（PartNumber，可选）─────────────────────
+    Dim targetPN
+    targetPN = ""
+    On Error Resume Next
+    targetPN = CStr(iParameters)
+    Err.Clear
+    On Error GoTo 0
+
+    ' ── 定位目标 PartDocument ────────────────────────────────────────────────
+    Dim partDoc
+    Set partDoc = Nothing
+
+    If targetPN <> "" Then
+        Dim i, found
+        found = False
+        On Error Resume Next
+        For i = 1 To CATIA.Documents.Count
+            Dim doc
+            Set doc = CATIA.Documents.Item(i)
+            If TypeName(doc) = "PartDocument" Then
+                Dim pn
+                pn = doc.Product.PartNumber
+                If pn = targetPN Then
+                    Set partDoc = doc
+                    partDoc.Activate
+                    found = True
+                    Exit For
+                End If
+            End If
+        Next
+        On Error GoTo 0
+        If Not found Then
+            MsgBox "未找到零件号为 [" & targetPN & "] 的 PartDocument，已退出。", _
+                   vbExclamation, "read_inertia_direct"
+            Exit Sub
+        End If
+    Else
+        If CATIA.Documents.Count = 0 Then
+            MsgBox "没有已打开的文档，已退出。", vbExclamation, "read_inertia_direct"
+            Exit Sub
+        End If
+        If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then
+            MsgBox "当前活动文档不是 PartDocument（类型=" & TypeName(CATIA.ActiveDocument) & "），已退出。", _
+                   vbExclamation, "read_inertia_direct"
+            Exit Sub
+        End If
+        Set partDoc = CATIA.ActiveDocument
+    End If
+
+    Dim part
+    Set part = partDoc.Part
+
+    Dim actualPN
+    On Error Resume Next
+    actualPN = part.PartNumber
+    If Err.Number <> 0 Then actualPN = "(读取失败)"
+    Err.Clear
+    On Error GoTo 0
+
+    MsgBox "目标零件：" & actualPN & vbCrLf & _
+           "文档路径：" & partDoc.FullName & vbCrLf & vbCrLf & _
+           "即将依次执行诊断路径 A → E，每步结果弹窗汇报。", _
+           vbInformation, "read_inertia_direct — 开始"
+
+    ' =========================================================================
+    ' 路径 A：遍历 Part.Parameters，找出所有含"惯量包络体"的参数
+    ' =========================================================================
+    Call PathA_EnumParameters(part, actualPN)
+
+    ' =========================================================================
+    ' 路径 B：用多种前缀变体逐一尝试 Parameters.Item()
+    ' =========================================================================
+    Call PathB_KnownNames(part, actualPN)
+
+    ' =========================================================================
+    ' 路径 C：Part.Analyze 直读质量 / 重心 / 惯量
+    ' =========================================================================
+    Call PathC_PartAnalyze(part)
+
+    ' =========================================================================
+    ' 路径 D：SPAWorkbench.GetMeasurable 逐 Body 读取
+    ' =========================================================================
+    Call PathD_SPA(partDoc, part)
+
+    ' =========================================================================
+    ' 路径 E：遍历 Part.Relations，枚举所有公式
+    ' =========================================================================
+    Call PathE_EnumRelations(part)
+
+    MsgBox "所有诊断路径已执行完毕。", vbInformation, "read_inertia_direct — 结束"
+
+End Sub
+
+
+' =============================================================================
+' 路径 A — 遍历 Part.Parameters，找出所有含"惯量包络体"的参数
+'
+' CATIA 内部对 Keep 测量参数的命名规则因版本和语言包而异，
+' 本路径直接枚举全部参数并过滤，得到实际可用的完整名称和当前值，
+' 是确认其他路径中前缀/字段名是否正确的基础。
+' =============================================================================
+Private Sub PathA_EnumParameters(part, actualPN)
+    On Error Resume Next
+
+    Dim params
+    Set params = part.Parameters
+
+    Dim total
+    total = 0
+    On Error Resume Next
+    total = params.Count
+    Err.Clear
+    On Error GoTo 0
+
+    If total = 0 Then
+        MsgBox "[路径 A] Part.Parameters 为空或读取失败，跳过。", _
+               vbExclamation, "路径 A"
+        Exit Sub
+    End If
+
+    ' 用字符串拼接收集匹配结果（VBScript 无内置 List）
+    Dim hits
+    hits = ""
+    Dim hitCount
+    hitCount = 0
+
+    Dim j
+    For j = 1 To total
+        On Error Resume Next
+        Dim p
+        Set p = params.Item(j)
+        If Err.Number <> 0 Or Not IsObject(p) Then
+            Err.Clear
+        Else
+            Dim pName, pType, pVal
+            pName = ""
+            pType = ""
+            pVal  = ""
+
+            pName = p.Name
+            If Err.Number <> 0 Then pName = "?(Name错误)": Err.Clear
+
+            ' 用 TypeName 获取 COM 类型字符串，通常为 "RealParam"、"LengthParam" 等
+            pType = TypeName(p)
+            If Err.Number <> 0 Then pType = "?(Type错误)": Err.Clear
+
+            On Error Resume Next
+            pVal = CStr(p.Value)
+            If Err.Number <> 0 Then pVal = "?(Value错误)": Err.Clear
+
+            ' 过滤：参数名包含"惯量包络体"或"IoxG"/"IoyG" 等典型惯量字段名
+            Dim nameUp
+            nameUp = UCase(pName)
+            If InStr(nameUp, "惯量包络体") > 0 _
+               Or InStr(nameUp, "IOXG") > 0 _
+               Or InStr(nameUp, "IOYG") > 0 _
+               Or InStr(nameUp, "IOZG") > 0 _
+               Or InStr(nameUp, "IXYG") > 0 Then
+                hitCount = hitCount + 1
+                hits = hits & hitCount & ". " & pName & vbCrLf & _
+                       "   类型=" & pType & "  值=" & pVal & vbCrLf
+            End If
+        End If
+        Err.Clear
+    Next
+    On Error GoTo 0
+
+    If hitCount = 0 Then
+        ' 若无命中，再扫描一遍，输出前 30 个参数名供人工核查
+        Dim sample
+        sample = ""
+        Dim sCount
+        sCount = 0
+        For j = 1 To total
+            If sCount >= 30 Then Exit For
+            On Error Resume Next
+            Dim ps
+            Set ps = params.Item(j)
+            If Err.Number = 0 And IsObject(ps) Then
+                Dim psName
+                psName = ps.Name
+                If Err.Number = 0 Then
+                    sample = sample & psName & vbCrLf
+                    sCount = sCount + 1
+                End If
+            End If
+            Err.Clear
+        Next
+        On Error GoTo 0
+        MsgBox "[路径 A] 未找到含"惯量包络体"的参数（共 " & total & " 个参数）。" & vbCrLf & vbCrLf & _
+               "前 " & sCount & " 个参数名（供参考）：" & vbCrLf & sample, _
+               vbExclamation, "路径 A"
+    Else
+        MsgBox "[路径 A] 找到 " & hitCount & " 个匹配参数：" & vbCrLf & vbCrLf & hits, _
+               vbInformation, "路径 A"
+    End If
+End Sub
+
+
+' =============================================================================
+' 路径 B — 用多种前缀变体逐一尝试 Parameters.Item()
+'
+' "惯量包络体.1" 的 Keep 参数在 Parameters 集合中可能有多种全名，
+' 取决于 CATIA 版本、语言包和调用方式：
+'   变体 1（无 PN 前缀）：     "惯量包络体.1\质量"
+'   变体 2（含 PN 前缀）：     "<PN>\惯量包络体.1\质量"
+'   变体 3（英文名称）：       "Measure Inertia.1\Mass"
+'   变体 4（英文含 PN）：      "<PN>\Measure Inertia.1\Mass"
+'   变体 5（零件号含 .1 后缀）："<PN>.1\惯量包络体.1\质量"
+' 本路径对每种前缀变体×12 个字段名进行穷举尝试，汇报命中情况。
+' =============================================================================
+Private Sub PathB_KnownNames(part, actualPN)
+    On Error Resume Next
+
+    Dim params
+    Set params = part.Parameters
+
+    ' ── 前缀变体清单 ───────────────────────────────────────────────────────
+    Dim prefixes(4)
+    prefixes(0) = "惯量包络体.1\"
+    prefixes(1) = actualPN & "\惯量包络体.1\"
+    prefixes(2) = "Measure Inertia.1\"
+    prefixes(3) = actualPN & "\Measure Inertia.1\"
+    prefixes(4) = actualPN & ".1\惯量包络体.1\"
+
+    ' ── 字段名清单（中文 Keep 测量） ──────────────────────────────────────
+    Dim fields(11)
+    fields(0)  = "质量"
+    fields(1)  = "体积"
+    fields(2)  = "密度"
+    fields(3)  = "Gx"
+    fields(4)  = "Gy"
+    fields(5)  = "Gz"
+    fields(6)  = "IoxG"
+    fields(7)  = "IoyG"
+    fields(8)  = "IozG"
+    fields(9)  = "IxyG"
+    fields(10) = "IxzG"
+    fields(11) = "IyzG"
+
+    Dim report
+    report = ""
+    Dim totalHits
+    totalHits = 0
+
+    Dim pi, fi
+    For pi = 0 To 4
+        Dim pfx
+        pfx = prefixes(pi)
+        Dim pfxHits
+        pfxHits = ""
+        Dim pfxCount
+        pfxCount = 0
+
+        For fi = 0 To 11
+            Dim fullName
+            fullName = pfx & fields(fi)
+            On Error Resume Next
+            Dim p
+            Set p = params.Item(fullName)
+            Dim eNum
+            eNum = Err.Number
+            Err.Clear
+            On Error GoTo 0
+
+            If eNum = 0 And IsObject(p) Then
+                ' 再次检查是否 Nothing
+                Dim isNoth
+                isNoth = False
+                On Error Resume Next
+                If p Is Nothing Then isNoth = True
+                Err.Clear
+                On Error GoTo 0
+
+                If Not isNoth Then
+                    Dim val
+                    val = ""
+                    On Error Resume Next
+                    val = CStr(p.Value)
+                    If Err.Number <> 0 Then val = "?(Value错误)"
+                    Err.Clear
+                    On Error GoTo 0
+
+                    pfxCount = pfxCount + 1
+                    totalHits = totalHits + 1
+                    pfxHits = pfxHits & "  " & fields(fi) & " = " & val & vbCrLf
+                End If
+            End If
+        Next
+
+        If pfxCount > 0 Then
+            report = report & "前缀 [" & pfx & "]  命中 " & pfxCount & " 个：" & vbCrLf & pfxHits & vbCrLf
+        Else
+            report = report & "前缀 [" & pfx & "]  无命中" & vbCrLf
+        End If
+    Next
+
+    If totalHits > 0 Then
+        MsgBox "[路径 B] 共命中 " & totalHits & " 个参数：" & vbCrLf & vbCrLf & report, _
+               vbInformation, "路径 B"
+    Else
+        MsgBox "[路径 B] 所有前缀变体均未命中，详情：" & vbCrLf & vbCrLf & report, _
+               vbExclamation, "路径 B"
+    End If
+End Sub
+
+
+' =============================================================================
+' 路径 C — Part.Analyze 直读质量 / 重心 / 惯量
+'
+' Part.Analyze 是 CATIA V5 的标准零件分析接口，
+' 提供 .Mass、.GravityCenter、.InertiaTensor 等属性。
+' 注意：此接口通常不依赖 Keep 测量，而是对整个零件实时计算，
+' 结果以 kg / mm 为单位（而非 g）。
+' =============================================================================
+Private Sub PathC_PartAnalyze(part)
+    On Error Resume Next
+
+    ' ── 获取 Analyze 对象 ───────────────────────────────────────────────────
+    Dim analyze
+    Set analyze = part.Analyze
+    If Err.Number <> 0 Or Not IsObject(analyze) Then
+        MsgBox "[路径 C] part.Analyze 访问失败（错误 " & Err.Number & "：" & Err.Description & "）", _
+               vbExclamation, "路径 C"
+        Err.Clear
+        On Error GoTo 0
+        Exit Sub
+    End If
+    Err.Clear
+    On Error GoTo 0
+
+    ' ── 读取质量（kg） ──────────────────────────────────────────────────────
+    Dim mass
+    mass = -999
+    On Error Resume Next
+    mass = analyze.Mass
+    Dim massErr: massErr = Err.Number
+    Dim massDesc: massDesc = Err.Description
+    Err.Clear
+    On Error GoTo 0
+
+    ' ── 读取重心（数组 [x, y, z]，mm） ────────────────────────────────────
+    Dim cogArr(2)
+    cogArr(0) = -999: cogArr(1) = -999: cogArr(2) = -999
+    Dim cogErr: cogErr = 0
+    Dim cogDesc: cogDesc = ""
+    On Error Resume Next
+    analyze.GravityCenter cogArr
+    cogErr = Err.Number
+    cogDesc = Err.Description
+    Err.Clear
+    On Error GoTo 0
+
+    ' ── 读取惯量张量（数组 9 元素，g·mm²，按行展开） ─────────────────────
+    Dim itArr(8)
+    Dim k
+    For k = 0 To 8: itArr(k) = -999: Next
+    Dim itErr: itErr = 0
+    Dim itDesc: itDesc = ""
+    On Error Resume Next
+    analyze.InertiaTensor itArr
+    itErr = Err.Number
+    itDesc = Err.Description
+    Err.Clear
+    On Error GoTo 0
+
+    ' ── 汇报 ────────────────────────────────────────────────────────────────
+    Dim report
+    report = "[路径 C] Part.Analyze 结果：" & vbCrLf & vbCrLf
+
+    If massErr = 0 Then
+        report = report & "质量 (kg) = " & mass & vbCrLf
+    Else
+        report = report & "质量读取失败：错误 " & massErr & "：" & massDesc & vbCrLf
+    End If
+
+    If cogErr = 0 Then
+        report = report & "重心 (mm)：Gx=" & cogArr(0) & "  Gy=" & cogArr(1) & "  Gz=" & cogArr(2) & vbCrLf
+    Else
+        report = report & "重心读取失败：错误 " & cogErr & "：" & cogDesc & vbCrLf
+    End If
+
+    If itErr = 0 Then
+        report = report & "惯量张量（g·mm²）：" & vbCrLf & _
+                 "  Ixx=" & itArr(0) & "  Ixy=" & itArr(1) & "  Ixz=" & itArr(2) & vbCrLf & _
+                 "  Iyx=" & itArr(3) & "  Iyy=" & itArr(4) & "  Iyz=" & itArr(5) & vbCrLf & _
+                 "  Izx=" & itArr(6) & "  Izy=" & itArr(7) & "  Izz=" & itArr(8) & vbCrLf
+    Else
+        report = report & "惯量张量读取失败：错误 " & itErr & "：" & itDesc & vbCrLf
+    End If
+
+    Dim icon
+    If massErr = 0 Or cogErr = 0 Or itErr = 0 Then
+        icon = vbInformation
+    Else
+        icon = vbExclamation
+    End If
+
+    MsgBox report, icon, "路径 C"
+End Sub
+
+
+' =============================================================================
+' 路径 D — SPAWorkbench.GetMeasurable 逐 Body 读取
+'
+' SPAWorkbench 是 CATIA 空间分析（SPA）的工作台对象，
+' 通过 GetMeasurable(reference) 可获取可测量对象，
+' 然后尝试读取其质量、体积、重心和惯量张量。
+' 本路径对零件下每个 Body 均作尝试，并逐一汇报。
+' =============================================================================
+Private Sub PathD_SPA(partDoc, part)
+    On Error Resume Next
+
+    ' ── 获取 SPAWorkbench ──────────────────────────────────────────────────
+    Dim spa
+    Set spa = partDoc.GetWorkbench("SPAWorkbench")
+    If Err.Number <> 0 Or Not IsObject(spa) Then
+        MsgBox "[路径 D] GetWorkbench(SPAWorkbench) 失败（错误 " & Err.Number & "：" & Err.Description & "）", _
+               vbExclamation, "路径 D"
+        Err.Clear
+        On Error GoTo 0
+        Exit Sub
+    End If
+    Err.Clear
+    On Error GoTo 0
+
+    ' ── 获取 Bodies 集合 ────────────────────────────────────────────────────
+    Dim bodies
+    Set bodies = part.Bodies
+    Dim bodyCount
+    bodyCount = 0
+    On Error Resume Next
+    bodyCount = bodies.Count
+    Err.Clear
+    On Error GoTo 0
+
+    If bodyCount = 0 Then
+        ' 尝试作为整体零件读取（某些零件只有一个隐含 Body）
+        bodyCount = 1
+    End If
+
+    Dim report
+    report = "[路径 D] SPAWorkbench — 共 " & bodyCount & " 个 Body：" & vbCrLf & vbCrLf
+    Dim anySuccess
+    anySuccess = False
+
+    Dim bi
+    For bi = 1 To bodyCount
+        On Error Resume Next
+        Dim body
+        Set body = bodies.Item(bi)
+        Dim bodyName
+        bodyName = "(Body " & bi & ")"
+        If Err.Number = 0 And IsObject(body) Then
+            bodyName = body.Name
+            If Err.Number <> 0 Then bodyName = "(Body " & bi & ")"
+        End If
+        Err.Clear
+        On Error GoTo 0
+
+        report = report & "── Body " & bi & "：" & bodyName & vbCrLf
+
+        ' 建立对该 Body 的引用
+        On Error Resume Next
+        Dim ref
+        Set ref = part.CreateReferenceFromObject(body)
+        Dim refErr: refErr = Err.Number
+        Dim refDesc: refDesc = Err.Description
+        Err.Clear
+        On Error GoTo 0
+
+        If refErr <> 0 Then
+            report = report & "  CreateReferenceFromObject 失败：" & refErr & "：" & refDesc & vbCrLf & vbCrLf
+        Else
+            ' 获取可测量对象
+            On Error Resume Next
+            Dim meas
+            Set meas = spa.GetMeasurable(ref)
+            Dim measErr: measErr = Err.Number
+            Dim measDesc: measDesc = Err.Description
+            Err.Clear
+            On Error GoTo 0
+
+            If measErr <> 0 Then
+                report = report & "  GetMeasurable 失败：" & measErr & "：" & measDesc & vbCrLf & vbCrLf
+            Else
+                ' 尝试读取质量
+                Dim bMass
+                bMass = -999
+                On Error Resume Next
+                bMass = meas.Mass
+                Dim bMassErr: bMassErr = Err.Number
+                Err.Clear
+                On Error GoTo 0
+
+                ' 尝试读取体积
+                Dim bVol
+                bVol = -999
+                On Error Resume Next
+                bVol = meas.Volume
+                Dim bVolErr: bVolErr = Err.Number
+                Err.Clear
+                On Error GoTo 0
+
+                ' 尝试读取重心
+                Dim bCog(2)
+                bCog(0) = -999: bCog(1) = -999: bCog(2) = -999
+                Dim bCogErr: bCogErr = 0
+                On Error Resume Next
+                meas.GetCOG bCog
+                bCogErr = Err.Number
+                Err.Clear
+                On Error GoTo 0
+
+                ' 尝试读取惯量张量
+                Dim bIT(8)
+                Dim m
+                For m = 0 To 8: bIT(m) = -999: Next
+                Dim bITErr: bITErr = 0
+                On Error Resume Next
+                meas.GetInertiaTensor bIT
+                bITErr = Err.Number
+                Err.Clear
+                On Error GoTo 0
+
+                If bMassErr = 0 Or bVolErr = 0 Or bCogErr = 0 Or bITErr = 0 Then
+                    anySuccess = True
+                End If
+
+                Dim massStr, volStr, cogStr, itStr
+                If bMassErr = 0 Then
+                    massStr = "Mass=" & bMass
+                Else
+                    massStr = "Mass失败(" & bMassErr & ")"
+                End If
+                If bVolErr = 0 Then
+                    volStr = "Volume=" & bVol
+                Else
+                    volStr = "Volume失败(" & bVolErr & ")"
+                End If
+                If bCogErr = 0 Then
+                    cogStr = "COG=(" & bCog(0) & ", " & bCog(1) & ", " & bCog(2) & ")"
+                Else
+                    cogStr = "COG失败(" & bCogErr & ")"
+                End If
+                If bITErr = 0 Then
+                    itStr = "IT=(" & bIT(0) & ", " & bIT(4) & ", " & bIT(8) & ",...)"
+                Else
+                    itStr = "IT失败(" & bITErr & ")"
+                End If
+
+                report = report & "  " & massStr & vbCrLf & _
+                         "  " & volStr & vbCrLf & _
+                         "  " & cogStr & vbCrLf & _
+                         "  " & itStr & vbCrLf & vbCrLf
+            End If
+        End If
+    Next
+
+    Dim icon
+    If anySuccess Then
+        icon = vbInformation
+    Else
+        icon = vbExclamation
+    End If
+    MsgBox report, icon, "路径 D"
+End Sub
+
+
+' =============================================================================
+' 路径 E — 遍历 Part.Relations，枚举所有公式（Formula）
+'
+' 列出零件中全部关系/公式对象的名称、类型和表达式字符串，
+' 帮助确认 "惯量包络体.1" 的 Keep 测量是否已通过公式驱动其他参数，
+' 以及现有 F_MP_* 公式是否正确绑定。
+' =============================================================================
+Private Sub PathE_EnumRelations(part)
+    On Error Resume Next
+
+    Dim rels
+    Set rels = part.Relations
+
+    Dim relCount
+    relCount = 0
+    On Error Resume Next
+    relCount = rels.Count
+    Err.Clear
+    On Error GoTo 0
+
+    If relCount = 0 Then
+        MsgBox "[路径 E] Part.Relations 为空或读取失败，跳过。", _
+               vbExclamation, "路径 E"
+        Exit Sub
+    End If
+
+    Dim lines
+    lines = "[路径 E] 共 " & relCount & " 个关系/公式：" & vbCrLf & vbCrLf
+    Dim lineCount
+    lineCount = 0
+
+    Dim ri
+    For ri = 1 To relCount
+        On Error Resume Next
+        Dim rel
+        Set rel = rels.Item(ri)
+        If Err.Number <> 0 Or Not IsObject(rel) Then
+            Err.Clear
+        Else
+            Dim rName, rType, rExpr
+            rName = "": rType = "": rExpr = ""
+
+            rName = rel.Name
+            If Err.Number <> 0 Then rName = "?(Name错误)": Err.Clear
+
+            rType = TypeName(rel)
+            If Err.Number <> 0 Then rType = "?(Type错误)": Err.Clear
+
+            ' Formula 对象有 .Expression 属性；其他 Relation 类型无此属性
+            On Error Resume Next
+            rExpr = rel.Expression
+            If Err.Number <> 0 Then rExpr = "(非 Formula 或读取失败)"
+            Err.Clear
+            On Error GoTo 0
+
+            lineCount = lineCount + 1
+            lines = lines & lineCount & ". [" & rType & "] " & rName & vbCrLf & _
+                    "   表达式: " & rExpr & vbCrLf
+
+            ' 超过 40 条时截断，避免弹窗过长
+            If lineCount >= 40 Then
+                lines = lines & "（余下 " & (relCount - ri) & " 条已省略）" & vbCrLf
+                Exit For
+            End If
+        End If
+        Err.Clear
+    Next
+    On Error GoTo 0
+
+    MsgBox lines, vbInformation, "路径 E"
+End Sub
+
+
+' =============================================================================
+' ParameterExists — 检查指定全名的参数是否存在于 Parameters 集合
+' （复用自 create_mass_relations.catvbs，供外部需要时调用）
+' =============================================================================
+Private Function ParameterExists(params, fullName)
+    On Error Resume Next
+    Dim p
+    Set p = params.Item(fullName)
+    ParameterExists = (Err.Number = 0 And IsObject(p) And Not p Is Nothing)
+    Err.Clear
+    On Error GoTo 0
+End Function
