@@ -161,25 +161,30 @@ End Function
 ' - VBScript 不能使用强类型声明（As Formula/As Parameter 等）
 ' ============================================================
 Private Sub CreateFormulaIfMissing(rels, fName, targetParam, rhsExpr)
-
+    MsgBox "正在处理公式 [" & fName & "]，目标参数 [" & targetParam.Name & "]，表达式：" & rhsExpr, vbInformation, "create_mass_relations - 调试信息"
     ' 守卫：targetParam 为 Nothing 或非对象时静默跳过，避免 rels.CreateFormula 崩溃。
     If Not IsObject(targetParam) Or targetParam Is Nothing Then Exit Sub
-
+    MsgBox "目标参数 [" & targetParam.Name & "] 有效，继续检查公式。", vbInformation, "create_mass_relations - 调试信息"
     On Error Resume Next
+    Err.Clear
     Dim f
     Set f = rels.Item(fName)
     If Err.Number = 0 And Not f Is Nothing Then
+        MsgBox "公式 [" & fName & "] 已存在，跳过创建。" & vbCrLf & _
+               "现有表达式：" & f.RightHandSide, _
+               vbInformation, "create_mass_relations"
         Err.Clear
         On Error GoTo 0
         Exit Sub
     End If
     Err.Clear
     On Error GoTo 0
-
+    MsgBox "公式 [" & fName & "] 不存在，准备创建。", vbInformation, "create_mass_relations - 调试信息"
     ' 公式不存在，尝试创建；失败时通过 MsgBox 报告错误，便于诊断。
     On Error Resume Next
     Err.Clear
     rels.CreateFormula fName, "", targetParam, rhsExpr
+    MsgBox "已创建公式 [" & fName & "]，表达式：" & rhsExpr, vbInformation, "create_mass_relations - 调试信息"
     Dim createErr: createErr = Err.Number
     Dim createDesc: createDesc = Err.Description
     Err.Clear
