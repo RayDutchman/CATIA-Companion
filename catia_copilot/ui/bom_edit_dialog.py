@@ -1755,7 +1755,7 @@ class BomEditDialog(QDialog):
 
         # ── 复制路径 ──────────────────────────────────────────────────────────
         act_copy_path = menu.addAction("复制路径")
-        act_copy_path.setEnabled(bool(fp))
+        act_copy_path.setEnabled(bool(fp) and not no_file)
 
         # ── 在CATIA中打开 ─────────────────────────────────────────────────────
         # 仅当文件在磁盘上存在且不是损坏/轻量化引用时启用。
