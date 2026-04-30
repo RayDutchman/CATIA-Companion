@@ -997,45 +997,68 @@ class MassPropsDialog(QDialog):
         pn = str(row_data.get("Part Number", ""))
 
         # ── Update ALL _rows entries with the same PN ──────────────────────
+        #
+        # 同一零件的所有实例共享同一个 _mass_props dict（来自 _mass_cache）。
+        # 若在循环内对每个实例各乘一次 scale，则第 n 个实例的惯量会被放大 scale^n 倍。
+        # 正确做法：先从第一个匹配行计算 scale，对共享 dict 仅缩放一次，
+        # 再遍历各实例分别用各自的 _placement 矩阵重新旋转到根坐标系。
+        #
+        # Step 1：从第一个匹配行取 scale 和共享的 _mass_props。
+        scale: float = 1.0
+        mp_shared: dict | None = None
+        for r in self._rows:
+            if str(r.get("Part Number", "")) == pn and r.get("Type") == "零件":
+                try:
+                    old_w_f_0 = float(r.get("Weight") or 0.0)
+                except (ValueError, TypeError):
+                    old_w_f_0 = 0.0
+                if old_w_f_0 > 0.0:
+                    scale = new_weight_stored / old_w_f_0
+                mp_shared = r.get("_mass_props")
+                break
+
+        # Step 2：对共享 _mass_props 的惯量只缩放一次。
+        if mp_shared is not None:
+            mp_shared["weight"] = new_weight_stored
+            if scale != 1.0:
+                orig_i = mp_shared.get("inertia", [[0.0] * 3 for _ in range(3)])
+                mp_shared["inertia"] = [[orig_i[ir][ic] * scale for ic in range(3)]
+                                        for ir in range(3)]
+
+        # Step 3：遍历所有实例，更新 Weight / 行级显示字段 / _root_mp。
         for r in self._rows:
             if str(r.get("Part Number", "")) != pn or r.get("Type") != "零件":
                 continue
-            old_w = r.get("Weight")
-            try:
-                old_w_f = float(old_w) if old_w is not None else 0.0
-            except (ValueError, TypeError):
-                old_w_f = 0.0
-            scale = (new_weight_stored / old_w_f) if old_w_f > 0.0 else 1.0
             r["Weight"] = new_weight_stored
             mp = r.get("_mass_props")
             if mp:
-                mp["weight"] = new_weight_stored
-                if scale != 1.0 and old_w_f > 0.0:
-                    orig_i = mp.get("inertia", [[0.0, 0.0, 0.0] for _ in range(3)])
-                    mp["inertia"] = [[orig_i[ir][ic] * scale for ic in range(3)]
-                                     for ir in range(3)]
+                # mp["inertia"] 已在 Step 2 缩放完毕；
+                # 仅需用本实例自己的 _placement 重新旋转到根坐标系。
+                if scale != 1.0:
+                    # 更新行级惯量显示字段（零件自身坐标系）
+                    I_local_new = mp.get("inertia", [[0.0] * 3 for _ in range(3)])
+                    for ic_name, (ir2, ic2) in _INERTIA_IDX.items():
+                        r[ic_name] = I_local_new[ir2][ic2]
                     # 同步更新 _root_mp 中的惯量（缩放后重新旋转到根坐标系）
                     I_root = _row_inertia_to_root(r)
                     rmp = r.get("_root_mp")
                     if rmp is not None:
                         rmp["inertia"] = I_root
                         rmp["weight"]  = new_weight_stored
-                    # 更新行级惯量显示字段（零件自身坐标系）
-                    I_local_new = mp.get("inertia", [[0.0] * 3 for _ in range(3)])
-                    for ic_name, (ir2, ic2) in _INERTIA_IDX.items():
-                        r[ic_name] = I_local_new[ir2][ic2]
                 else:
-                    # 仅更新质量，惯量不变（显示字段为局部坐标系值，无需重新计算）
                     rmp = r.get("_root_mp")
                     if rmp is not None:
                         rmp["weight"] = new_weight_stored
             else:
-                # 无 _mass_props，直接从行字段读取并缩放
-                if scale != 1.0 and old_w_f > 0.0:
+                # 无 _mass_props（各实例行独立存储惯量值），逐行缩放显示字段。
+                if scale != 1.0:
                     for ic_name in _INERTIA_IDX:
                         cur = r.get(ic_name)
                         if cur is not None:
                             r[ic_name] = float(cur) * scale
+                rmp = r.get("_root_mp")
+                if rmp is not None:
+                    rmp["weight"] = new_weight_stored
 
         # ── Update visible tree items with the same PN ─────────────────────
         self._is_updating = True
