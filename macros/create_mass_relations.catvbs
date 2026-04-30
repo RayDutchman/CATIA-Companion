@@ -157,34 +157,40 @@ Private Function StdExpr(srcPrefix, fieldName, unitConst)
 End Function
 
 ' ============================================================
-' CreateFormulaIfMissing — 只在同名公式不存在时才创建
-' - VBScript 不能使用强类型声明（As Formula/As Parameter 等）
+' FormulaExists — 检查指定名称的公式/关系是否存在
+' 与 ParameterExists 同构，避免在 If 条件中对 Empty 变量使用 Is 引发
+' VBScript OERN 下的 424 错误并错误地进入 True 分支。
 ' ============================================================
-Private Sub CreateFormulaIfMissing(rels, fName, targetParam, rhsExpr)
-    MsgBox "正在处理公式 [" & fName & "]，目标参数 [" & targetParam.Name & "]，表达式：" & rhsExpr, vbInformation, "create_mass_relations - 调试信息"
-    ' 守卫：targetParam 为 Nothing 或非对象时静默跳过，避免 rels.CreateFormula 崩溃。
-    If Not IsObject(targetParam) Or targetParam Is Nothing Then Exit Sub
-    MsgBox "目标参数 [" & targetParam.Name & "] 有效，继续检查公式。", vbInformation, "create_mass_relations - 调试信息"
+Private Function FormulaExists(rels, fName)
     On Error Resume Next
-    Err.Clear
     Dim f
     Set f = rels.Item(fName)
-    If Err.Number = 0 And Not f Is Nothing Then
-        MsgBox "公式 [" & fName & "] 已存在，跳过创建。" & vbCrLf & _
-               "现有表达式：" & f.RightHandSide, _
-               vbInformation, "create_mass_relations"
-        Err.Clear
-        On Error GoTo 0
-        Exit Sub
-    End If
+    FormulaExists = (Err.Number = 0 And IsObject(f) And Not f Is Nothing)
     Err.Clear
     On Error GoTo 0
-    MsgBox "公式 [" & fName & "] 不存在，准备创建。", vbInformation, "create_mass_relations - 调试信息"
+End Function
+
+' ============================================================
+' CreateFormulaIfMissing — 只在同名公式不存在时才创建
+' - VBScript 不能使用强类型声明（As Formula/As Parameter 等）
+' - 使用独立的 FormulaExists() 检查公式是否存在，而非在 OERN 激活
+'   期间的 If 条件内对可能为 Empty 的变量使用 Is，否则 VBScript 会
+'   在 Or/And 右侧求值时触发错误 424，导致 OERN 将执行跳入 If 真值
+'   分支的第一行，最终提前 Exit Sub 而跳过公式创建。
+' ============================================================
+Private Sub CreateFormulaIfMissing(rels, fName, targetParam, rhsExpr)
+    ' 守卫：targetParam 为 Nothing 或非对象时静默跳过，避免 rels.CreateFormula 崩溃。
+    ' 注意：将 IsObject 和 Is Nothing 拆成两个独立 If，避免 VBScript 不短路
+    ' Or 时对 Empty 变量求值 Is Nothing 触发错误 424。
+    If Not IsObject(targetParam) Then Exit Sub
+    If targetParam Is Nothing Then Exit Sub
+
+    If FormulaExists(rels, fName) Then Exit Sub
+
     ' 公式不存在，尝试创建；失败时通过 MsgBox 报告错误，便于诊断。
     On Error Resume Next
     Err.Clear
     rels.CreateFormula fName, "", targetParam, rhsExpr
-    MsgBox "已创建公式 [" & fName & "]，表达式：" & rhsExpr, vbInformation, "create_mass_relations - 调试信息"
     Dim createErr: createErr = Err.Number
     Dim createDesc: createDesc = Err.Description
     Err.Clear
@@ -205,7 +211,7 @@ Private Function ParameterExists(params, fullName)
     On Error Resume Next
     Dim p
     Set p = params.Item(fullName)
-    ParameterExists = (Err.Number = 0 And Not p Is Nothing)
+    ParameterExists = (Err.Number = 0 And IsObject(p) And Not p Is Nothing)
     Err.Clear
     On Error GoTo 0
 End Function
