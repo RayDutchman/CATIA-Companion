@@ -117,8 +117,6 @@ class MainWindow(QMainWindow):
             lines.append(f"<b>错误详情：</b><code>{info['error']}</code>")
         if info["app_name"]:
             lines.append(f"<b>应用名称：</b>{info['app_name']}")
-        if info["app_version"]:
-            lines.append(f"<b>CATIA 版本：</b>{info['app_version']}")
         if info["doc_count"] is not None:
             lines.append(f"<b>已打开文档数：</b>{info['doc_count']}")
         if info["active_doc"]:
