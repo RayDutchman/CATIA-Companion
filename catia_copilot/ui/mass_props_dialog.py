@@ -35,7 +35,10 @@ from catia_copilot.constants import (
     FILENAME_NOT_FOUND,
     FILENAME_UNSAVED,
 )
-from catia_copilot.catia.mass_props_collect import collect_mass_props_rows, _row_inertia_to_root, recompute_product_rows
+from catia_copilot.catia.mass_props_collect import (
+    collect_mass_props_rows, _row_inertia_to_root, recompute_product_rows,
+    save_rows, load_rows,
+)
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
 from catia_copilot.ui.bom_widgets import _BomTreeWidget
 
@@ -169,6 +172,8 @@ class MassPropsDialog(QDialog):
         self._rollup_result: dict | None = None
         self._loaded: bool = False
         self._col_widths: dict[str, int] = {}
+        # 上一次保存数据文件的目录（用于下次保存时的默认路径）
+        self._last_save_dir: str = ""
 
         # 列名列表在可见性或模式改变时重建
         self._columns: list[str] = self._build_columns()
@@ -298,9 +303,13 @@ class MassPropsDialog(QDialog):
         self._file_browse_btn.clicked.connect(self._browse_file)
         self._load_btn = QPushButton("加载")
         self._load_btn.clicked.connect(self._load_data)
+        self._load_json_btn = QPushButton("载入已保存数据…")
+        self._load_json_btn.setToolTip("从之前保存的数据文件中载入质量特性（无需打开CATIA）")
+        self._load_json_btn.clicked.connect(self._load_data_from_json)
         file_row.addWidget(self._file_edit)
         file_row.addWidget(self._file_browse_btn)
         file_row.addWidget(self._load_btn)
+        file_row.addWidget(self._load_json_btn)
         layout.addLayout(file_row)
 
         # ── 显示选项（BOM类型 + 单位 + 列可见性）──────────────────────────
@@ -499,6 +508,12 @@ class MassPropsDialog(QDialog):
         self._calc_btn.clicked.connect(self._calculate)
         btn_row.addWidget(self._calc_btn)
 
+        self._save_json_btn = QPushButton("保存数据…")
+        self._save_json_btn.setToolTip("将当前行数据保存为数据文件，可在不打开CATIA的情况下重新载入")
+        self._save_json_btn.setEnabled(False)
+        self._save_json_btn.clicked.connect(self._save_data_to_json)
+        btn_row.addWidget(self._save_json_btn)
+
         self._export_btn = QPushButton("导出表格")
         self._export_btn.setToolTip("将当前表格（含汇总行）导出为 Excel（.xlsx）文件")
         self._export_btn.setEnabled(False)
@@ -682,6 +697,25 @@ class MassPropsDialog(QDialog):
         self._load_btn.setEnabled(True)
         self._load_btn.setText("重新加载")
 
+        self._apply_loaded_rows(rows)
+
+        failed_count = sum(1 for r in rows if r.get("_meas_failed") and r.get("Type") == "零件")
+        if failed_count:
+            QMessageBox.information(
+                self, "部分零件测量失败",
+                f"有 {failed_count} 个零件节点无法完成质量特性测量（显示橙色背景）。\n\n"
+                "可能原因：\n"
+                "  • 零件文档未加载到CATIA会话中\n"
+                "  • 零件无有效的保持测量的「惯量包络体.1」\n"
+                "  • 零件未成功运行「创建质量关系」宏（MP_* 参数不存在）\n\n"
+                "未能测量的零件不参与最终汇总计算。",
+            )
+
+    def _apply_loaded_rows(self, rows: list[dict]) -> None:
+        """将已就绪的行列表应用到对话框：重建表格、调整列宽、启用按钮并计算。
+
+        由 :meth:`_load_data` 和 :meth:`_load_data_from_json` 共用。
+        """
         # 重新填充前保存列宽
         if self._loaded:
             for col_idx, col_name in enumerate(self._columns):
@@ -710,21 +744,59 @@ class MassPropsDialog(QDialog):
 
         self._calc_btn.setEnabled(True)
         self._export_btn.setEnabled(True)
-
-        failed_count = sum(1 for r in rows if r.get("_meas_failed") and r.get("Type") == "零件")
-        if failed_count:
-            QMessageBox.information(
-                self, "部分零件测量失败",
-                f"有 {failed_count} 个零件节点无法完成质量特性测量（显示橙色背景）。\n\n"
-                "可能原因：\n"
-                "  • 零件文档未加载到CATIA会话中\n"
-                "  • 零件无有效的保持测量的「惯量包络体.1」\n"
-                "  • 零件未成功运行「创建质量关系」宏（MP_* 参数不存在）\n\n"
-                "未能测量的零件不参与最终汇总计算。",
-            )
-
+        self._save_json_btn.setEnabled(True)
         # 加载完成后自动计算汇总结果
         self._calculate()
+
+    def _save_data_to_json(self) -> None:
+        """将当前行数据保存为压缩二进制数据文件（不包含 _root_mp，可重新计算）。"""
+        if not self._rows:
+            return
+
+        # ── 默认文件名：根产品零件编号 + "_惯量汇总" ───────────────────────
+        root_pn = str(self._rows[0].get("Part Number", "")).strip()
+        default_name = f"{root_pn}_惯量汇总" if root_pn else "惯量汇总"
+
+        # ── 默认目录：上次保存目录 → 根产品文件所在目录 → 空 ──────────────
+        if self._last_save_dir and Path(self._last_save_dir).is_dir():
+            default_dir = self._last_save_dir
+        else:
+            root_fp = str(self._rows[0].get("_filepath", "")).strip()
+            default_dir = str(Path(root_fp).parent) if root_fp else ""
+
+        default_path = str(Path(default_dir) / default_name) if default_dir else default_name
+
+        dest, _ = QFileDialog.getSaveFileName(
+            self, "保存质量特性数据", default_path, "质量特性数据文件 (*.mpd)"
+        )
+        if not dest:
+            return
+        if not dest.lower().endswith(".mpd"):
+            dest += ".mpd"
+        try:
+            save_rows(self._rows, dest)
+            self._last_save_dir = str(Path(dest).parent)
+        except Exception as e:
+            logger.error(f"保存质量特性数据失败: {e}")
+            QMessageBox.critical(self, "保存失败", f"保存数据时出错：\n{e}")
+
+    def _load_data_from_json(self) -> None:
+        """从压缩二进制数据文件载入行数据（无需 CATIA，_root_mp 由后处理重建）。"""
+        src, _ = QFileDialog.getOpenFileName(
+            self, "载入质量特性数据", "", "质量特性数据文件 (*.mpd)"
+        )
+        if not src:
+            return
+        if not Path(src).exists():
+            QMessageBox.warning(self, "文件不存在", f"文件不存在：\n{src}")
+            return
+        try:
+            rows = load_rows(src)
+        except Exception as e:
+            logger.error(f"载入质量特性数据失败: {e}")
+            QMessageBox.critical(self, "载入失败", f"载入数据时出错：\n{e}")
+            return
+        self._apply_loaded_rows(rows)
 
     # ── 构建显示行 ─────────────────────────────────────────────────────────
 

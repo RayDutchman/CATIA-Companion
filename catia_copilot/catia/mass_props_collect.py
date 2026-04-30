@@ -38,6 +38,8 @@
 整个流程以 SI 为基准，UI 显示时按用户选择换算到 g/mm/g·mm² 等实用单位。
 """
 
+import gzip
+import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -528,6 +530,60 @@ def recompute_product_rows(rows: list[dict]) -> None:
         row["Ixy"]    = result["inertia"][0][1]
         row["Ixz"]    = result["inertia"][0][2]
         row["Iyz"]    = result["inertia"][1][2]
+
+
+# ---------------------------------------------------------------------------
+# 二进制序列化 / 反序列化（保存与载入行数据）
+#
+# 格式：将行列表序列化为 JSON 字符串，再用 gzip 压缩后写入二进制文件（.mpd）。
+# 用记事本等文本编辑器打开只显示乱码；只能通过本模块的接口读取。
+# ---------------------------------------------------------------------------
+
+# 序列化时跳过的内部字段：_root_mp 可由 _post_process_rows() 重新计算，
+# _rows_idx 是显示层临时注入的索引，均无需持久化。
+_SERIALIZE_SKIP: frozenset[str] = frozenset({"_root_mp", "_rows_idx"})
+
+
+def save_rows(rows: list[dict], file_path: str) -> None:
+    """将行数据序列化为压缩二进制文件（.mpd）。
+
+    内部以 JSON 序列化行数据后用 gzip 压缩，写为二进制文件。
+    用记事本等文本工具打开无法读取有效内容。
+
+    序列化时跳过 ``_root_mp``（加载后可由 :func:`_post_process_rows` 重新计算）
+    和 ``_rows_idx``（仅供显示层使用）。其余所有字段均原样写出。
+
+    参数：
+        rows:      ``collect_mass_props_rows()`` 或 :func:`load_rows`
+                   返回的行列表。
+        file_path: 目标文件路径（不存在则创建，已存在则覆盖）。
+    """
+    serializable = [
+        {k: v for k, v in row.items() if k not in _SERIALIZE_SKIP}
+        for row in rows
+    ]
+    payload = json.dumps(serializable, ensure_ascii=False).encode("utf-8")
+    with gzip.open(file_path, "wb") as f:
+        f.write(payload)
+
+
+def load_rows(file_path: str) -> list[dict]:
+    """从压缩二进制文件（.mpd）反序列化行数据，并重建运行时缓存字段。
+
+    读取由 :func:`save_rows` 保存的文件，恢复行列表后调用
+    :func:`_post_process_rows` 重新计算 ``_root_mp`` 及产品/部件汇总字段，
+    与从 CATIA 现场加载后的状态完全等价。
+
+    参数：
+        file_path: 要读取的文件路径。
+
+    返回：
+        经过后处理的行列表（包含 ``_root_mp`` 及汇总显示字段）。
+    """
+    with gzip.open(file_path, "rb") as f:
+        rows: list[dict] = json.loads(f.read().decode("utf-8"))
+    _post_process_rows(rows)
+    return rows
 
 
 # ---------------------------------------------------------------------------
