@@ -1252,11 +1252,23 @@ class MassPropsDialog(QDialog):
             QMessageBox.warning(self, "无数据", "请先加载产品树数据。")
             return
 
-        default_dir = self._last_browse_dir or ""
+        # ── 默认文件名：根产品零件编号 + "_惯量汇总"（与"保存数据"对话框一致）──
+        root_pn = str(self._rows[0].get("Part Number", "")).strip()
+        default_stem = f"{root_pn}_惯量汇总" if root_pn else "惯量汇总"
+
+        # ── 默认目录：上次保存目录 → 根产品文件所在目录 → 空（与"保存数据"对话框一致）──
+        if self._last_save_dir and Path(self._last_save_dir).is_dir():
+            default_dir = self._last_save_dir
+        else:
+            root_fp = str(self._rows[0].get("_filepath", "")).strip()
+            default_dir = str(Path(root_fp).parent) if root_fp else ""
+
+        default_path = str(Path(default_dir) / f"{default_stem}.xlsx") if default_dir else f"{default_stem}.xlsx"
+
         dest, _ = QFileDialog.getSaveFileName(
             self, "导出质量特性表格",
-            str(Path(default_dir) / "质量特性.xlsx"),
-            "Excel 文件 (*.xlsx);;CSV 文件 (*.csv);;所有文件 (*)",
+            default_path,
+            "Excel 文件 (*.xlsx);;CSV 文件 (*.csv)",
         )
         if not dest:
             return
