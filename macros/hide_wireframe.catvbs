@@ -4,14 +4,16 @@ Option Explicit
 ' hide_wireframe.catvbs   (VBScript / CATScript)
 '
 ' 功能概述：
-'   一键隐藏 CATIA V5 活动文档中的所有点、线、轴系、平面（不含曲面）。
+'   一键隐藏 CATIA V5 活动文档中的所有点、线、三维曲线、草图、轴系、平面（不含曲面）。
 '   · 若活动文档为零件（CATPart）：直接处理该零件文档。
 '   · 若活动文档为装配体（CATProduct）：递归处理所有子孙零件文档，
 '     同一份零件文档被多次实例化时只处理一次（路径级去重）。
 '
 ' 隐藏的几何类型：
 '   · 点（Point）
-'   · 线 / 曲线（Line）
+'   · 线（Line）
+'   · 三维曲线（Curve）
+'   · 草图（Sketch）
 '   · 轴系（AxisSystem）
 '   · 平面（Plane）
 '   不包含曲面（Surface）。
@@ -49,14 +51,14 @@ Sub CATMain()
 
         Case "PartDocument"
             HideWireframeInPart oDoc
-            MsgBox "已隐藏零件中的点、线、轴系、平面。", vbInformation, "hide_wireframe"
+            MsgBox "已隐藏零件中的点、线、曲线、草图、轴系、平面。", vbInformation, "hide_wireframe"
 
         Case "ProductDocument"
             ' processedDocs："|fullpath1|fullpath2|..." 形式的已处理路径列表，用于跨递归层去重
             Dim processedDocs
             processedDocs = "|"
             RecurseProduct oDoc.Product, processedDocs
-            MsgBox "已隐藏装配体及所有子孙零件中的点、线、轴系、平面。", vbInformation, "hide_wireframe"
+            MsgBox "已隐藏装配体及所有子孙零件中的点、线、曲线、草图、轴系、平面。", vbInformation, "hide_wireframe"
 
         Case Else
             MsgBox "当前活动文档不是零件（CATPart）或装配体（CATProduct），无法执行。", _
@@ -67,10 +69,10 @@ Sub CATMain()
 End Sub
 
 ' ============================================================
-' HideWireframeInPart — 隐藏指定 PartDocument 中的点、线、轴系、平面
+' HideWireframeInPart — 隐藏指定 PartDocument 中的点、线、三维曲线、草图、轴系、平面
 '
-' 对 oPartDoc 的 Selection 依次按 Point / Line / AxisSystem / Plane
-' 四种类型搜索并调用 VisSwitch 切换至隐藏状态。
+' 对 oPartDoc 的 Selection 依次按 Point / Line / Curve / Sketch / AxisSystem / Plane
+' 六种类型搜索并调用 VisProperties.SetShow 设置为隐藏状态。
 ' 搜索范围 "All" 覆盖零件内所有几何体（GeometricSet、OrderedGeometricSet 等）。
 '
 ' 参数：
@@ -83,7 +85,7 @@ Private Sub HideWireframeInPart(oPartDoc)
     oSel.Clear
 
     Dim geomTypes
-    geomTypes = Array("Point", "Line", "AxisSystem", "Plane")
+    geomTypes = Array("Point", "Line", "Curve", "Sketch", "AxisSystem", "Plane")
 
     Dim i
     For i = 0 To UBound(geomTypes)
