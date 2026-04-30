@@ -35,7 +35,10 @@ from catia_copilot.constants import (
     FILENAME_NOT_FOUND,
     FILENAME_UNSAVED,
 )
-from catia_copilot.catia.mass_props_collect import collect_mass_props_rows, _row_inertia_to_root, recompute_product_rows
+from catia_copilot.catia.mass_props_collect import (
+    collect_mass_props_rows, _row_inertia_to_root, recompute_product_rows,
+    save_rows_to_json, load_rows_from_json,
+)
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
 from catia_copilot.ui.bom_widgets import _BomTreeWidget
 
@@ -298,9 +301,13 @@ class MassPropsDialog(QDialog):
         self._file_browse_btn.clicked.connect(self._browse_file)
         self._load_btn = QPushButton("加载")
         self._load_btn.clicked.connect(self._load_data)
+        self._load_json_btn = QPushButton("载入已保存数据…")
+        self._load_json_btn.setToolTip("从之前保存的 JSON 数据文件中载入质量特性（无需打开CATIA）")
+        self._load_json_btn.clicked.connect(self._load_data_from_json)
         file_row.addWidget(self._file_edit)
         file_row.addWidget(self._file_browse_btn)
         file_row.addWidget(self._load_btn)
+        file_row.addWidget(self._load_json_btn)
         layout.addLayout(file_row)
 
         # ── 显示选项（BOM类型 + 单位 + 列可见性）──────────────────────────
@@ -498,6 +505,12 @@ class MassPropsDialog(QDialog):
         self._calc_btn.setEnabled(False)
         self._calc_btn.clicked.connect(self._calculate)
         btn_row.addWidget(self._calc_btn)
+
+        self._save_json_btn = QPushButton("保存数据…")
+        self._save_json_btn.setToolTip("将当前行数据保存为 JSON 文件，可在不打开CATIA的情况下重新载入")
+        self._save_json_btn.setEnabled(False)
+        self._save_json_btn.clicked.connect(self._save_data_to_json)
+        btn_row.addWidget(self._save_json_btn)
 
         self._export_btn = QPushButton("导出表格")
         self._export_btn.setToolTip("将当前表格（含汇总行）导出为 Excel（.xlsx）文件")
@@ -710,6 +723,7 @@ class MassPropsDialog(QDialog):
 
         self._calc_btn.setEnabled(True)
         self._export_btn.setEnabled(True)
+        self._save_json_btn.setEnabled(True)
 
         failed_count = sum(1 for r in rows if r.get("_meas_failed") and r.get("Type") == "零件")
         if failed_count:
@@ -724,6 +738,70 @@ class MassPropsDialog(QDialog):
             )
 
         # 加载完成后自动计算汇总结果
+        self._calculate()
+
+    def _save_data_to_json(self) -> None:
+        """将当前行数据保存为 JSON 文件（不包含 _root_mp，可重新计算）。"""
+        if not self._rows:
+            return
+        dest, _ = QFileDialog.getSaveFileName(
+            self, "保存质量特性数据", "", "JSON 数据文件 (*.json)"
+        )
+        if not dest:
+            return
+        if not dest.lower().endswith(".json"):
+            dest += ".json"
+        try:
+            save_rows_to_json(self._rows, dest)
+        except Exception as e:
+            logger.error(f"保存质量特性数据失败: {e}")
+            QMessageBox.critical(self, "保存失败", f"保存数据时出错：\n{e}")
+
+    def _load_data_from_json(self) -> None:
+        """从 JSON 文件载入行数据（无需 CATIA，_root_mp 由后处理重建）。"""
+        src, _ = QFileDialog.getOpenFileName(
+            self, "载入质量特性数据", "", "JSON 数据文件 (*.json)"
+        )
+        if not src:
+            return
+        if not Path(src).exists():
+            QMessageBox.warning(self, "文件不存在", f"文件不存在：\n{src}")
+            return
+        try:
+            rows = load_rows_from_json(src)
+        except Exception as e:
+            logger.error(f"载入质量特性数据失败: {e}")
+            QMessageBox.critical(self, "载入失败", f"载入数据时出错：\n{e}")
+            return
+
+        # 重新填充前保存列宽
+        if self._loaded:
+            for col_idx, col_name in enumerate(self._columns):
+                self._col_widths[col_name] = self._table.columnWidth(col_idx)
+
+        self._rows = rows
+        self._rollup_result = None
+        self._clear_summary_labels()
+        self._columns = self._build_columns()
+        self._populate_table()
+
+        if not self._loaded:
+            for _c, col_name in enumerate(self._columns):
+                if col_name == "#":
+                    self._table.setColumnWidth(_c, 40)
+                    self._col_widths[col_name] = 40
+                else:
+                    self._table.resizeColumnToContents(_c)
+                    self._col_widths[col_name] = self._table.columnWidth(_c)
+            self._loaded = True
+        else:
+            for col_idx, col_name in enumerate(self._columns):
+                if col_name in self._col_widths:
+                    self._table.setColumnWidth(col_idx, self._col_widths[col_name])
+
+        self._calc_btn.setEnabled(True)
+        self._export_btn.setEnabled(True)
+        self._save_json_btn.setEnabled(True)
         self._calculate()
 
     # ── 构建显示行 ─────────────────────────────────────────────────────────

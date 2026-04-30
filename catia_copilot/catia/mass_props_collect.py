@@ -38,6 +38,7 @@
 整个流程以 SI 为基准，UI 显示时按用户选择换算到 g/mm/g·mm² 等实用单位。
 """
 
+import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -528,6 +529,53 @@ def recompute_product_rows(rows: list[dict]) -> None:
         row["Ixy"]    = result["inertia"][0][1]
         row["Ixz"]    = result["inertia"][0][2]
         row["Iyz"]    = result["inertia"][1][2]
+
+
+# ---------------------------------------------------------------------------
+# JSON 序列化 / 反序列化（保存与载入行数据）
+# ---------------------------------------------------------------------------
+
+# 序列化时跳过的内部字段：_root_mp 可由 _post_process_rows() 重新计算，
+# _rows_idx 是显示层临时注入的索引，均无需持久化。
+_SERIALIZE_SKIP: frozenset[str] = frozenset({"_root_mp", "_rows_idx"})
+
+
+def save_rows_to_json(rows: list[dict], file_path: str) -> None:
+    """将行数据序列化为 JSON 文件。
+
+    序列化时跳过 ``_root_mp``（加载后可由 :func:`_post_process_rows` 重新计算）
+    和 ``_rows_idx``（仅供显示层使用）。其余所有字段均原样写出。
+
+    参数：
+        rows:      ``collect_mass_props_rows()`` 或 :func:`load_rows_from_json`
+                   返回的行列表。
+        file_path: 目标 JSON 文件路径（不存在则创建，已存在则覆盖）。
+    """
+    serializable = [
+        {k: v for k, v in row.items() if k not in _SERIALIZE_SKIP}
+        for row in rows
+    ]
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(serializable, f, ensure_ascii=False, indent=2)
+
+
+def load_rows_from_json(file_path: str) -> list[dict]:
+    """从 JSON 文件反序列化行数据，并重建运行时缓存字段。
+
+    读取由 :func:`save_rows_to_json` 保存的 JSON 文件，恢复行列表后调用
+    :func:`_post_process_rows` 重新计算 ``_root_mp`` 及产品/部件汇总字段，
+    与从 CATIA 现场加载后的状态完全等价。
+
+    参数：
+        file_path: 要读取的 JSON 文件路径。
+
+    返回：
+        经过后处理的行列表（包含 ``_root_mp`` 及汇总显示字段）。
+    """
+    with open(file_path, "r", encoding="utf-8") as f:
+        rows: list[dict] = json.load(f)
+    _post_process_rows(rows)
+    return rows
 
 
 # ---------------------------------------------------------------------------
