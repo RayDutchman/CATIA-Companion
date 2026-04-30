@@ -67,20 +67,13 @@ class MainWindow(QMainWindow):
     # ── CATIA 连接状态指示器 ──────────────────────────────────────────────
 
     def _build_connection_indicator(self) -> None:
-        """在状态栏右侧添加 CATIA 连接状态指示标签和诊断按钮，并启动定时轮询。"""
-        # 诊断按钮（🔍）
-        self._catia_diag_btn = QPushButton("🔍")
-        self._catia_diag_btn.setObjectName("catiaConnDiagBtn")
-        self._catia_diag_btn.setToolTip("点击查看 CATIA 连接详细诊断")
-        self._catia_diag_btn.setFixedWidth(28)
-        self._catia_diag_btn.clicked.connect(self._show_catia_diagnostics)
-        self.statusBar().addPermanentWidget(self._catia_diag_btn)
-
+        """在状态栏右侧添加 CATIA 连接状态指示标签，并启动定时轮询。"""
         self._catia_status_label = QLabel()
         self._catia_status_label.setObjectName("catiaStatusLabel")
         self._catia_status_label.setToolTip(
             "CATIA V5 COM 连接状态（每 5 秒自动刷新）\n"
-            "⚠ 橙色表示 COM 对象可获取但功能测试失败（如早绑定缓存污染），点击 🔍 查看详情"
+            "橙色表示 COM 对象可获取但功能测试失败（如早绑定缓存污染），\n"
+            "可通过菜单「帮助 -> CATIA 连接诊断」查看详情"
         )
         self.statusBar().addPermanentWidget(self._catia_status_label)
 
@@ -132,15 +125,6 @@ class MainWindow(QMainWindow):
             lines.append(f"<b>当前活动文档：</b>{info['active_doc']}")
         elif info["status"] == "connected":
             lines.append("<b>当前活动文档：</b>（无）")
-
-        lines.append("")
-        gen_py_state = "存在（可能影响 COM 连接）" if info["gen_py_exists"] else "不存在（正常）"
-        gen_py_color = "#c97a00" if info["gen_py_exists"] else "#2a9d2a"
-        lines.append(
-            f"<b>gen_py 缓存目录：</b>"
-            f"<span style='color:{gen_py_color};'>{gen_py_state}</span><br/>"
-            f"<small>{info['gen_py_path']}</small>"
-        )
 
         if info["status"] == "broken":
             lines.append(
@@ -367,6 +351,10 @@ class MainWindow(QMainWindow):
         help_menu.addAction(QAction(
             "文档", self,
             triggered=self._show_help,
+        ))
+        help_menu.addAction(QAction(
+            "CATIA 连接诊断", self,
+            triggered=self._show_catia_diagnostics,
         ))
         help_menu.addAction(QAction(
             f"关于 {APP_NAME}", self,

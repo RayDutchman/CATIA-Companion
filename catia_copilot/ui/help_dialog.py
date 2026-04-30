@@ -112,8 +112,8 @@ _HELP_HTML = f"""\
     <td>CATIA 未运行或 COM 完全不可用。请先打开 CATIA。</td></tr>
 </table>
 <p>
-点击状态栏中的 <b>🔍</b> 按钮可查看详细诊断报告，包含 CATIA 版本、已打开文档数、
-活动文档名称，以及 gen_py 缓存状态和建议操作。
+通过菜单 <b>帮助 → CATIA 连接诊断</b> 可查看详细诊断报告，包含 CATIA 版本、
+已打开文档数、活动文档名称及建议操作。
 </p>
 
 <hr/>
@@ -125,7 +125,7 @@ _HELP_HTML = f"""\
 <tr><td><b>Q: 状态栏显示橙色"⚠ CATIA 连接异常"是什么意思？</b></td>
     <td>A: 这表示 CATIA 进程确实在运行，COM 对象也能获取，但对它的功能性调用失败了。
     最常见原因是 <b>win32com 早绑定缓存（gen_py）污染</b>（见下一条）。<br/>
-    点击 <b>🔍</b> 按钮查看诊断详情，按提示重启程序即可。</td></tr>
+    可通过菜单 <b>帮助 → CATIA 连接诊断</b> 查看诊断详情，按提示重启程序即可。</td></tr>
 <tr><td><b>Q: 重启后仍然无法连接 CATIA，怀疑 COM 缓存损坏？</b></td>
     <td>A: <b>win32com 早绑定缓存（gen_py）污染</b>可能导致 COM 连接异常。<br/>
     <b>原因：</b>其他工具或脚本曾调用 <code>win32com.client.gencache.EnsureDispatch()</code>，
