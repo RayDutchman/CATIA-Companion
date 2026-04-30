@@ -37,7 +37,7 @@ from catia_copilot.constants import (
 )
 from catia_copilot.catia.mass_props_collect import (
     collect_mass_props_rows, _row_inertia_to_root, recompute_product_rows,
-    save_rows_to_json, load_rows_from_json,
+    save_rows, load_rows,
 )
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
 from catia_copilot.ui.bom_widgets import _BomTreeWidget
@@ -302,7 +302,7 @@ class MassPropsDialog(QDialog):
         self._load_btn = QPushButton("加载")
         self._load_btn.clicked.connect(self._load_data)
         self._load_json_btn = QPushButton("载入已保存数据…")
-        self._load_json_btn.setToolTip("从之前保存的 JSON 数据文件中载入质量特性（无需打开CATIA）")
+        self._load_json_btn.setToolTip("从之前保存的数据文件中载入质量特性（无需打开CATIA）")
         self._load_json_btn.clicked.connect(self._load_data_from_json)
         file_row.addWidget(self._file_edit)
         file_row.addWidget(self._file_browse_btn)
@@ -507,7 +507,7 @@ class MassPropsDialog(QDialog):
         btn_row.addWidget(self._calc_btn)
 
         self._save_json_btn = QPushButton("保存数据…")
-        self._save_json_btn.setToolTip("将当前行数据保存为 JSON 文件，可在不打开CATIA的情况下重新载入")
+        self._save_json_btn.setToolTip("将当前行数据保存为数据文件，可在不打开CATIA的情况下重新载入")
         self._save_json_btn.setEnabled(False)
         self._save_json_btn.clicked.connect(self._save_data_to_json)
         btn_row.addWidget(self._save_json_btn)
@@ -747,26 +747,26 @@ class MassPropsDialog(QDialog):
         self._calculate()
 
     def _save_data_to_json(self) -> None:
-        """将当前行数据保存为 JSON 文件（不包含 _root_mp，可重新计算）。"""
+        """将当前行数据保存为压缩二进制数据文件（不包含 _root_mp，可重新计算）。"""
         if not self._rows:
             return
         dest, _ = QFileDialog.getSaveFileName(
-            self, "保存质量特性数据", "", "JSON 数据文件 (*.json)"
+            self, "保存质量特性数据", "", "质量特性数据文件 (*.mpd)"
         )
         if not dest:
             return
-        if not dest.lower().endswith(".json"):
-            dest += ".json"
+        if not dest.lower().endswith(".mpd"):
+            dest += ".mpd"
         try:
-            save_rows_to_json(self._rows, dest)
+            save_rows(self._rows, dest)
         except Exception as e:
             logger.error(f"保存质量特性数据失败: {e}")
             QMessageBox.critical(self, "保存失败", f"保存数据时出错：\n{e}")
 
     def _load_data_from_json(self) -> None:
-        """从 JSON 文件载入行数据（无需 CATIA，_root_mp 由后处理重建）。"""
+        """从压缩二进制数据文件载入行数据（无需 CATIA，_root_mp 由后处理重建）。"""
         src, _ = QFileDialog.getOpenFileName(
-            self, "载入质量特性数据", "", "JSON 数据文件 (*.json)"
+            self, "载入质量特性数据", "", "质量特性数据文件 (*.mpd)"
         )
         if not src:
             return
@@ -774,7 +774,7 @@ class MassPropsDialog(QDialog):
             QMessageBox.warning(self, "文件不存在", f"文件不存在：\n{src}")
             return
         try:
-            rows = load_rows_from_json(src)
+            rows = load_rows(src)
         except Exception as e:
             logger.error(f"载入质量特性数据失败: {e}")
             QMessageBox.critical(self, "载入失败", f"载入数据时出错：\n{e}")
