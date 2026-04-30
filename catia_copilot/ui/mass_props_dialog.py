@@ -172,6 +172,8 @@ class MassPropsDialog(QDialog):
         self._rollup_result: dict | None = None
         self._loaded: bool = False
         self._col_widths: dict[str, int] = {}
+        # 上一次保存数据文件的目录（用于下次保存时的默认路径）
+        self._last_save_dir: str = ""
 
         # 列名列表在可见性或模式改变时重建
         self._columns: list[str] = self._build_columns()
@@ -750,8 +752,22 @@ class MassPropsDialog(QDialog):
         """将当前行数据保存为压缩二进制数据文件（不包含 _root_mp，可重新计算）。"""
         if not self._rows:
             return
+
+        # ── 默认文件名：根产品零件编号 + "_惯量汇总" ───────────────────────
+        root_pn = str(self._rows[0].get("Part Number", "")).strip()
+        default_name = f"{root_pn}_惯量汇总" if root_pn else "惯量汇总"
+
+        # ── 默认目录：上次保存目录 → 根产品文件所在目录 → 空 ──────────────
+        if self._last_save_dir and Path(self._last_save_dir).is_dir():
+            default_dir = self._last_save_dir
+        else:
+            root_fp = str(self._rows[0].get("_filepath", "")).strip()
+            default_dir = str(Path(root_fp).parent) if root_fp else ""
+
+        default_path = str(Path(default_dir) / default_name) if default_dir else default_name
+
         dest, _ = QFileDialog.getSaveFileName(
-            self, "保存质量特性数据", "", "质量特性数据文件 (*.mpd)"
+            self, "保存质量特性数据", default_path, "质量特性数据文件 (*.mpd)"
         )
         if not dest:
             return
@@ -759,6 +775,7 @@ class MassPropsDialog(QDialog):
             dest += ".mpd"
         try:
             save_rows(self._rows, dest)
+            self._last_save_dir = str(Path(dest).parent)
         except Exception as e:
             logger.error(f"保存质量特性数据失败: {e}")
             QMessageBox.critical(self, "保存失败", f"保存数据时出错：\n{e}")
