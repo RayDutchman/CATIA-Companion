@@ -126,58 +126,67 @@ Private Sub RecurseProduct(oProduct, ByRef processedDocs)
         Set childProd = oProduct.Products.Item(i)
         On Error GoTo 0
 
-        If Not IsObject(childProd) Then GoTo NextChild
-        If childProd Is Nothing Then GoTo NextChild
+        If IsObject(childProd) Then
+            If Not (childProd Is Nothing) Then
 
-        ' ── 取子实例的参考产品 ──────────────────────────────────────────────
-        Dim refProd
-        Set refProd = Nothing
-        On Error Resume Next
-        Set refProd = childProd.ReferenceProduct
-        On Error GoTo 0
+                ' ── 取子实例的参考产品 ──────────────────────────────────────
+                Dim refProd
+                Set refProd = Nothing
+                On Error Resume Next
+                Set refProd = childProd.ReferenceProduct
+                On Error GoTo 0
 
-        If Not IsObject(refProd) Then GoTo NextChild
-        If refProd Is Nothing Then GoTo NextChild
+                If IsObject(refProd) Then
+                    If Not (refProd Is Nothing) Then
 
-        ' ── 取参考产品所在文档 ──────────────────────────────────────────────
-        Dim parentDoc
-        Set parentDoc = Nothing
-        On Error Resume Next
-        Set parentDoc = refProd.Parent
-        On Error GoTo 0
+                        ' ── 取参考产品所在文档 ──────────────────────────────
+                        Dim parentDoc
+                        Set parentDoc = Nothing
+                        On Error Resume Next
+                        Set parentDoc = refProd.Parent
+                        On Error GoTo 0
 
-        If Not IsObject(parentDoc) Then GoTo NextChild
-        If parentDoc Is Nothing Then GoTo NextChild
+                        If IsObject(parentDoc) Then
+                            If Not (parentDoc Is Nothing) Then
 
-        ' ── 按文档类型分支处理 ──────────────────────────────────────────────
-        Dim childDocType
-        childDocType = TypeName(parentDoc)
+                                ' ── 按文档类型分支处理 ──────────────────────
+                                Dim childDocType
+                                childDocType = TypeName(parentDoc)
 
-        If childDocType = "PartDocument" Then
+                                If childDocType = "PartDocument" Then
 
-            ' 取文档唯一标识（FullName 不可用时回退到 Name）
-            Dim docKey
-            docKey = ""
-            On Error Resume Next
-            docKey = parentDoc.FullName
-            If docKey = "" Then docKey = parentDoc.Name
-            Err.Clear
-            On Error GoTo 0
+                                    ' 取文档唯一标识（FullName 不可用时回退到 Name）
+                                    Dim docKey
+                                    docKey = ""
+                                    On Error Resume Next
+                                    docKey = parentDoc.FullName
+                                    If docKey = "" Then docKey = parentDoc.Name
+                                    Err.Clear
+                                    On Error GoTo 0
 
-            ' 仅在尚未处理时执行隐藏（去重）
-            If docKey <> "" And InStr(processedDocs, "|" & docKey & "|") = 0 Then
-                processedDocs = processedDocs & docKey & "|"
-                HideWireframeInPart parentDoc
+                                    ' 仅在尚未处理时执行隐藏（去重）
+                                    If docKey <> "" Then
+                                        If InStr(processedDocs, "|" & docKey & "|") = 0 Then
+                                            processedDocs = processedDocs & docKey & "|"
+                                            HideWireframeInPart parentDoc
+                                        End If
+                                    End If
+
+                                ElseIf childDocType = "ProductDocument" Then
+
+                                    ' 子节点为子装配体：递归向下处理
+                                    RecurseProduct refProd, processedDocs
+
+                                End If
+
+                            End If
+                        End If
+
+                    End If
+                End If
+
             End If
-
-        ElseIf childDocType = "ProductDocument" Then
-
-            ' 子节点为子装配体：递归向下处理
-            RecurseProduct refProd, processedDocs
-
         End If
-
-        NextChild:
 
     Next
 
