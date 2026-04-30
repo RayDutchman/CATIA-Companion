@@ -12,8 +12,8 @@ import re
 # ---------------------------------------------------------------------------
 
 APP_NAME    = "CATIA Copilot"
-APP_VERSION = "1.4.2"
-APP_DATE    = "2026-04-28"
+APP_VERSION = "1.5.0"
+APP_DATE    = "2026-04-30"
 APP_AUTHOR  = "CHEN Weibo"
 APP_CONTACT = "thucwb@gmail.com"
 
@@ -26,6 +26,7 @@ ABOUT_TEXT = f"""{APP_NAME} v{APP_VERSION}
   • CATPart / CATProduct 批量导出 STEP
   • CATProduct BOM 导出到 Excel
   • BOM 属性在线编辑与回写 CATIA
+  • 重量、重心、转动惯量统计（质量特性汇总）
   • 新建图纸（从模板生成 CATDrawing）
   • 刷新图纸（同步零件属性到图纸参数）
   • CATIA 宏脚本快捷运行
@@ -33,6 +34,8 @@ ABOUT_TEXT = f"""{APP_NAME} v{APP_VERSION}
   • 托板螺母快速装配（VBA 宏批量装配）
   • 零件模板刷写（添加标准用户自定义属性）
   • 字体文件 / ISO.xml 标准文件一键部署
+  • COM 连接诊断（自动检测连接状态与异常）
+  • 启动时自动清理 win32com 早绑定缓存（gen_py）
 
 ─────────────────────────────────────────
 开发者    {APP_AUTHOR}

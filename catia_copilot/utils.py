@@ -2,9 +2,12 @@
 CATIA Copilot 实用工具函数模块。
 
 提供：
-- resource_path()        – 解析打包资源文件路径（支持 PyInstaller）
-- detect_catia_root()    – 通过注册表自动检测 CATIA 安装目录
-- estimate_column_width() – 估算 Excel 列宽度（支持中日韩字符）
+- resource_path()               – 解析打包资源文件路径（支持 PyInstaller）
+- detect_catia_root()           – 通过注册表自动检测 CATIA 安装目录
+- check_catia_connection()      – 3 态 COM 连接检测（"connected"/"broken"/"disconnected"）
+- diagnose_catia_connection()   – 详细 COM 诊断，返回含版本、文档数等信息的字典
+- ensure_clean_gencache()       – 启动时清理 win32com 早绑定缓存（gen_py 目录）
+- estimate_column_width()       – 估算 Excel 列宽度（支持中日韩字符）
 """
 
 import ctypes
@@ -93,19 +96,105 @@ def detect_catia_root() -> str | None:
     return None
 
 
-def check_catia_connection() -> bool:
+def check_catia_connection() -> str:
     """检测 CATIA V5 是否正在运行并可通过 COM 访问。
 
-    尝试通过 win32com 的 ``GetActiveObject`` 查找已在运行中的 CATIA 实例。
-    返回 ``True`` 表示 CATIA 已连接，``False`` 表示未找到或无法连接。
+    返回以下三种状态之一：
+
+    - ``"connected"``     — CATIA 已运行，COM 对象可获取，且功能性测试通过。
+    - ``"broken"``        — COM 对象可获取（GetActiveObject 成功），但访问属性时
+                            抛出异常，说明连接存在异常（例如早绑定缓存污染）。
+    - ``"disconnected"``  — CATIA 未运行或 COM 完全不可用。
     """
+    if _win32com_client is None:
+        return "disconnected"
     try:
-        if _win32com_client is None:
-            return False
-        _win32com_client.GetActiveObject("CATIA.Application")
-        return True
+        app = _win32com_client.GetActiveObject("CATIA.Application")
     except Exception:
-        return False
+        return "disconnected"
+    try:
+        _ = app.Name  # 功能性测试：确认 COM 对象实际可用
+        return "connected"
+    except Exception:
+        return "broken"
+
+
+def diagnose_catia_connection() -> dict:
+    """对 CATIA COM 连接进行详细诊断，返回包含各项检测结果的字典。
+
+    返回字典包含以下键：
+
+    - ``status``         (str)            — "connected" / "broken" / "disconnected"
+    - ``error``          (str | None)     — 最近一次异常描述（如有）
+    - ``app_name``       (str | None)     — CATIA 应用名称（如 "CATIA"）
+    - ``app_version``    (str | None)     — CATIA 版本字符串
+    - ``active_doc``     (str | None)     — 当前活动文档名称
+    - ``doc_count``      (int | None)     — 已打开文档数量
+    - ``gen_py_path``    (str)            — win32com gen_py 缓存目录路径
+    - ``gen_py_exists``  (bool)           — gen_py 缓存目录是否存在
+    """
+    result: dict = {
+        "status": "disconnected",
+        "error": None,
+        "app_name": None,
+        "app_version": None,
+        "active_doc": None,
+        "doc_count": None,
+        "gen_py_path": "",
+        "gen_py_exists": False,
+    }
+
+    # ── gen_py 缓存目录 ────────────────────────────────────────────────────
+    gen_py_path: Path | None = None
+    if _win32com_client is not None:
+        try:
+            from win32com.client import gencache as _gencache
+            gen_py_path = Path(_gencache.GetGeneratePath())
+        except Exception:
+            pass
+    if gen_py_path is None:
+        gen_py_path = Path.home() / "AppData" / "Local" / "Temp" / "gen_py"
+    result["gen_py_path"] = str(gen_py_path)
+    result["gen_py_exists"] = gen_py_path.exists()
+
+    # ── COM 连接检测 ──────────────────────────────────────────────────────
+    if _win32com_client is None:
+        result["error"] = "win32com 未安装，无法进行 COM 调用"
+        return result
+
+    try:
+        app = _win32com_client.GetActiveObject("CATIA.Application")
+    except Exception as exc:
+        result["status"] = "disconnected"
+        result["error"] = str(exc)
+        return result
+
+    # GetActiveObject 成功 — 继续功能性测试
+    try:
+        result["app_name"] = app.Name
+    except Exception as exc:
+        result["status"] = "broken"
+        result["error"] = f"GetActiveObject 成功但无法访问 .Name：{exc}"
+        return result
+
+    result["status"] = "connected"
+
+    try:
+        result["app_version"] = str(app.Version)
+    except Exception:
+        pass
+
+    try:
+        result["doc_count"] = int(app.Documents.Count)
+    except Exception:
+        pass
+
+    try:
+        result["active_doc"] = str(app.ActiveDocument.Name)
+    except Exception:
+        pass  # 无活动文档时正常
+
+    return result
 
 
 def ensure_clean_gencache() -> None:

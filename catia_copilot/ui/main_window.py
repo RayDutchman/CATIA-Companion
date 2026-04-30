@@ -30,7 +30,7 @@ from catia_copilot.constants import (
     ISO_XML_FILE_PATH,
     CRACK_DIR_PATH,
 )
-from catia_copilot.utils import resource_path, detect_catia_root, check_catia_connection
+from catia_copilot.utils import resource_path, detect_catia_root, check_catia_connection, diagnose_catia_connection
 from catia_copilot.logging_setup import log_signal_emitter
 from catia_copilot.catia.conversion import convert_drawing_to_pdf, convert_part_to_step
 from catia_copilot.catia.template import apply_part_template
@@ -67,10 +67,21 @@ class MainWindow(QMainWindow):
     # ── CATIA 连接状态指示器 ──────────────────────────────────────────────
 
     def _build_connection_indicator(self) -> None:
-        """在状态栏右侧添加 CATIA 连接状态指示标签，并启动定时轮询。"""
+        """在状态栏右侧添加 CATIA 连接状态指示标签和诊断按钮，并启动定时轮询。"""
+        # 诊断按钮（🔍）
+        self._catia_diag_btn = QPushButton("🔍")
+        self._catia_diag_btn.setObjectName("catiaConnDiagBtn")
+        self._catia_diag_btn.setToolTip("点击查看 CATIA 连接详细诊断")
+        self._catia_diag_btn.setFixedWidth(28)
+        self._catia_diag_btn.clicked.connect(self._show_catia_diagnostics)
+        self.statusBar().addPermanentWidget(self._catia_diag_btn)
+
         self._catia_status_label = QLabel()
         self._catia_status_label.setObjectName("catiaStatusLabel")
-        self._catia_status_label.setToolTip("CATIA V5 COM 连接状态（每 5 秒自动刷新）")
+        self._catia_status_label.setToolTip(
+            "CATIA V5 COM 连接状态（每 5 秒自动刷新）\n"
+            "⚠ 橙色表示 COM 对象可获取但功能测试失败（如早绑定缓存污染），点击 🔍 查看详情"
+        )
         self.statusBar().addPermanentWidget(self._catia_status_label)
 
         # 立即检测一次，再每 5 秒轮询一次
@@ -82,16 +93,63 @@ class MainWindow(QMainWindow):
 
     def _update_connection_status(self) -> None:
         """轮询 CATIA 连接状态并更新指示标签的文字和样式。"""
-        connected = check_catia_connection()
-        if connected:
+        status = check_catia_connection()
+        if status == "connected":
             self._catia_status_label.setText("● CATIA 已连接")
             self._catia_status_label.setProperty("catiaConnected", "true")
+        elif status == "broken":
+            self._catia_status_label.setText("⚠ CATIA 连接异常")
+            self._catia_status_label.setProperty("catiaConnected", "broken")
         else:
             self._catia_status_label.setText("● CATIA 未连接")
             self._catia_status_label.setProperty("catiaConnected", "false")
         # 强制重新应用 QSS（动态属性变化后需要刷新样式）
         self._catia_status_label.style().unpolish(self._catia_status_label)
         self._catia_status_label.style().polish(self._catia_status_label)
+
+    def _show_catia_diagnostics(self) -> None:
+        """运行 CATIA COM 详细诊断并以对话框形式呈现结果。"""
+        info = diagnose_catia_connection()
+
+        status_text = {
+            "connected":    "✅ 已连接（功能测试通过）",
+            "broken":       "⚠️ 连接异常（COM 对象存在但功能测试失败）",
+            "disconnected": "❌ 未连接（CATIA 未运行或 COM 不可用）",
+        }.get(info["status"], info["status"])
+
+        lines = [
+            f"<b>连接状态：</b>{status_text}",
+        ]
+        if info["error"]:
+            lines.append(f"<b>错误详情：</b><code>{info['error']}</code>")
+        if info["app_name"]:
+            lines.append(f"<b>应用名称：</b>{info['app_name']}")
+        if info["app_version"]:
+            lines.append(f"<b>CATIA 版本：</b>{info['app_version']}")
+        if info["doc_count"] is not None:
+            lines.append(f"<b>已打开文档数：</b>{info['doc_count']}")
+        if info["active_doc"]:
+            lines.append(f"<b>当前活动文档：</b>{info['active_doc']}")
+        elif info["status"] == "connected":
+            lines.append("<b>当前活动文档：</b>（无）")
+
+        lines.append("")
+        gen_py_state = "存在（可能影响 COM 连接）" if info["gen_py_exists"] else "不存在（正常）"
+        gen_py_color = "#c97a00" if info["gen_py_exists"] else "#2a9d2a"
+        lines.append(
+            f"<b>gen_py 缓存目录：</b>"
+            f"<span style='color:{gen_py_color};'>{gen_py_state}</span><br/>"
+            f"<small>{info['gen_py_path']}</small>"
+        )
+
+        if info["status"] == "broken":
+            lines.append(
+                "<br/><b>建议：</b>检测到 COM 对象异常。可能原因为早绑定缓存（gen_py）污染。"
+                "请重启本程序（启动时会自动清理缓存），或参阅帮助文档中的手动修复步骤。"
+            )
+
+        html = "<br/>".join(lines)
+        QMessageBox.information(self, "CATIA 连接诊断", html)
 
     # ── 中央控件区域 ──────────────────────────────────────────────────────
 

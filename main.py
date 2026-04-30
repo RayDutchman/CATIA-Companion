@@ -26,7 +26,7 @@ def main() -> None:
     ensure_clean_gencache()
 
     app = QApplication(sys.argv)
-    app.setApplicationName("CATIA Copilot 1.4.1")
+    app.setApplicationName("CATIA Copilot 1.5.0")
 
     # 应用统一的 QSS 样式表
     qss_path = resource_path(STYLESHEET_RELATIVE_PATH)

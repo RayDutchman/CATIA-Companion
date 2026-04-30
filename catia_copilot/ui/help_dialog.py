@@ -16,7 +16,7 @@ _HELP_HTML = f"""\
 <h3>概述</h3>
 <p>
 {APP_NAME} 是一款面向工程团队的 CATIA V5 辅助工具，旨在简化日常操作，提升工作效率。
-支持图纸与零件的批量导出、BOM 管理、宏脚本快捷运行，以及 CATIA 资源文件的一键部署。
+支持图纸与零件的批量导出、BOM 管理、质量特性统计、宏脚本快捷运行，以及 CATIA 资源文件的一键部署。
 </p>
 
 <hr/>
@@ -51,6 +51,11 @@ _HELP_HTML = f"""\
     定义、版本、来源等字段，以及自定义的用户属性（物料编码、物料名称、
     规格型号等）。修改完成后可一键写回 CATIA。<br/>
     <i>同一文件的属性修改会自动联动更新。</i></td></tr>
+<tr><td><b>重量、重心、惯量统计</b></td>
+    <td>遍历当前 CATProduct 的产品树，汇总各零件的质量特性（质量、重心、转动惯量），
+    按装配层级自动累加并导出至 Excel。<br/>
+    支持层次化和汇总两种 BOM 模式，支持 g/kg/kg·m² 单位切换。<br/>
+    <i>需为每个零件预先通过 CATIA "保持惯量" 功能测量质量特性。</i></td></tr>
 <tr><td><b>新建图纸</b></td>
     <td>根据 drawing_templates 文件夹中的 CATDrawing 模板，在 CATIA 中为当前
     活动的 CATPart 或 CATProduct 生成新图纸。<br/>
@@ -93,12 +98,34 @@ _HELP_HTML = f"""\
     <td>打开日志窗口，查看操作记录和错误信息，方便排查问题。</td></tr>
 </table>
 
+<h4>五、CATIA 连接状态指示器（状态栏）</h4>
+<p>
+主窗口状态栏右侧显示 CATIA COM 连接状态，每 5 秒自动刷新：
+</p>
+<table border="0" cellpadding="4">
+<tr><td><span style="color:#2a9d2a;">● CATIA 已连接</span></td>
+    <td>COM 对象成功获取，功能性测试通过——连接完全正常。</td></tr>
+<tr><td><span style="color:#c97a00;">⚠ CATIA 连接异常</span></td>
+    <td>COM 对象可获取（CATIA 在运行），但访问属性时失败。<br/>
+    最常见原因：<b>早绑定缓存（gen_py）污染</b>——重启本程序（启动时自动清理）即可修复。</td></tr>
+<tr><td><span style="color:#cc2222;">● CATIA 未连接</span></td>
+    <td>CATIA 未运行或 COM 完全不可用。请先打开 CATIA。</td></tr>
+</table>
+<p>
+点击状态栏中的 <b>🔍</b> 按钮可查看详细诊断报告，包含 CATIA 版本、已打开文档数、
+活动文档名称，以及 gen_py 缓存状态和建议操作。
+</p>
+
 <hr/>
 <h3>常见问题</h3>
 <table border="0" cellpadding="4">
 <tr><td><b>Q: 提示无法连接 CATIA？</b></td>
     <td>A: 请确认 CATIA V5 已启动并处于运行状态。程序通过 COM 自动化接口
     与 CATIA 通信，需要先打开 CATIA。</td></tr>
+<tr><td><b>Q: 状态栏显示橙色"⚠ CATIA 连接异常"是什么意思？</b></td>
+    <td>A: 这表示 CATIA 进程确实在运行，COM 对象也能获取，但对它的功能性调用失败了。
+    最常见原因是 <b>win32com 早绑定缓存（gen_py）污染</b>（见下一条）。<br/>
+    点击 <b>🔍</b> 按钮查看诊断详情，按提示重启程序即可。</td></tr>
 <tr><td><b>Q: 重启后仍然无法连接 CATIA，怀疑 COM 缓存损坏？</b></td>
     <td>A: <b>win32com 早绑定缓存（gen_py）污染</b>可能导致 COM 连接异常。<br/>
     <b>原因：</b>其他工具或脚本曾调用 <code>win32com.client.gencache.EnsureDispatch()</code>，
@@ -120,6 +147,10 @@ _HELP_HTML = f"""\
 <tr><td><b>Q: 如何添加自定义宏？</b></td>
     <td>A: 点击菜单"宏 → 打开宏文件夹"，将 .catvbs 或 .catscript
     文件放入该文件夹，然后点击"刷新宏列表"即可。</td></tr>
+<tr><td><b>Q: 质量特性统计为何某些零件显示"测量失败"？</b></td>
+    <td>A: 质量特性统计功能需要在 CATIA 中为每个零件通过
+    "形状 → 保持惯量（Inertia Keep）"功能预先测量，并将结果保存在名为
+    <code>惯量包络体</code> 的几何体中。未预先测量的零件将显示测量失败。</td></tr>
 </table>
 
 <hr/>
