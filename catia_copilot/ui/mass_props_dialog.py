@@ -6,7 +6,8 @@
                     支持：
                       • 手动编辑重量（等比缩放惯量，联动同型号零件）
                       • 层级BOM / 汇总BOM 切换
-                      • kg / g 单位切换（重量与转动惯量）
+                      • 重量单位 g/kg + 长度单位 mm/m 独立选择（惯量单位自动组合，共4种）
+                      • 惯量包络体读取模式：只读.1 / 最大编号 / 全部汇总
                       • 文件名 / 零件编号 / 术语 / 版本列可隐藏
                       • 计算装配体总质量特性并导出 Excel
 """
@@ -148,14 +149,34 @@ class MassPropsDialog(QDialog):
         }
 
         self._summarize: bool = self._settings.value("summarize", False, type=bool)
-        self._unit: str = self._settings.value("unit", "g")
-        # 内部单位为 SI（kg / m / kg·m²）；根据所选显示单位制设置换算因子：
-        #   "g"     → mass: ×1e3,   cog: ×1e3,  inertia: ×1e9  (g,  mm, g·mm²)
-        #   "kg"    → mass: ×1,     cog: ×1e3,  inertia: ×1e6  (kg, mm, kg·mm²)
-        #   "kg_m2" → mass: ×1,     cog: ×1,    inertia: ×1    (kg, m,  kg·m²)
-        self._unit_factor, self._inertia_unit_factor, self._cog_unit_factor = (
-            self._calc_unit_factors(self._unit)
+
+        # ── 单位制（重量单位 + 长度单位，4 种组合）────────────────────────────
+        # 向后兼容旧版本保存的 "unit" 键（"g"/"kg"/"kg_m2"）
+        _legacy_unit = self._settings.value("unit", "")
+        _legacy_map = {"g": ("g", "mm"), "kg": ("kg", "mm"), "kg_m2": ("kg", "m")}
+        _legacy_defaults = _legacy_map.get(_legacy_unit, None)
+        self._mass_unit: str = self._settings.value(
+            "mass_unit",
+            _legacy_defaults[0] if _legacy_defaults else "g",
         )
+        self._cog_unit: str = self._settings.value(
+            "cog_unit",
+            _legacy_defaults[1] if _legacy_defaults else "mm",
+        )
+        if self._mass_unit not in ("g", "kg"):
+            self._mass_unit = "g"
+        if self._cog_unit not in ("mm", "m"):
+            self._cog_unit = "mm"
+
+        # 内部单位为 SI（kg / m / kg·m²）；根据所选显示单位制设置换算因子
+        self._unit_factor, self._inertia_unit_factor, self._cog_unit_factor = (
+            self._calc_unit_factors(self._mass_unit, self._cog_unit)
+        )
+
+        # ── 读取模式 ─────────────────────────────────────────────────────────
+        self._read_mode: str = self._settings.value("read_mode", "all")
+        if self._read_mode not in ("first", "last", "all"):
+            self._read_mode = "all"
 
         # ── 汇总BOM专用选项 ───────────────────────────────────────────────────
         self._summary_sort_column: str = self._settings.value(
@@ -181,38 +202,37 @@ class MassPropsDialog(QDialog):
     # ── 列管理 ──────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _calc_unit_factors(unit: str) -> tuple[float, float, float]:
-        """根据单位制字符串返回 (mass_factor, inertia_factor, cog_factor)。
+    def _calc_unit_factors(mass_unit: str, cog_unit: str) -> tuple[float, float, float]:
+        """根据重量单位和长度单位返回 (mass_factor, inertia_factor, cog_factor)。
 
         内部存储单位为 SI：质量 kg、坐标 m、惯量 kg·m²。
+
+        支持的组合（惯量单位自动由重量×长度²推导）：
+          g  + mm → g·mm²   (mass×1e3, cog×1e3, inertia×1e9)
+          g  + m  → g·m²    (mass×1e3, cog×1,   inertia×1e3)
+          kg + mm → kg·mm²  (mass×1,   cog×1e3, inertia×1e6)
+          kg + m  → kg·m²   (mass×1,   cog×1,   inertia×1)
 
         Returns:
             mass_factor:    kg    → 显示单位的换算因子（重量列）
             inertia_factor: kg·m² → 显示单位的换算因子（惯量列）
             cog_factor:     m     → 显示单位的换算因子（重心坐标列）
         """
-        if unit == "g":
-            return 1e3, 1e9, 1e3    # kg→g,    kg·m²→g·mm²,   m→mm
-        if unit == "kg_m2":
-            return 1.0, 1.0, 1.0    # kg→kg,   kg·m²→kg·m²,   m→m
-        # "kg" (kg / kg·mm²)
-        return 1.0, 1e6, 1e3        # kg→kg,   kg·m²→kg·mm²,  m→mm
+        mf = 1e3 if mass_unit == "g" else 1.0
+        cf = 1e3 if cog_unit  == "mm" else 1.0
+        return mf, mf * cf * cf, cf
 
     def _weight_unit_label(self) -> str:
         """返回重量列的单位标签字符串。"""
-        return "g" if self._unit == "g" else "kg"
+        return self._mass_unit
 
     def _inertia_unit_label(self) -> str:
-        """返回惯量列的单位标签字符串。"""
-        if self._unit == "g":
-            return "g·mm²"
-        if self._unit == "kg_m2":
-            return "kg·m²"
-        return "kg·mm²"
+        """返回惯量列的单位标签字符串（由重量单位和长度单位自动组合）。"""
+        return f"{self._mass_unit}·{self._cog_unit}²"
 
     def _cog_unit_label(self) -> str:
         """返回重心坐标列的单位标签字符串。"""
-        return "m" if self._unit == "kg_m2" else "mm"
+        return self._cog_unit
 
     def _build_columns(self) -> list[str]:
         """根据当前可见性设置和 BOM 模式，构建列名列表。
@@ -288,6 +308,20 @@ class MassPropsDialog(QDialog):
         layout.setSpacing(8)
         layout.setContentsMargins(16, 16, 16, 16)
 
+        # ── 前提条件说明 ────────────────────────────────────────────────────
+        prereq_lbl = QLabel(
+            "⚠ 使用前提：请在 CATIA 中 <b>单独打开</b> 每个零件文件（不在产品环境下），"
+            "进入 SPA（惯量分析），执行测量惯量并勾选 <b>保持测量</b>。"
+            "测量结果必须命名为 <b>惯量包络体.x</b>（x 为 1–50 的整数）。"
+            "在产品下建立的惯量测量使用产品坐标系，结果不正确，将不被读取。"
+        )
+        prereq_lbl.setWordWrap(True)
+        prereq_lbl.setStyleSheet(
+            "QLabel { background-color: #FFF8E1; border: 1px solid #F9A825;"
+            " border-radius: 4px; padding: 6px 10px; color: #5D4037; font-size: 11px; }"
+        )
+        layout.addWidget(prereq_lbl)
+
         # ── 数据来源选择 ────────────────────────────────────────────────────
         self._use_active_chk = QCheckBox("使用当前CATIA活动文档（不选择文件）")
         self._use_active_chk.toggled.connect(self._toggle_file_row)
@@ -310,14 +344,13 @@ class MassPropsDialog(QDialog):
         file_row.addWidget(self._load_json_btn)
         layout.addLayout(file_row)
 
-        # ── 显示选项（BOM类型 + 单位 + 列可见性）──────────────────────────
-        opts_group = QGroupBox("显示选项")
-        opts_group.setMinimumHeight(90)  # 切换BOM类型时防止高度抖动
+        # ── 选项面板（BOM类型 + 读取模式 + 单位 + 列可见性）──────────────
+        opts_group = QGroupBox("读取与显示选项")
         opts_main = QVBoxLayout(opts_group)
         opts_main.setSpacing(6)
-        opts_main.setContentsMargins(8, 6, 8, 6)
+        opts_main.setContentsMargins(8, 8, 8, 6)
 
-        # 第一行：BOM 类型 + 单位
+        # 第一行：BOM 类型 + 汇总BOM排序列
         row1 = QHBoxLayout()
         row1.setSpacing(16)
 
@@ -329,36 +362,17 @@ class MassPropsDialog(QDialog):
         self._bom_type_group.addButton(self._radio_hier)
         self._bom_type_group.addButton(self._radio_summ)
         self._radio_summ.toggled.connect(self._on_bom_type_changed)
+        row1.addWidget(QLabel("BOM类型："))
         row1.addWidget(self._radio_hier)
         row1.addWidget(self._radio_summ)
 
         row1.addSpacing(24)
-
-        unit_lbl = QLabel("单位：")
-        row1.addWidget(unit_lbl)
-        self._unit_group = QButtonGroup(self)
-        self._radio_kg    = QRadioButton("kg / kg·mm²")
-        self._radio_g     = QRadioButton("g / g·mm²")
-        self._radio_kg_m2 = QRadioButton("kg / kg·m²")
-        self._radio_kg.setChecked(self._unit == "kg")
-        self._radio_g.setChecked(self._unit == "g")
-        self._radio_kg_m2.setChecked(self._unit == "kg_m2")
-        self._unit_group.addButton(self._radio_kg)
-        self._unit_group.addButton(self._radio_g)
-        self._unit_group.addButton(self._radio_kg_m2)
-        self._radio_kg.toggled.connect(self._on_unit_changed)
-        self._radio_g.toggled.connect(self._on_unit_changed)
-        self._radio_kg_m2.toggled.connect(self._on_unit_changed)
-        row1.addWidget(self._radio_kg)
-        row1.addWidget(self._radio_g)
-        row1.addWidget(self._radio_kg_m2)
 
         # 汇总BOM专用选项（排序列）
         self._summary_opts_widget = QWidget()
         summary_opts_layout = QHBoxLayout(self._summary_opts_widget)
         summary_opts_layout.setContentsMargins(0, 0, 0, 0)
         summary_opts_layout.setSpacing(8)
-        summary_opts_layout.addSpacing(16)
 
         summary_opts_layout.addWidget(QLabel("排序列:"))
         self._sort_col_combo = QComboBox()
@@ -377,21 +391,92 @@ class MassPropsDialog(QDialog):
 
         opts_main.addLayout(row1)
 
-        # 第二行：可隐藏列复选框
+        # 第二行：读取模式（加载时生效）
         row2 = QHBoxLayout()
-        row2.setSpacing(12)
-        lbl = QLabel("显示列：")
-        row2.addWidget(lbl)
+        row2.setSpacing(8)
+        row2.addWidget(QLabel("读取模式："))
+
+        self._read_mode_group = QButtonGroup(self)
+        self._radio_read_first = QRadioButton("只读取惯量包络体.1")
+        self._radio_read_last  = QRadioButton("读取编号最大的惯量包络体")
+        self._radio_read_all   = QRadioButton("全部读取（按平行轴定理汇总）")
+        self._radio_read_first.setToolTip('仅读取名为"惯量包络体.1"的保持测量结果')
+        self._radio_read_last.setToolTip("扫描所有编号，使用编号最大的有效保持测量结果")
+        self._radio_read_all.setToolTip("读取所有有效的惯量包络体测量，并按平行轴定理汇总为单一质量特性")
+        self._radio_read_first.setChecked(self._read_mode == "first")
+        self._radio_read_last.setChecked(self._read_mode == "last")
+        self._radio_read_all.setChecked(self._read_mode == "all")
+        self._read_mode_group.addButton(self._radio_read_first)
+        self._read_mode_group.addButton(self._radio_read_last)
+        self._read_mode_group.addButton(self._radio_read_all)
+        self._radio_read_first.toggled.connect(self._on_read_mode_changed)
+        self._radio_read_last.toggled.connect(self._on_read_mode_changed)
+        self._radio_read_all.toggled.connect(self._on_read_mode_changed)
+        row2.addWidget(self._radio_read_first)
+        row2.addWidget(self._radio_read_last)
+        row2.addWidget(self._radio_read_all)
+        row2.addStretch()
+
+        opts_main.addLayout(row2)
+
+        # 第三行：单位制（重量单位 + 长度单位 + 惯量单位自动显示）
+        row3 = QHBoxLayout()
+        row3.setSpacing(8)
+
+        row3.addWidget(QLabel("重量单位："))
+        self._mass_unit_group = QButtonGroup(self)
+        self._radio_mass_g  = QRadioButton("g")
+        self._radio_mass_kg = QRadioButton("kg")
+        self._radio_mass_g.setChecked(self._mass_unit == "g")
+        self._radio_mass_kg.setChecked(self._mass_unit == "kg")
+        self._mass_unit_group.addButton(self._radio_mass_g)
+        self._mass_unit_group.addButton(self._radio_mass_kg)
+        self._radio_mass_g.toggled.connect(self._on_unit_changed)
+        self._radio_mass_kg.toggled.connect(self._on_unit_changed)
+        row3.addWidget(self._radio_mass_g)
+        row3.addWidget(self._radio_mass_kg)
+
+        row3.addSpacing(20)
+
+        row3.addWidget(QLabel("长度单位："))
+        self._cog_unit_group = QButtonGroup(self)
+        self._radio_cog_mm = QRadioButton("mm")
+        self._radio_cog_m  = QRadioButton("m")
+        self._radio_cog_mm.setChecked(self._cog_unit == "mm")
+        self._radio_cog_m.setChecked(self._cog_unit == "m")
+        self._cog_unit_group.addButton(self._radio_cog_mm)
+        self._cog_unit_group.addButton(self._radio_cog_m)
+        self._radio_cog_mm.toggled.connect(self._on_unit_changed)
+        self._radio_cog_m.toggled.connect(self._on_unit_changed)
+        row3.addWidget(self._radio_cog_mm)
+        row3.addWidget(self._radio_cog_m)
+
+        row3.addSpacing(20)
+
+        row3.addWidget(QLabel("惯量单位："))
+        self._inertia_unit_lbl = QLabel(self._inertia_unit_label())
+        self._inertia_unit_lbl.setStyleSheet(
+            "QLabel { font-weight: bold; color: #1565C0; min-width: 60px; }"
+        )
+        row3.addWidget(self._inertia_unit_lbl)
+        row3.addStretch()
+
+        opts_main.addLayout(row3)
+
+        # 第四行：可隐藏列复选框
+        row4 = QHBoxLayout()
+        row4.setSpacing(12)
+        row4.addWidget(QLabel("显示列："))
         self._hid_col_checks: dict[str, QCheckBox] = {}
         for col_name in MASS_PROPS_HIDEABLE_COLUMNS:
             cb = QCheckBox(MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
             cb.setChecked(col_name in self._visible_hideable_cols)
             cb.setProperty("col_name", col_name)
             cb.toggled.connect(self._on_col_visibility_changed)
-            row2.addWidget(cb)
+            row4.addWidget(cb)
             self._hid_col_checks[col_name] = cb
-        row2.addStretch()
-        opts_main.addLayout(row2)
+        row4.addStretch()
+        opts_main.addLayout(row4)
 
         layout.addWidget(opts_group)
 
@@ -568,17 +653,24 @@ class MassPropsDialog(QDialog):
         self._bom_desc_lbl.setText(self._bom_desc_text())
         self._rebuild_columns_and_table()
 
-    def _on_unit_changed(self, checked: bool) -> None:
-        if self._radio_g.isChecked():
-            self._unit = "g"
-        elif self._radio_kg_m2.isChecked():
-            self._unit = "kg_m2"
+    def _on_read_mode_changed(self, checked: bool) -> None:
+        if self._radio_read_first.isChecked():
+            self._read_mode = "first"
+        elif self._radio_read_last.isChecked():
+            self._read_mode = "last"
         else:
-            self._unit = "kg"
+            self._read_mode = "all"
+        self._settings.setValue("read_mode", self._read_mode)
+
+    def _on_unit_changed(self, checked: bool) -> None:
+        self._mass_unit = "g" if self._radio_mass_g.isChecked() else "kg"
+        self._cog_unit  = "mm" if self._radio_cog_mm.isChecked() else "m"
         self._unit_factor, self._inertia_unit_factor, self._cog_unit_factor = (
-            self._calc_unit_factors(self._unit)
+            self._calc_unit_factors(self._mass_unit, self._cog_unit)
         )
-        self._settings.setValue("unit", self._unit)
+        self._settings.setValue("mass_unit", self._mass_unit)
+        self._settings.setValue("cog_unit", self._cog_unit)
+        self._inertia_unit_lbl.setText(self._inertia_unit_label())
         if self._rows:
             self._refresh_unit_display()
 
@@ -678,7 +770,8 @@ class MassPropsDialog(QDialog):
             QApplication.processEvents()
 
         try:
-            rows = collect_mass_props_rows(file_path, progress_callback=_on_row_collected)
+            rows = collect_mass_props_rows(file_path, progress_callback=_on_row_collected,
+                                           read_mode=self._read_mode)
         except Exception as e:
             progress.close()
             logger.error(f"加载质量特性失败: {e}")
@@ -696,18 +789,6 @@ class MassPropsDialog(QDialog):
         self._load_btn.setText("重新加载")
 
         self._apply_loaded_rows(rows)
-
-        failed_count = sum(1 for r in rows if r.get("_meas_failed") and r.get("Type") == "零件")
-        if failed_count:
-            QMessageBox.information(
-                self, "部分零件测量失败",
-                f"有 {failed_count} 个零件节点无法完成质量特性测量（显示橙色背景）。\n\n"
-                "可能原因：\n"
-                "  • 零件文档未加载到CATIA会话中\n"
-                "  • 零件无有效的保持测量的「惯量包络体.1」\n"
-                "  • 零件未成功运行「创建质量关系」宏（MP_* 参数不存在）\n\n"
-                "未能测量的零件不参与最终汇总计算。",
-            )
 
     def _apply_loaded_rows(self, rows: list[dict]) -> None:
         """将已就绪的行列表应用到对话框：重建表格、调整列宽、启用按钮并计算。
@@ -746,13 +827,19 @@ class MassPropsDialog(QDialog):
 
         failed_count = sum(1 for r in rows if r.get("_meas_failed") and r.get("Type") == "零件")
         if failed_count:
+            _read_mode_desc = {
+                "first": "「惯量包络体.1」",
+                "last":  f"编号最大的「惯量包络体.N」（N ≤ {MAX_INERTIA_INDEX}）",
+                "all":   f"「惯量包络体.1」至「惯量包络体.{MAX_INERTIA_INDEX}」",
+            }.get(self._read_mode, "惯量包络体")
             QMessageBox.information(
                 self, "部分零件测量失败",
                 f"有 {failed_count} 个零件节点无法完成质量特性测量（显示橙色背景）。\n\n"
                 "可能原因：\n"
                 "  • 零件文档未加载到CATIA会话中\n"
-                f"  • 零件无有效的保持测量的「惯量包络体」（编号 1–{MAX_INERTIA_INDEX}）\n"
-                "  • 零件未成功运行「创建质量关系」宏（MP_* 参数不存在）\n\n"
+                f"  • 当前读取模式要求的 {_read_mode_desc} 保持测量不存在\n"
+                "  • 测量是在产品环境下建立的（使用产品坐标系，不会被读取）\n"
+                "  • 需单独打开零件文件，在SPA中建立惯量保持测量\n\n"
                 "未能测量的零件不参与最终汇总计算。",
             )
 

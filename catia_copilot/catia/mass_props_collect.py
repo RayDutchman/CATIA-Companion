@@ -183,17 +183,29 @@ def _position_to_mat4(product) -> list[list[float]]:
 # ---------------------------------------------------------------------------
 
 
-def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") -> dict | None:
+def _read_keep_inertia_params(
+    part_com,
+    part_number: str = "",
+    label: str = "",
+    read_mode: str = "all",
+) -> dict | None:
     """读取 CATIA SPA Keep 测量写入的"惯量包络体.1"至"惯量包络体.MAX_INERTIA_INDEX"参数，
     并在零件级按平行轴定理汇总为单一质量特性。
 
     先决条件：零件已在 SPA（惯量分析）中执行"测量惯量"并勾选"保持测量"，
     使参数树中出现 "惯量包络体.N\\质量"、"惯量包络体.N\\Gx" 等字段（N ≥ 1）。
+    **必须单独打开零件文件再建立测量**——在产品环境下建立的测量其参考系为产品坐标系，
+    导致结果不正确，此类测量将不被读取。
 
     读取策略（对每个编号 N，依次尝试以下前缀，取第一个能读到有效质量的前缀）：
       1. "{part_number}\\惯量包络体.N\\"  ← CATIA 以零件号作为顶层命名空间
       2. "惯量包络体.N\\"                  ← 当前文档上下文回退前缀
-    编号不要求连续，所有 1 ≤ N ≤ MAX_INERTIA_INDEX 中存在的测量均会被读取。
+    编号不要求连续，所有 1 ≤ N ≤ MAX_INERTIA_INDEX 中存在的测量均会被读取（取决于 read_mode）。
+
+    read_mode 参数控制读取哪些惯量包络体编号：
+      "first" — 仅读取"惯量包络体.1"（固定取编号 1 的测量结果）。
+      "last"  — 扫描所有编号，仅返回编号最大的有效测量结果。
+      "all"   — 读取全部有效编号并按平行轴定理汇总（默认行为）。
 
     CATIA Keep 参数的原始单位（注意坐标为 mm，非 m）：
       质量                            CATIA 原始: kg   → 内部存储: kg  （无需换算）
@@ -226,9 +238,16 @@ def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") 
             except Exception:
                 return None
 
+        # ── 确定需要扫描的编号范围 ────────────────────────────────────────────────
+        if read_mode == "first":
+            check_indices = [1]
+        else:
+            # "last" 和 "all" 均需扫描全范围，以找到所有或编号最大的有效测量
+            check_indices = list(range(1, MAX_INERTIA_INDEX + 1))
+
         # ── 逐编号读取，收集所有有效测量 ──────────────────────────────────────────
         measurements: list[dict] = []
-        for idx in range(1, MAX_INERTIA_INDEX + 1):
+        for idx in check_indices:
             envelope_name = f"惯量包络体.{idx}"
             prefixes = []
             if part_number:
@@ -279,6 +298,10 @@ def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") 
             logger.debug(f"{tag}未找到任何有效的惯量包络体参数，返回 None")
             return None
 
+        # "last" 模式：仅保留编号最大的有效测量（已按升序扫描，取最后一个）
+        if read_mode == "last":
+            measurements = [measurements[-1]]
+
         if len(measurements) == 1:
             # 仅一个测量，无需汇总，直接返回
             return measurements[0]
@@ -322,7 +345,11 @@ def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") 
         return None
 
 
-def _measure_part_mass_props(part_com, part_number: str = "") -> dict | None:
+def _measure_part_mass_props(
+    part_com,
+    part_number: str = "",
+    read_mode: str = "all",
+) -> dict | None:
     """测量零件质量特性。
 
     所有返回值均使用 **SI 单位制（kg / m / kg·m²）**。
@@ -330,11 +357,13 @@ def _measure_part_mass_props(part_com, part_number: str = "") -> dict | None:
     先决条件：
       零件已在 SPA 中执行"测量惯量"并勾选"保持测量"，
       从而在参数树中生成 "惯量包络体.N\\质量" 等 Keep 参数（N ≥ 1）。
-      所有编号 1 ≤ N ≤ MAX_INERTIA_INDEX 的测量均会被读取并在零件级汇总。
+      **必须单独打开零件文件再建立测量**——在产品环境下建立的测量使用产品坐标系，
+      将导致结果不正确。
 
     参数：
         part_com:    COM 对象（Part 层）。
         part_number: 零件号（PartNumber），用于构造参数前缀。
+        read_mode:   控制读取哪些惯量包络体（"first"/"last"/"all"，默认 "all"）。
 
     返回字典：
       {
@@ -346,7 +375,7 @@ def _measure_part_mass_props(part_com, part_number: str = "") -> dict | None:
       }
     若所有惯量包络体参数均不存在（零件未执行 Keep 测量）则返回 None。
     """
-    return _read_keep_inertia_params(part_com, part_number)
+    return _read_keep_inertia_params(part_com, part_number, read_mode=read_mode)
 
 
 # ---------------------------------------------------------------------------
@@ -652,6 +681,7 @@ def load_rows(file_path: str) -> list[dict]:
 def collect_mass_props_rows(
     file_path: str | None,
     progress_callback: Callable[[int], None] | None = None,
+    read_mode: str = "all",
 ) -> list[dict]:
     """遍历产品树，返回每个节点的质量特性行列表。
 
@@ -666,6 +696,11 @@ def collect_mass_props_rows(
             ``.CATProduct`` 文件路径，或 ``None`` 表示使用当前 CATIA 活动文档。
         progress_callback:
             可选回调，每追加一行后调用，传入当前行数。可通过抛出异常中止遍历。
+        read_mode:
+            控制读取哪些惯量包络体（传递给 ``_measure_part_mass_props``）：
+            "first" — 仅读取惯量包络体.1；
+            "last"  — 读取编号最大的惯量包络体；
+            "all"   — 全部读取并按平行轴定理汇总（默认）。
 
     返回：
         行字典列表，每行含以下键：
@@ -814,7 +849,7 @@ def collect_mass_props_rows(
                         # 通过 COM 获取 Part 对象（仅 PartDocument 拥有 .Part 属性）
                         part_doc_com  = target_doc.com_object
                         part_com      = part_doc_com.Part
-                        mass_props    = _measure_part_mass_props(part_com, pn)
+                        mass_props    = _measure_part_mass_props(part_com, pn, read_mode=read_mode)
                     except Exception as e:
                         logger.debug(f"无法测量零件 {filepath}: {e}")
                         mass_props  = None
