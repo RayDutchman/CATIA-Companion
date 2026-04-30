@@ -26,17 +26,16 @@
 质量特性读取
 -----------
 直接读取 CATIA SPA "测量惯量 + 保持测量" 写入的 "惯量包络体.1" Keep 参数：
-  惯量包络体.1\\质量    → 质量，SI 原始值（kg）
-  惯量包络体.1\\Gx/Gy/Gz → 重心坐标，SI 原始值（m）
-  惯量包络体.1\\IoxG/IoyG/IozG/IxyG/IxzG/IyzG → 转动惯量分量，SI 原始值（kg·m²）
-CATIA Keep 参数以 SI 单位存储，程序直接使用，无需换算。
+  惯量包络体.1\\质量    → 质量，CATIA 原始单位 kg（已为 SI，直接存储）
+  惯量包络体.1\\Gx/Gy/Gz → 重心坐标，CATIA 原始单位 mm（÷1000 换算为 m 后存储）
+  惯量包络体.1\\IoxG/IoyG/IozG/IxyG/IxzG/IyzG → 转动惯量分量，CATIA 原始单位 kg·m²（已为 SI，直接存储）
 
-单位制（内部存储）
-------------------
+单位制（内部存储，全程 SI）
+--------------------------
   质量   ：kg
   长度   ：m
   惯量   ：kg·m²
-整个流程使用 SI 单位，显示时再由 UI 层按用户选择换算。
+整个流程以 SI 为基准，UI 显示时按用户选择换算到 g/mm/g·mm² 等实用单位。
 """
 
 import logging
@@ -183,16 +182,16 @@ def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") 
       1. "{part_number}\\惯量包络体.1\\"  ← CATIA 以零件号作为顶层命名空间
       2. "惯量包络体.1\\"                  ← 当前文档上下文回退前缀
 
-    CATIA Keep 参数的原始单位为 SI 制，程序直接使用，无需换算：
-      质量                            SI: kg   （内部存储单位）
-      Gx / Gy / Gz                    SI: m    （内部存储单位）
-      IoxG / IoyG / IozG              SI: kg·m² （内部存储单位）
-      IxyG / IxzG / IyzG              SI: kg·m² （内部存储单位）
+    CATIA Keep 参数的原始单位（注意坐标为 mm，非 m）：
+      质量                            CATIA 原始: kg   → 内部存储: kg  （无需换算）
+      Gx / Gy / Gz                    CATIA 原始: mm   → 内部存储: m   （÷ 1 000）
+      IoxG / IoyG / IozG              CATIA 原始: kg·m² → 内部存储: kg·m²（无需换算）
+      IxyG / IxzG / IyzG              CATIA 原始: kg·m² → 内部存储: kg·m²（无需换算）
 
-    返回值结构：
+    返回值结构（内部 SI 单位）：
       {
         "weight":  float,               # 质量，kg
-        "cog":     [x, y, z],           # 重心，m（零件局部坐标系）
+        "cog":     [x, y, z],           # 重心，m（零件局部坐标系，已由 mm 换算）
         "inertia": [[Ixx, Ixy, Ixz],    # 转动惯量张量（3×3 对称矩阵），kg·m²
                     [Ixy, Iyy, Iyz],
                     [Ixz, Iyz, Izz]],
@@ -244,7 +243,8 @@ def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") 
 
         return {
             "weight": mass_si,
-            "cog":    [gx_si, gy_si, gz_si],
+            # Gx/Gy/Gz 由 CATIA 以 mm 存储，÷1000 换算为内部 SI 单位（m）
+            "cog":    [gx_si / 1000.0, gy_si / 1000.0, gz_si / 1000.0],
             "inertia": [
                 [ixx_si, ixy_si, ixz_si],
                 [ixy_si, iyy_si, iyz_si],
@@ -419,17 +419,17 @@ def _post_process_rows(rows: list[dict]) -> None:
             continue
 
         # ── 步骤 1 + 2：累积质量、质量×重心，同时将各零件惯量移到根坐标原点 ──
-        M_total   = 0.0        # 总质量，g
-        sum_mr    = [0.0, 0.0, 0.0]   # Σ(m_i * r_i)，g·mm
-        # I_at_orig：所有零件惯量移至根原点后的总和，g·mm²
+        M_total   = 0.0        # 总质量，kg
+        sum_mr    = [0.0, 0.0, 0.0]   # Σ(m_i * r_i)，kg·m
+        # I_at_orig：所有零件惯量移至根原点后的总和，kg·m²
         I_at_orig = [[0.0] * 3 for _ in range(3)]
 
         for rmp in child_parts:
             m  = float(rmp.get("weight", 0.0))
             if m <= 0.0:
                 continue
-            r  = rmp.get("cog", [0.0, 0.0, 0.0])    # 零件重心（根坐标系），mm
-            Ic = rmp.get("inertia", [[0.0] * 3 for _ in range(3)])  # 零件重心处惯量
+            r  = rmp.get("cog", [0.0, 0.0, 0.0])    # 零件重心（根坐标系），m
+            Ic = rmp.get("inertia", [[0.0] * 3 for _ in range(3)])  # 零件重心处惯量，kg·m²
 
             # 平行轴定理（从零件重心 → 根坐标原点）：
             #   I_i_at_O[ii][jj] = Ic[ii][jj] + m * (|r|² * δ[ii][jj] - r[ii]*r[jj])
