@@ -433,7 +433,6 @@ class MassPropsDialog(QDialog):
         def _val_lbl() -> QLabel:
             lb = QLabel("—")
             lb.setMinimumWidth(120)
-            lb.setStyleSheet("font-family: monospace;")
             return lb
 
         # 第0行：总重量（独占）
