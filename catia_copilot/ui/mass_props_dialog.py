@@ -41,18 +41,18 @@ from catia_copilot.ui.bom_widgets import _BomTreeWidget
 
 logger = logging.getLogger(__name__)
 
-# UserRole for row index (maps to self._rows)
+# UserRole：行索引（映射到 self._rows）
 _ROW_IDX_ROLE = Qt.ItemDataRole.UserRole
-# UserRole+1 for "locked" flag
+# UserRole+1：锁定标志位（不可编辑行）
 _ITEM_LOCKED_ROLE = Qt.ItemDataRole.UserRole + 1
 
-# Inertia column → (row, col) in the 3×3 tensor
+# 惯量列名 → (行索引, 列索引)，对应 3×3 张量位置
 _INERTIA_IDX: dict[str, tuple[int, int]] = {
     "Ixx": (0, 0), "Iyy": (1, 1), "Izz": (2, 2),
     "Ixy": (0, 1), "Ixz": (0, 2), "Iyz": (1, 2),
 }
 
-# Columns whose display values depend on the current unit selection
+# 显示值随当前单位制变化的列名
 _UNIT_SENSITIVE_COLUMNS: tuple[str, ...] = (
     "Weight",
 ) + tuple(_INERTIA_IDX.keys()) + ("CogX", "CogY", "CogZ")
@@ -167,12 +167,12 @@ class MassPropsDialog(QDialog):
         self._loaded: bool = False
         self._col_widths: dict[str, int] = {}
 
-        # columns is rebuilt whenever visibility/mode changes
+        # 列名列表在可见性或模式改变时重建
         self._columns: list[str] = self._build_columns()
 
         self._build_ui()
 
-    # ── Column management ──────────────────────────────────────────────────
+    # ── 列管理 ──────────────────────────────────────────────────────────────
 
     @staticmethod
     def _calc_unit_factors(unit: str) -> tuple[float, float, float]:
@@ -243,12 +243,18 @@ class MassPropsDialog(QDialog):
     def _display_headers(self) -> list[str]:
         return [self._column_header(c) for c in self._columns]
 
-    def _fmt_mass_val(self, value) -> str:
-        """将质量原始值（kg，SI 内部单位）乘以 _unit_factor 并格式化为字符串（重量列专用）。"""
+    @staticmethod
+    def _fmt_scaled(value, factor: float) -> str:
+        """将原始 SI 值乘以换算因子后格式化为字符串。
+
+        None → '—'；整数值（误差 < 1e-9）→ 无小数位；
+        |v| ≥ 1e5 或绝对值极小（0 < |v| < 0.001）→ 科学计数法；
+        其余 → 保留三位小数。
+        """
         if value is None:
             return "—"
         try:
-            v = float(value) * self._unit_factor
+            v = float(value) * factor
             if math.isclose(v, round(v), rel_tol=0.0, abs_tol=1e-9):
                 return f"{v:.0f}"
             if abs(v) >= 1e5 or (v != 0.0 and abs(v) < 0.001):
@@ -256,34 +262,18 @@ class MassPropsDialog(QDialog):
             return f"{v:.3f}"
         except (TypeError, ValueError):
             return str(value)
+
+    def _fmt_mass_val(self, value) -> str:
+        """将质量原始值（kg，SI 内部单位）乘以 _unit_factor 并格式化为字符串（重量列专用）。"""
+        return self._fmt_scaled(value, self._unit_factor)
 
     def _fmt_inertia_val(self, value) -> str:
         """将惯量原始值（kg·m²，SI 内部单位）乘以 _inertia_unit_factor 并格式化为字符串（惯量列专用）。"""
-        if value is None:
-            return "—"
-        try:
-            v = float(value) * self._inertia_unit_factor
-            if math.isclose(v, round(v), rel_tol=0.0, abs_tol=1e-9):
-                return f"{v:.0f}"
-            if abs(v) >= 1e5 or (v != 0.0 and abs(v) < 0.001):
-                return f"{v:.3e}"
-            return f"{v:.3f}"
-        except (TypeError, ValueError):
-            return str(value)
+        return self._fmt_scaled(value, self._inertia_unit_factor)
 
     def _fmt_cog_val(self, value) -> str:
         """将重心坐标原始值（m，SI 内部单位）乘以 _cog_unit_factor 并格式化为字符串（CogX/Y/Z 列专用）。"""
-        if value is None:
-            return "—"
-        try:
-            v = float(value) * self._cog_unit_factor
-            if math.isclose(v, round(v), rel_tol=0.0, abs_tol=1e-9):
-                return f"{v:.0f}"
-            if abs(v) >= 1e5 or (v != 0.0 and abs(v) < 0.001):
-                return f"{v:.3e}"
-            return f"{v:.3f}"
-        except (TypeError, ValueError):
-            return str(value)
+        return self._fmt_scaled(value, self._cog_unit_factor)
 
     # ── UI 构建 ────────────────────────────────────────────────────────────
 
@@ -596,19 +586,19 @@ class MassPropsDialog(QDialog):
     def _rebuild_columns_and_table(self) -> None:
         """重建列列表并重新填充表格（保留列宽）。"""
         if self._rows:
-            # Save current column widths before rebuilding
+            # 重建前保存各列宽度
             for col_idx, col_name in enumerate(self._columns):
                 self._col_widths[col_name] = self._table.columnWidth(col_idx)
         self._columns = self._build_columns()
         self._populate_table()
-        # Restore column widths
+        # 恢复各列宽度
         for col_idx, col_name in enumerate(self._columns):
             if col_name in self._col_widths:
                 self._table.setColumnWidth(col_idx, self._col_widths[col_name])
 
     def _refresh_unit_display(self) -> None:
         """仅更新列标题和重量/惯量单元格的显示值（单位切换时调用，避免全量重建）。"""
-        # Update headers
+        # 更新列标题
         self._table.setHeaderLabels(self._display_headers())
 
         mass_col_indices: list[tuple[str, int]] = []
@@ -638,7 +628,7 @@ class MassPropsDialog(QDialog):
                         item.setText(col_idx, self._fmt_cog_val(raw))
         self._is_updating = False
 
-        # Update summary labels if result is available
+        # 若已有汇总结果，更新底部汇总标签
         if self._rollup_result:
             self._update_summary_labels(self._rollup_result)
 
@@ -689,7 +679,7 @@ class MassPropsDialog(QDialog):
         self._load_btn.setEnabled(True)
         self._load_btn.setText("重新加载")
 
-        # Save column widths before repopulating
+        # 重新填充前保存列宽
         if self._loaded:
             for col_idx, col_name in enumerate(self._columns):
                 self._col_widths[col_name] = self._table.columnWidth(col_idx)
@@ -701,7 +691,7 @@ class MassPropsDialog(QDialog):
         self._populate_table()
 
         if not self._loaded:
-            # Auto-fit on first load
+            # 首次加载时自适应列宽
             for _c, col_name in enumerate(self._columns):
                 if col_name == "#":
                     self._table.setColumnWidth(_c, 40)
@@ -733,7 +723,7 @@ class MassPropsDialog(QDialog):
         # 加载完成后自动计算汇总结果
         self._calculate()
 
-    # ── Display row builders ───────────────────────────────────────────────
+    # ── 构建显示行 ─────────────────────────────────────────────────────────
 
     def _get_display_rows(self) -> list[dict]:
         """返回当前模式下应显示的行列表。"""
@@ -772,7 +762,7 @@ class MassPropsDialog(QDialog):
         每个唯一 PN 保留第一次出现的行数据（含 _rows 中的索引），
         Quantity = 该 PN 在 _rows 中出现的实例数量。
         """
-        seen_pn: dict[str, dict] = {}    # pn → canonical row copy
+        seen_pn: dict[str, dict] = {}    # pn → 首次出现的规范行副本
         qty: dict[str, int] = {}
         order: list[str] = []
 
@@ -782,7 +772,7 @@ class MassPropsDialog(QDialog):
                 pn = str(row.get("Filename", "")) or "(未分组)"
             if pn not in seen_pn:
                 r = dict(row)
-                r["_rows_idx"] = i   # link back to canonical _rows entry
+                r["_rows_idx"] = i   # 映射回 _rows 的规范索引
                 seen_pn[pn] = r
                 qty[pn] = 1
                 order.append(pn)
@@ -887,14 +877,14 @@ class MassPropsDialog(QDialog):
             else:
                 item.setText(col_idx, str(row_data.get(col_name, "")))
 
-        # Editability: only unlocked part rows, Weight column only
+        # 可编辑性：仅未锁定零件行的 Weight 列可编辑
         if node_type == "零件" and not row_locked:
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
             item.setData(0, _ITEM_LOCKED_ROLE, False)
         else:
             item.setData(0, _ITEM_LOCKED_ROLE, True)
 
-        # Row colouring
+        # 行背景色设置
         if row_locked:
             grey = QColor(160, 160, 160)
             if not_found:
@@ -996,7 +986,7 @@ class MassPropsDialog(QDialog):
 
         pn = str(row_data.get("Part Number", ""))
 
-        # ── Update ALL _rows entries with the same PN ──────────────────────
+        # ── 更新 _rows 中所有相同 PN 的实例 ────────────────────────────────
         #
         # 同一零件的所有实例共享同一个 _mass_props dict（来自 _mass_cache）。
         # 若在循环内对每个实例各乘一次 scale，则第 n 个实例的惯量会被放大 scale^n 倍。
@@ -1060,7 +1050,7 @@ class MassPropsDialog(QDialog):
                 if rmp is not None:
                     rmp["weight"] = new_weight_stored
 
-        # ── Update visible tree items with the same PN ─────────────────────
+        # ── 更新可见树节点中同 PN 的所有行 ────────────────────────────────
         self._is_updating = True
         w_idx = self._columns.index("Weight") if "Weight" in self._columns else -1
 
@@ -1203,7 +1193,7 @@ class MassPropsDialog(QDialog):
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
         from catia_copilot.utils import estimate_column_width
 
-        # Export columns (omit internal "#" column)
+        # 导出列（排除内部序号列 "#"）
         export_cols = [c for c in self._columns if c != "#"]
 
         wb  = openpyxl.Workbook()
@@ -1217,14 +1207,14 @@ class MassPropsDialog(QDialog):
             left=thin_side, right=thin_side, top=thin_side, bottom=thin_side,
         )
 
-        # Table header
+        # 写入表头
         for ci, col_name in enumerate(export_cols, start=1):
             cell = ws.cell(row=1, column=ci, value=self._column_header(col_name))
             cell.font   = Font(bold=True)
             cell.fill   = header_fill
             cell.border = thin_border
 
-        # Data rows
+        # 写入数据行
         display_rows = self._get_display_rows()
         for ri, row_data in enumerate(display_rows, start=2):
             for ci, col_name in enumerate(export_cols, start=1):
@@ -1253,7 +1243,7 @@ class MassPropsDialog(QDialog):
                 if col_name == "Level":
                     cell.alignment = center
 
-        # Summary row (if calculated)
+        # 汇总行（若已计算）
         if self._rollup_result:
             summary_row_idx = len(display_rows) + 2
             cog = self._rollup_result.get("cog", [0.0, 0.0, 0.0])
@@ -1282,7 +1272,7 @@ class MassPropsDialog(QDialog):
 
         ws.freeze_panes = "A2"
 
-        # Auto-fit column widths
+        # 自适应列宽
         for ci, col_name in enumerate(export_cols, start=1):
             col_letter = ws.cell(row=1, column=ci).column_letter
             header     = self._column_header(col_name)
@@ -1425,7 +1415,7 @@ class MassPropsDialog(QDialog):
             elif p.parent.exists():
                 subprocess.Popen(f'explorer "{p.parent}"', shell=True)
         except Exception as exc:
-            logger.warning(f"Failed to open path in Explorer: {exc}")
+            logger.warning(f"无法在资源管理器中打开路径: {exc}")
 
     def _open_in_catia(self, fp: str) -> None:
         """通过 ``documents.open`` 在CATIA中打开 *fp* 指向的文档。

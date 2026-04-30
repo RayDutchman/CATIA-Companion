@@ -289,8 +289,66 @@ def _measure_part_mass_props(part_com, part_number: str = "") -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Post-processing helpers
+# 后处理辅助函数
 # ---------------------------------------------------------------------------
+
+
+def _rollup_one_product(child_parts: list[dict]) -> dict | None:
+    """对单个产品/部件节点，按平行轴定理汇总子树内所有零件的根坐标系质量特性。
+
+    参数：
+        child_parts: 该节点子树内所有零件的 ``_root_mp`` 字典列表，
+                     每个元素含 weight（kg）、cog（m 列表）、inertia（3×3 列表）。
+
+    返回字典（若总质量 > 0）：
+        {"weight": M_total, "cog": [x, y, z], "inertia": [[3×3]]}
+    若所有子零件质量均 ≤ 0，返回 None。
+
+    算法（标准刚体力学，所有计算均在根坐标系下）：
+      步骤 1+2：累积质量、质量×重心，同时将各零件重心处惯量移至根坐标原点。
+        I_i_at_O = I_i + m_i * (|r_i|² * E - r_i ⊗ r_i)
+      步骤 3：计算总重心 r_c = Σ(m_i * r_i) / M
+      步骤 4：以平行轴定理从根原点移回总重心。
+        I_final = I_total_at_O - M * (|r_c|² * E - r_c ⊗ r_c)
+    """
+    M_total   = 0.0
+    sum_mr    = [0.0, 0.0, 0.0]
+    I_at_orig = [[0.0] * 3 for _ in range(3)]
+
+    for rmp in child_parts:
+        m = float(rmp.get("weight", 0.0))
+        if m <= 0.0:
+            continue
+        r  = rmp.get("cog",     [0.0, 0.0, 0.0])
+        Ic = rmp.get("inertia", [[0.0] * 3 for _ in range(3)])
+
+        # 平行轴定理：将零件重心处惯量移到根坐标原点
+        r2 = sum(r[k] ** 2 for k in range(3))
+        for ii in range(3):
+            for jj in range(3):
+                delta = (1.0 if ii == jj else 0.0) * r2 - r[ii] * r[jj]
+                I_at_orig[ii][jj] += Ic[ii][jj] + m * delta
+
+        M_total += m
+        for k in range(3):
+            sum_mr[k] += m * r[k]
+
+    if M_total <= 0.0:
+        return None
+
+    # 计算总重心
+    cog_total = [sum_mr[k] / M_total for k in range(3)]
+
+    # 平行轴定理：从根原点移回总重心
+    rc  = cog_total
+    rc2 = sum(rc[k] ** 2 for k in range(3))
+    I_final = [[0.0] * 3 for _ in range(3)]
+    for ii in range(3):
+        for jj in range(3):
+            delta = (1.0 if ii == jj else 0.0) * rc2 - rc[ii] * rc[jj]
+            I_final[ii][jj] = I_at_orig[ii][jj] - M_total * delta
+
+    return {"weight": M_total, "cog": cog_total, "inertia": I_final}
 
 
 def _post_process_rows(rows: list[dict]) -> None:
@@ -383,25 +441,7 @@ def _post_process_rows(rows: list[dict]) -> None:
         }
 
     # ── 第二轮：产品/部件行 → 按平行轴定理汇总子孙零件的质量特性 ──────────────────
-    #
-    # 算法步骤（所有计算均在根坐标系下进行）：
-    #
-    # 步骤 1：汇总总质量及质量×重心
-    #   M = Σ m_i
-    #   Σ(m_i * r_i)  （分 x/y/z 三分量分别累加）
-    #
-    # 步骤 2：以平行轴定理将各零件惯量移到根坐标原点
-    #   I_i_at_O = I_i_cog + m_i * (|r_i|² * E - r_i ⊗ r_i)
-    #     其中：E 为 3×3 单位矩阵；r_i ⊗ r_i 为外积（秩-1 矩阵）
-    #   I_total_at_O = Σ I_i_at_O
-    #
-    # 步骤 3：计算总重心
-    #   r_c = Σ(m_i * r_i) / M
-    #
-    # 步骤 4：以平行轴定理从根原点移回总重心
-    #   I_final = I_total_at_O - M * (|r_c|² * E - r_c ⊗ r_c)
-    #
-    # 注：步骤 2 和步骤 4 都用到了平行轴定理（Steiner 定理）。
+    # 算法由 _rollup_one_product() 实现（详见其文档字符串）。
     for i in range(n):
         row = rows[i]
         if row.get("Type") not in ("产品", "部件"):
@@ -421,62 +461,23 @@ def _post_process_rows(rows: list[dict]) -> None:
                 child_parts.append(rmp)
 
         if not child_parts:
-            # 子树内无有效零件质量数据，跳过本节点
+            continue  # 子树内无有效零件质量数据，跳过本节点
+
+        result = _rollup_one_product(child_parts)
+        if result is None:
             continue
-
-        # ── 步骤 1 + 2：累积质量、质量×重心，同时将各零件惯量移到根坐标原点 ──
-        M_total   = 0.0        # 总质量，kg
-        sum_mr    = [0.0, 0.0, 0.0]   # Σ(m_i * r_i)，kg·m
-        # I_at_orig：所有零件惯量移至根原点后的总和，kg·m²
-        I_at_orig = [[0.0] * 3 for _ in range(3)]
-
-        for rmp in child_parts:
-            m  = float(rmp.get("weight", 0.0))
-            if m <= 0.0:
-                continue
-            r  = rmp.get("cog", [0.0, 0.0, 0.0])    # 零件重心（根坐标系），m
-            Ic = rmp.get("inertia", [[0.0] * 3 for _ in range(3)])  # 零件重心处惯量，kg·m²
-
-            # 平行轴定理（从零件重心 → 根坐标原点）：
-            #   I_i_at_O[ii][jj] = Ic[ii][jj] + m * (|r|² * δ[ii][jj] - r[ii]*r[jj])
-            #   δ 为 Kronecker delta，即当 ii==jj 时为 1，否则为 0
-            r2 = sum(r[k] ** 2 for k in range(3))  # |r|²
-            for ii in range(3):
-                for jj in range(3):
-                    delta = (1.0 if ii == jj else 0.0) * r2 - r[ii] * r[jj]
-                    I_at_orig[ii][jj] += Ic[ii][jj] + m * delta
-
-            M_total += m
-            for k in range(3):
-                sum_mr[k] += m * r[k]
-
-        if M_total <= 0.0:
-            continue
-
-        # ── 步骤 3：计算总重心 r_c = Σ(m_i * r_i) / M ───────────────────────
-        cog_total = [sum_mr[k] / M_total for k in range(3)]
-
-        # ── 步骤 4：以平行轴定理从根原点移回总重心 ─────────────────────────────
-        #   I_final[ii][jj] = I_at_orig[ii][jj] - M * (|r_c|² * δ[ii][jj] - r_c[ii]*r_c[jj])
-        rc  = cog_total
-        rc2 = sum(rc[k] ** 2 for k in range(3))  # |r_c|²
-        I_final = [[0.0] * 3 for _ in range(3)]
-        for ii in range(3):
-            for jj in range(3):
-                delta = (1.0 if ii == jj else 0.0) * rc2 - rc[ii] * rc[jj]
-                I_final[ii][jj] = I_at_orig[ii][jj] - M_total * delta
 
         # 将汇总结果写入本节点的显示字段
-        row["Weight"] = M_total
-        row["CogX"]   = cog_total[0]
-        row["CogY"]   = cog_total[1]
-        row["CogZ"]   = cog_total[2]
-        row["Ixx"]    = I_final[0][0]
-        row["Iyy"]    = I_final[1][1]
-        row["Izz"]    = I_final[2][2]
-        row["Ixy"]    = I_final[0][1]
-        row["Ixz"]    = I_final[0][2]
-        row["Iyz"]    = I_final[1][2]
+        row["Weight"] = result["weight"]
+        row["CogX"]   = result["cog"][0]
+        row["CogY"]   = result["cog"][1]
+        row["CogZ"]   = result["cog"][2]
+        row["Ixx"]    = result["inertia"][0][0]
+        row["Iyy"]    = result["inertia"][1][1]
+        row["Izz"]    = result["inertia"][2][2]
+        row["Ixy"]    = result["inertia"][0][1]
+        row["Ixz"]    = result["inertia"][0][2]
+        row["Iyz"]    = result["inertia"][1][2]
 
 
 def recompute_product_rows(rows: list[dict]) -> None:
@@ -512,58 +513,25 @@ def recompute_product_rows(rows: list[dict]) -> None:
         if not child_parts:
             continue
 
-        # 步骤 1 + 2：累积质量、质量×重心，同时将各零件惯量移到根坐标原点
-        M_total   = 0.0
-        sum_mr    = [0.0, 0.0, 0.0]
-        I_at_orig = [[0.0] * 3 for _ in range(3)]
-
-        for rmp in child_parts:
-            m = float(rmp.get("weight", 0.0))
-            if m <= 0.0:
-                continue
-            r  = rmp.get("cog", [0.0, 0.0, 0.0])
-            Ic = rmp.get("inertia", [[0.0] * 3 for _ in range(3)])
-
-            r2 = sum(r[k] ** 2 for k in range(3))
-            for ii in range(3):
-                for jj in range(3):
-                    delta = (1.0 if ii == jj else 0.0) * r2 - r[ii] * r[jj]
-                    I_at_orig[ii][jj] += Ic[ii][jj] + m * delta
-
-            M_total += m
-            for k in range(3):
-                sum_mr[k] += m * r[k]
-
-        if M_total <= 0.0:
+        result = _rollup_one_product(child_parts)
+        if result is None:
             continue
 
-        # 步骤 3：计算总重心
-        cog_total = [sum_mr[k] / M_total for k in range(3)]
-
-        # 步骤 4：从根原点移回总重心
-        rc  = cog_total
-        rc2 = sum(rc[k] ** 2 for k in range(3))
-        I_final = [[0.0] * 3 for _ in range(3)]
-        for ii in range(3):
-            for jj in range(3):
-                delta = (1.0 if ii == jj else 0.0) * rc2 - rc[ii] * rc[jj]
-                I_final[ii][jj] = I_at_orig[ii][jj] - M_total * delta
-
         # 写回显示字段
-        row["Weight"] = M_total
-        row["CogX"]   = cog_total[0]
-        row["CogY"]   = cog_total[1]
-        row["CogZ"]   = cog_total[2]
-        row["Ixx"]    = I_final[0][0]
-        row["Iyy"]    = I_final[1][1]
-        row["Izz"]    = I_final[2][2]
-        row["Ixy"]    = I_final[0][1]
-        row["Ixz"]    = I_final[0][2]
-        row["Iyz"]    = I_final[1][2]
+        row["Weight"] = result["weight"]
+        row["CogX"]   = result["cog"][0]
+        row["CogY"]   = result["cog"][1]
+        row["CogZ"]   = result["cog"][2]
+        row["Ixx"]    = result["inertia"][0][0]
+        row["Iyy"]    = result["inertia"][1][1]
+        row["Izz"]    = result["inertia"][2][2]
+        row["Ixy"]    = result["inertia"][0][1]
+        row["Ixz"]    = result["inertia"][0][2]
+        row["Iyz"]    = result["inertia"][1][2]
 
 
 # ---------------------------------------------------------------------------
-# Main collection function
+# 主收集函数
 # ---------------------------------------------------------------------------
 
 def collect_mass_props_rows(
