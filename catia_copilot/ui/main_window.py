@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QDialog,
 )
 from PySide6.QtGui import QAction
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 
 from catia_copilot.constants import (
     APP_NAME,
@@ -30,7 +30,7 @@ from catia_copilot.constants import (
     ISO_XML_FILE_PATH,
     CRACK_DIR_PATH,
 )
-from catia_copilot.utils import resource_path, detect_catia_root
+from catia_copilot.utils import resource_path, detect_catia_root, check_catia_connection
 from catia_copilot.logging_setup import log_signal_emitter
 from catia_copilot.catia.conversion import convert_drawing_to_pdf, convert_part_to_step
 from catia_copilot.catia.template import apply_part_template
@@ -61,7 +61,37 @@ class MainWindow(QMainWindow):
 
         self._build_menu_bar()
         self._build_central_widget()
+        self._build_connection_indicator()
         self.statusBar().showMessage("就绪")
+
+    # ── CATIA 连接状态指示器 ──────────────────────────────────────────────
+
+    def _build_connection_indicator(self) -> None:
+        """在状态栏右侧添加 CATIA 连接状态指示标签，并启动定时轮询。"""
+        self._catia_status_label = QLabel()
+        self._catia_status_label.setObjectName("catiaStatusLabel")
+        self._catia_status_label.setToolTip("CATIA V5 COM 连接状态（每 5 秒自动刷新）")
+        self.statusBar().addPermanentWidget(self._catia_status_label)
+
+        # 立即检测一次，再每 5 秒轮询一次
+        self._update_connection_status()
+        self._connection_timer = QTimer(self)
+        self._connection_timer.setInterval(5000)
+        self._connection_timer.timeout.connect(self._update_connection_status)
+        self._connection_timer.start()
+
+    def _update_connection_status(self) -> None:
+        """轮询 CATIA 连接状态并更新指示标签的文字和样式。"""
+        connected = check_catia_connection()
+        if connected:
+            self._catia_status_label.setText("● CATIA 已连接")
+            self._catia_status_label.setProperty("catiaConnected", "true")
+        else:
+            self._catia_status_label.setText("● CATIA 未连接")
+            self._catia_status_label.setProperty("catiaConnected", "false")
+        # 强制重新应用 QSS（动态属性变化后需要刷新样式）
+        self._catia_status_label.style().unpolish(self._catia_status_label)
+        self._catia_status_label.style().polish(self._catia_status_label)
 
     # ── 中央控件区域 ──────────────────────────────────────────────────────
 

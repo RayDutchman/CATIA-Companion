@@ -16,6 +16,11 @@ import winreg
 import logging
 from pathlib import Path
 
+try:
+    import win32com.client as _win32com_client
+except ImportError:
+    _win32com_client = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 
@@ -85,6 +90,21 @@ def detect_catia_root() -> str | None:
 
     logger.debug("No valid CATIA installation detected.")
     return None
+
+
+def check_catia_connection() -> bool:
+    """检测 CATIA V5 是否正在运行并可通过 COM 访问。
+
+    尝试通过 win32com 的 ``GetActiveObject`` 查找已在运行中的 CATIA 实例。
+    返回 ``True`` 表示 CATIA 已连接，``False`` 表示未找到或无法连接。
+    """
+    try:
+        if _win32com_client is None:
+            return False
+        _win32com_client.GetActiveObject("CATIA.Application")
+        return True
+    except Exception:
+        return False
 
 
 def estimate_column_width(text: str) -> int:
