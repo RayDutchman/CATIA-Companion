@@ -382,12 +382,26 @@ class MainWindow(QMainWindow):
     def _show_dialog(self, attr: str, factory: Callable[[], QDialog]) -> None:
         """以非模态方式打开对话框，若已存在则将其置于前台。
 
+        所有通过此方法打开的对话框均被设置为独立顶级窗口
+        （``Qt.WindowType.Window``），使其在 Windows 任务栏中拥有独立条目
+        并可单独最小化，同时仍与主窗口归属同一应用程序分组。
+
         :param attr: 用于在 MainWindow 上缓存对话框实例的属性名。
         :param factory: 无参可调用对象，返回新的 QDialog 实例。
         """
         dlg = getattr(self, attr, None)
         if dlg is None:
             dlg = factory()
+            # 替换默认的 Dialog 窗口类型为独立 Window，使对话框在任务栏中
+            # 获得独立条目，并支持正常的最小化/最大化操作。
+            dlg.setWindowFlags(
+                Qt.WindowType.Window
+                | Qt.WindowType.WindowTitleHint
+                | Qt.WindowType.WindowSystemMenuHint
+                | Qt.WindowType.WindowCloseButtonHint
+                | Qt.WindowType.WindowMaximizeButtonHint
+                | Qt.WindowType.WindowMinimizeButtonHint
+            )
             dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
             dlg.destroyed.connect(lambda _=None, a=attr: setattr(self, a, None))
             setattr(self, attr, dlg)

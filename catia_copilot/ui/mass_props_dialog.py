@@ -129,11 +129,6 @@ class MassPropsDialog(QDialog):
         self.setWindowTitle("重量、重心、惯量统计")
         self.setMinimumSize(1100, 650)
         self.resize(1300, 750)
-        self.setWindowFlags(
-            self.windowFlags()
-            | Qt.WindowType.WindowMaximizeButtonHint
-            | Qt.WindowType.WindowMinimizeButtonHint
-        )
 
         self._settings = QSettings("CATIACompanion", "MassPropsDialog")
         self._last_browse_dir: str = self._settings.value("last_browse_dir", "")
