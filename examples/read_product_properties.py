@@ -207,22 +207,31 @@ if __name__ == "__main__":
     # 获取当前活动文档的根产品
     # 支持 .CATProduct 和 .CATPart 文档
     active_doc = app.active_document
-    doc_type   = active_doc.com_object.Type  # e.g. "Product" or "Part"
+    com_doc = active_doc.com_object
 
-    if doc_type == "Product":
+    # 用 try/except 探测文档类型，比 .Type 属性字符串更可靠
+    # （.Type 在部分 CATIA 版本 / win32com 后期绑定下会抛异常或返回意外值）
+    is_product = False
+    try:
+        com_doc.Product   # ProductDocument 有此 COM 属性；PartDocument 会抛异常
+        is_product = True
+    except Exception:
+        pass
+
+    if is_product:
         from pycatia.product_structure_interfaces.product_document import ProductDocument
-        root = ProductDocument(active_doc.com_object).product
-    elif doc_type == "Part":
-        from pycatia.part_interfaces.part_document import PartDocument
-        # PartDocument 本身没有 .product；以 CATPart 的零件号作为虚拟产品节点
-        # 直接读取其 Part 的 Parameters 不属于本例程范围
-        # 这里改为打印基本信息并提示
-        pd = PartDocument(active_doc.com_object)
-        print("当前文档为 .CATPart，本例程针对产品文档（.CATProduct）。")
-        print(f"文档名称: {active_doc.com_object.Name}")
-        raise SystemExit(0)
+        root = ProductDocument(com_doc).product
     else:
-        raise RuntimeError(f"不支持的文档类型：{doc_type}")
+        # 检查是否为 Part 文档，给出友好提示
+        try:
+            com_doc.Part   # PartDocument 有此 COM 属性
+            print("当前文档为 .CATPart，本例程针对产品文档（.CATProduct）。")
+            print(f"文档名称: {com_doc.Name}")
+            raise SystemExit(0)
+        except SystemExit:
+            raise
+        except Exception:
+            raise RuntimeError("不支持的文档类型，请先在 CATIA 中打开一个 .CATProduct 文件。")
 
     print("=" * 55)
     print("读取根产品的内置属性与用户自定义属性")
