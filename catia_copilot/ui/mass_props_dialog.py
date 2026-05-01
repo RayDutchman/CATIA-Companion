@@ -41,6 +41,7 @@ from catia_copilot.constants import (
 from catia_copilot.catia.mass_props_collect import (
     collect_mass_props_rows, _row_inertia_to_root, recompute_product_rows,
     save_rows, load_rows, MAX_INERTIA_INDEX, remeasure_part_mass_props,
+    _compute_root_mp_from_placement,
 )
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
 from catia_copilot.ui.bom_widgets import _BomTreeWidget
@@ -1792,26 +1793,7 @@ class MassPropsDialog(QDialog):
             # 重新计算根坐标系质量特性（_placement 在初始加载时已保存，此处直接复用）
             placement = r.get("_placement")
             if placement is not None:
-                R  = [[placement[i][j] for j in range(3)] for i in range(3)]
-                T  = [placement[i][3] for i in range(3)]
-                cog_root = [
-                    sum(R[i][k] * cog_local[k] for k in range(3)) + T[i]
-                    for i in range(3)
-                ]
-                RT = [[R[j][i] for j in range(3)] for i in range(3)]
-                RI = [
-                    [sum(R[i][k] * I_local[k][j] for k in range(3)) for j in range(3)]
-                    for i in range(3)
-                ]
-                I_root = [
-                    [sum(RI[i][k] * RT[k][j] for k in range(3)) for j in range(3)]
-                    for i in range(3)
-                ]
-                r["_root_mp"] = {
-                    "weight":  new_mp["weight"],
-                    "cog":     cog_root,
-                    "inertia": I_root,
-                }
+                r["_root_mp"] = _compute_root_mp_from_placement(placement, new_mp)
             else:
                 # _placement 不存在（异常情况）：根坐标系与局部坐标系视为相同
                 r["_root_mp"] = {
@@ -1857,7 +1839,7 @@ class MassPropsDialog(QDialog):
         清除之前因测量失败而设置的橙色背景和灰色文字，解除行锁定，
         并将新的质量特性数值写入各单元格。
         """
-        default_brush = QBrush()  # 空画刷：重置为系统默认背景/前景
+        default_brush = QBrush()  # 空画刷：传递给 setBackground/setForeground 时重置为系统默认样式
 
         # 恢复背景色、前景色和工具提示至默认状态
         for ci in range(len(self._columns)):

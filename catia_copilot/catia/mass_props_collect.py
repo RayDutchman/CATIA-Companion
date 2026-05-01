@@ -696,6 +696,43 @@ def load_rows(file_path: str) -> list[dict]:
 # 主收集函数
 # ---------------------------------------------------------------------------
 
+def _compute_root_mp_from_placement(
+    placement: list[list[float]],
+    mass_props: dict,
+) -> dict:
+    """利用 4×4 变换矩阵将零件局部坐标系下的质量特性变换到根坐标系。
+
+    从 *placement*（零件局部→根的 4×4 齐次变换矩阵）中提取 3×3 旋转矩阵 R
+    和平移向量 T，对 *mass_props* 中的重心坐标和转动惯量张量执行坐标变换：
+      - 重心坐标：r_root = R @ r_local + T
+      - 惯量张量：I_root = R @ I_local @ R^T
+
+    返回字典格式与 ``_mass_props`` / ``_root_mp`` 字段一致（内部 SI 单位）。
+    """
+    R  = [[placement[i][j] for j in range(3)] for i in range(3)]
+    T  = [placement[i][3] for i in range(3)]
+    cog_local = mass_props.get("cog", [0.0, 0.0, 0.0])
+    cog_root  = [
+        sum(R[i][k] * cog_local[k] for k in range(3)) + T[i]
+        for i in range(3)
+    ]
+    I_local = mass_props.get("inertia", [[0.0] * 3 for _ in range(3)])
+    RT = [[R[j][i] for j in range(3)] for i in range(3)]
+    RI = [
+        [sum(R[i][k] * I_local[k][j] for k in range(3)) for j in range(3)]
+        for i in range(3)
+    ]
+    I_root = [
+        [sum(RI[i][k] * RT[k][j] for k in range(3)) for j in range(3)]
+        for i in range(3)
+    ]
+    return {
+        "weight":  mass_props.get("weight", 0.0),
+        "cog":     cog_root,
+        "inertia": I_root,
+    }
+
+
 def remeasure_part_mass_props(
     filepath: str,
     part_number: str = "",
@@ -725,7 +762,8 @@ def remeasure_part_mass_props(
 
         fp_resolved = Path(filepath).resolve()
         target_doc = None
-        for i in range(1, documents.count + 1):
+        doc_count = documents.count  # 缓存文档数量，减少重复 COM 属性访问
+        for i in range(1, doc_count + 1):
             try:
                 doc = documents.item(i)
                 if Path(doc.full_name).resolve() == fp_resolved:
