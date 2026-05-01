@@ -696,6 +696,55 @@ def load_rows(file_path: str) -> list[dict]:
 # 主收集函数
 # ---------------------------------------------------------------------------
 
+def remeasure_part_mass_props(
+    filepath: str,
+    part_number: str = "",
+    read_mode: str = "all",
+) -> dict | None:
+    """通过 CATIA COM 接口重新读取指定零件的质量特性（惯量包络体 Keep 测量）。
+
+    在 CATIA 当前已打开的文档中查找与 *filepath* 匹配的零件文档，再调用
+    :func:`_measure_part_mass_props` 读取 Keep 测量参数。适用于用户在 CATIA 中
+    补充或更改惯量包络体后，无需重新遍历整棵产品树即可刷新单个零件的质量特性。
+
+    参数：
+        filepath:    零件文档的磁盘完整路径（若文档尚未在 CATIA 中打开则返回 None）。
+        part_number: 零件编号（PartNumber），用于构造 Keep 参数前缀。
+        read_mode:   控制读取哪些惯量包络体（"first"/"last"/"all"）。
+
+    返回：
+        成功时返回质量特性字典（内部 SI 单位，与 :func:`collect_mass_props_rows`
+        相同格式）；找不到文档或读取失败时返回 None。
+    """
+    from pycatia import catia  # 运行时导入，避免无 CATIA 环境时报错
+    try:
+        caa = catia()
+        application = caa.application
+        application.visible = True
+        documents = application.documents
+
+        fp_resolved = Path(filepath).resolve()
+        target_doc = None
+        for i in range(1, documents.count + 1):
+            try:
+                doc = documents.item(i)
+                if Path(doc.full_name).resolve() == fp_resolved:
+                    target_doc = doc
+                    break
+            except Exception:
+                pass
+
+        if target_doc is None:
+            logger.debug(f"[REMEAS] 找不到已打开的文档: {filepath}")
+            return None
+
+        part_com = target_doc.com_object.Part
+        return _measure_part_mass_props(part_com, part_number, read_mode=read_mode)
+    except Exception as e:
+        logger.debug(f"[REMEAS] 重新读取质量特性失败 ({filepath}): {e}")
+        return None
+
+
 def collect_mass_props_rows(
     file_path: str | None,
     progress_callback: Callable[[int], None] | None = None,

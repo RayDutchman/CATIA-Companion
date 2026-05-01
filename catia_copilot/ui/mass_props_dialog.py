@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QRadioButton, QButtonGroup, QWidget, QComboBox,
     QStyledItemDelegate, QMenu,
 )
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtCore import Qt, QSettings
 
 from catia_copilot.constants import (
@@ -40,7 +40,7 @@ from catia_copilot.constants import (
 )
 from catia_copilot.catia.mass_props_collect import (
     collect_mass_props_rows, _row_inertia_to_root, recompute_product_rows,
-    save_rows, load_rows, MAX_INERTIA_INDEX,
+    save_rows, load_rows, MAX_INERTIA_INDEX, remeasure_part_mass_props,
 )
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
 from catia_copilot.ui.bom_widgets import _BomTreeWidget
@@ -1607,6 +1607,7 @@ class MassPropsDialog(QDialog):
         fp           = str(row_data.get("_filepath", ""))
         fp_path      = Path(fp) if fp else None
         is_component = row_data.get("Type") == "部件"
+        is_part      = row_data.get("Type") == "零件"
         not_found    = bool(row_data.get("_not_found"))
         no_file      = bool(row_data.get("_no_file"))
         unreadable   = bool(row_data.get("_unreadable"))
@@ -1637,6 +1638,22 @@ class MassPropsDialog(QDialog):
         )
         act_open_catia.setEnabled(catia_available)
 
+        menu.addSeparator()
+
+        # ── 重新读取质量特性 ───────────────────────────────────────────────
+        act_reread = menu.addAction("重新读取质量特性")
+        reread_available = (
+            is_part and not not_found
+            and fp_path is not None and fp_path.exists()
+        )
+        act_reread.setEnabled(reread_available)
+        if reread_available:
+            pn = str(row_data.get("Part Number", ""))
+            act_reread.setToolTip(
+                f"重新从 CATIA 读取零件「{pn}」的惯量包络体 Keep 测量参数，"
+                "并同步更新所有相同零件编号的节点。"
+            )
+
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
 
         if action == act_open_path:
@@ -1645,6 +1662,8 @@ class MassPropsDialog(QDialog):
             QApplication.clipboard().setText(fp)
         elif action == act_open_catia:
             self._open_in_catia(fp)
+        elif action == act_reread:
+            self._reread_mass_props_for_row(row_idx)
 
     def _open_path(self, fp: str) -> None:
         """在 Windows 资源管理器中打开包含 *fp* 的文件夹，并高亮选中该文件。"""
@@ -1696,3 +1715,182 @@ class MassPropsDialog(QDialog):
 
         except Exception as e:
             QMessageBox.warning(self, "在CATIA中打开失败", f"无法在CATIA中打开文件：\n{e}")
+
+    # ── 重新读取质量特性 ────────────────────────────────────────────────────
+
+    def _reread_mass_props_for_row(self, row_idx: int) -> None:
+        """重新从 CATIA 读取指定行（及所有同零件编号行）的质量特性。
+
+        用于用户在 CATIA 中补充或更改惯量包络体后，无需重新加载整个产品树
+        即可刷新单个零件的质量特性数据。若重新读取成功，同时恢复该零件所有
+        节点的正常显示状态（清除橙色背景、恢复文字颜色、解除行锁定），并
+        重新计算产品/部件节点的汇总质量特性。
+
+        按零件编号检索：所有在 self._rows 中拥有相同 Part Number 且类型为
+        "零件" 的行均会被同步更新，确保同一零件的多个实例数据一致。
+        """
+        row_data = self._rows[row_idx]
+        fp = str(row_data.get("_filepath", ""))
+        pn = str(row_data.get("Part Number", ""))
+        if not fp:
+            QMessageBox.warning(self, "无文件路径", "该零件没有有效的文件路径，无法重新读取。")
+            return
+
+        # 设置等待光标，提示用户正在操作
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            new_mp = remeasure_part_mass_props(fp, pn, self._read_mode)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if new_mp is None:
+            _read_mode_desc = {
+                "first": "「惯量包络体.1」",
+                "last":  f"编号最大的「惯量包络体.N」（N ≤ {MAX_INERTIA_INDEX}）",
+                "all":   f"「惯量包络体.1」至「惯量包络体.{MAX_INERTIA_INDEX}」",
+            }.get(self._read_mode, "惯量包络体")
+            QMessageBox.warning(
+                self, "重新读取失败",
+                f"未能从以下零件读取到有效的质量特性：\n{fp}\n\n"
+                "可能原因：\n"
+                "  • 该零件文档尚未在 CATIA 中打开\n"
+                f"  • 当前读取模式要求的 {_read_mode_desc} 保持测量不存在\n"
+                "  • 测量是在产品环境下建立的（使用产品坐标系，不会被读取）\n"
+                "  • 需单独打开零件文件，在SPA中建立惯量保持测量",
+            )
+            return
+
+        # ── 更新 _rows 中所有相同 PN 的零件实例 ─────────────────────────────
+        #
+        # 与初始加载时 _mass_cache 的设计一致：所有同 PN 实例共享同一个
+        # _mass_props 对象引用，以确保后续手动修改重量时缩放逻辑正确运行。
+        # 此处将所有实例的 _mass_props 统一指向同一个 new_mp 对象。
+        target_rows: list[int] = [
+            i for i, r in enumerate(self._rows)
+            if str(r.get("Part Number", "")) == pn and r.get("Type") == "零件"
+        ]
+
+        for ri in target_rows:
+            r = self._rows[ri]
+
+            # 将所有实例的 _mass_props 指向同一个对象（与 _mass_cache 机制一致）
+            r["_mass_props"]  = new_mp
+            r["Weight"]       = new_mp["weight"]
+            cog_local         = new_mp["cog"]
+            r["CogX"]         = cog_local[0]
+            r["CogY"]         = cog_local[1]
+            r["CogZ"]         = cog_local[2]
+            I_local           = new_mp["inertia"]
+            r["Ixx"]          = I_local[0][0]
+            r["Iyy"]          = I_local[1][1]
+            r["Izz"]          = I_local[2][2]
+            r["Ixy"]          = I_local[0][1]
+            r["Ixz"]          = I_local[0][2]
+            r["Iyz"]          = I_local[1][2]
+            r["_meas_failed"] = False
+
+            # 重新计算根坐标系质量特性（_placement 在初始加载时已保存，此处直接复用）
+            placement = r.get("_placement")
+            if placement is not None:
+                R  = [[placement[i][j] for j in range(3)] for i in range(3)]
+                T  = [placement[i][3] for i in range(3)]
+                cog_root = [
+                    sum(R[i][k] * cog_local[k] for k in range(3)) + T[i]
+                    for i in range(3)
+                ]
+                RT = [[R[j][i] for j in range(3)] for i in range(3)]
+                RI = [
+                    [sum(R[i][k] * I_local[k][j] for k in range(3)) for j in range(3)]
+                    for i in range(3)
+                ]
+                I_root = [
+                    [sum(RI[i][k] * RT[k][j] for k in range(3)) for j in range(3)]
+                    for i in range(3)
+                ]
+                r["_root_mp"] = {
+                    "weight":  new_mp["weight"],
+                    "cog":     cog_root,
+                    "inertia": I_root,
+                }
+            else:
+                # _placement 不存在（异常情况）：根坐标系与局部坐标系视为相同
+                r["_root_mp"] = {
+                    "weight":  new_mp["weight"],
+                    "cog":     list(cog_local),
+                    "inertia": [list(row_i) for row_i in I_local],
+                }
+
+        # ── 刷新可见树节点（_pn_to_items 中同 PN 的所有条目）─────────────────
+        self._is_updating = True
+        try:
+            for vis_item in self._pn_to_items.get(pn, []):
+                vis_row_idx = vis_item.data(0, _ROW_IDX_ROLE)
+                if vis_row_idx is None:
+                    continue
+                vis_row = self._rows[vis_row_idx]
+                if vis_row.get("Type") != "零件":
+                    continue
+                self._refresh_part_item_after_reread(vis_item, vis_row)
+        finally:
+            self._is_updating = False
+
+        # ── 重新计算产品/部件汇总行并刷新底部计算结果 ──────────────────────
+        recompute_product_rows(self._rows)
+        self._refresh_product_items()
+        self._rollup_result = None
+        self._clear_summary_labels()
+        self._calculate()
+
+        QMessageBox.information(
+            self, "重新读取成功",
+            f"已成功重新读取零件「{pn}」的质量特性，\n"
+            f"共更新了 {len(target_rows)} 个节点。",
+        )
+
+    def _refresh_part_item_after_reread(
+        self,
+        item: QTreeWidgetItem,
+        row_data: dict,
+    ) -> None:
+        """重新读取质量特性成功后，更新零件行的视觉状态和显示值。
+
+        清除之前因测量失败而设置的橙色背景和灰色文字，解除行锁定，
+        并将新的质量特性数值写入各单元格。
+        """
+        default_brush = QBrush()  # 空画刷：重置为系统默认背景/前景
+
+        # 恢复背景色、前景色和工具提示至默认状态
+        for ci in range(len(self._columns)):
+            item.setBackground(ci, default_brush)
+            item.setForeground(ci, default_brush)
+            item.setToolTip(ci, "")
+
+        # 解除行锁定，允许编辑 Weight 列
+        item.setData(0, _ITEM_LOCKED_ROLE, False)
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+
+        # 更新各数值列的显示内容
+        rmp = row_data.get("_root_mp")
+        for col_idx, col_name in enumerate(self._columns):
+            if col_name == "Weight":
+                item.setText(col_idx, self._fmt_mass_val(row_data.get("Weight")))
+            elif col_name in ("CogX", "CogY", "CogZ"):
+                if self._summarize:
+                    # 汇总BOM：显示零件自身坐标系值
+                    raw = row_data.get(col_name)
+                else:
+                    # 层级BOM：显示根产品坐标系值（来自 _root_mp）
+                    cog_idx = ("CogX", "CogY", "CogZ").index(col_name)
+                    raw = rmp["cog"][cog_idx] if rmp else row_data.get(col_name)
+                item.setText(col_idx, self._fmt_cog_val(raw) if raw is not None else "—")
+            elif col_name in _INERTIA_IDX:
+                ir, ic = _INERTIA_IDX[col_name]
+                if self._summarize:
+                    raw = row_data.get(col_name)
+                else:
+                    raw = (
+                        rmp["inertia"][ir][ic]
+                        if rmp and rmp.get("inertia")
+                        else row_data.get(col_name)
+                    )
+                item.setText(col_idx, self._fmt_inertia_val(raw) if raw is not None else "—")
