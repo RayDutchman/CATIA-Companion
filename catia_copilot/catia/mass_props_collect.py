@@ -60,6 +60,11 @@ logger = logging.getLogger(__name__)
 # 编号不要求连续；所有编号在此范围内存在的测量均会被读取并在零件级汇总。
 MAX_INERTIA_INDEX: int = 50
 
+# "all"/"last" 模式扫描时，若连续出现此数量的缺失编号则提前停止扫描。
+# 设为 5 时：对仅含"惯量包络体.1"的零件，原需 49 次 COM 异常，现仅需 5 次；
+# 同时允许编号间存在最多 4 个空洞（如"惯量包络体.1"与"惯量包络体.6"共存仍可正确读取）。
+_MAX_CONSECUTIVE_MISS: int = 5
+
 
 # ---------------------------------------------------------------------------
 # 纯 Python 4×4 齐次变换矩阵辅助函数（不依赖 numpy）
@@ -258,7 +263,10 @@ def _read_keep_inertia_params(
         # None，无需预先枚举全部参数名。对包含大量子孙参数的产品文档来说，
         # 枚举 params.Count 个参数名会引入额外开销，且本函数仅在零件文档上调用，
         # 直接查找性能更优。
+        # 性能优化：连续缺失 _MAX_CONSECUTIVE_MISS 个编号时提前终止扫描，
+        # 避免对不存在的编号重复触发 COM 异常（每次 COM 异常约需数百毫秒）。
         measurements: list[dict] = []
+        consecutive_miss = 0
         for idx in check_indices:
             envelope_name = f"惯量包络体.{idx}"
             # 每个 idx 仅用一个前缀探测是否存在：带零件编号的前缀优先；
@@ -268,8 +276,12 @@ def _read_keep_inertia_params(
 
             mass_si = _get(probe_prefix, "质量")
             if mass_si is None or mass_si <= 0.0:
+                consecutive_miss += 1
+                if consecutive_miss >= _MAX_CONSECUTIVE_MISS:
+                    break  # 连续多次缺失，提前退出，避免无谓的 COM 异常开销
                 continue  # 该编号不存在，跳过
 
+            consecutive_miss = 0  # 找到有效测量，重置连续缺失计数器
             prefix_ok = probe_prefix
 
             gx_si  = _get(prefix_ok, "Gx")
