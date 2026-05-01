@@ -739,19 +739,31 @@ def collect_mass_props_rows(
                 pass
         return ""
 
-    def _is_hidden(product) -> bool:
+    def _is_hidden(product, pn: str = "") -> bool:
         """检查节点在父装配中是否处于隐藏状态。
         优先读取 ShowFlag（0=隐藏 / 1=可见），不可用时回退到 Visibility。
         读取失败则保守地视为可见，返回 False。
+        每次读取结果均以 DEBUG 级别输出，便于调试。
         """
+        tag = pn or "<unknown>"
+        # 路径 1：ShowFlag
         try:
-            return int(product.com_object.ShowFlag) == 0  # catNoShow=0
-        except Exception:
-            pass
+            raw = product.com_object.ShowFlag
+            val = int(raw)
+            hidden = val == 0  # catNoShow=0, catShow=1
+            logger.debug(f"[VIS] {tag}: ShowFlag={raw!r} → hidden={hidden}")
+            return hidden
+        except Exception as e:
+            logger.debug(f"[VIS] {tag}: ShowFlag 不可用 ({e}), 尝试 Visibility")
+        # 路径 2：Visibility 回退
         try:
-            return int(product.com_object.Visibility) == 0  # catVisNoShow=0
-        except Exception:
-            pass
+            raw = product.com_object.Visibility
+            val = int(raw)
+            hidden = val == 0  # catVisNoShow=0, catVisShow=1
+            logger.debug(f"[VIS] {tag}: Visibility={raw!r} → hidden={hidden}")
+            return hidden
+        except Exception as e:
+            logger.debug(f"[VIS] {tag}: Visibility 也不可用 ({e}), 视为可见")
         return False
 
     def _traverse(
@@ -774,16 +786,19 @@ def collect_mass_props_rows(
         """
         nonlocal _total_count
 
-        # 忽略隐藏节点：若启用且当前节点处于隐藏状态，则跳过该节点及其全部子孙
-        if skip_hidden and level >= 1 and _is_hidden(product):
-            return
-
         # 读取零件号（PartNumber）；失败时退而使用名称去掉扩展名
         try:
             pn = product.part_number
         except Exception:
             name = product.name
             pn   = name.rsplit(".", 1)[0] if "." in name else name
+
+        # 可见性探测（始终执行以输出 DEBUG 日志，便于诊断）；
+        # 根节点（level=0）的实例是虚拟根，不存在 parent 上下文，跳过探测。
+        if level >= 1:
+            _hidden = _is_hidden(product, pn)
+            if skip_hidden and _hidden:
+                return
 
         # 解析本节点对应的磁盘文件路径（通过 COM ReferenceProduct.Parent.FullName）
         try:
