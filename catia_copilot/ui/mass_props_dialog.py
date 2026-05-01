@@ -327,9 +327,9 @@ class MassPropsDialog(QDialog):
             "⚠ 使用说明：本功能读取指定产品树下的每个零件的'测量惯量'结果和其"
             "在根产品中的位置，用于计算根产品的重量、重心、转动惯量。"
             "请在 CATIA 中 <b>单独打开</b> 每个零件,执行'测量惯量'并勾选 <b>保持测量</b>,"
-            f"在产品窗口中建立的惯量包络体的参考坐标系为根产品坐标系（即使当前工作对象是零件），"
+            "在产品窗口中建立的惯量包络体的参考坐标系为根产品坐标系（即使当前工作对象是零件），"
             "这会导致坐标系与根产品不重合的零件的测量结果不正确。"
-            "测量结果必须命名为 <b>惯量包络体.x</b>（x 为 1–{MAX_INERTIA_INDEX} 的整数）。"
+            f"测量结果必须命名为 <b>惯量包络体.x</b>（x 为 1–{MAX_INERTIA_INDEX} 的整数）。"
             "支持一个零件具有多个惯量包络体，产品的惯量包络体将不被读取。"
         )
         prereq_lbl.setWordWrap(True)
@@ -400,12 +400,12 @@ class MassPropsDialog(QDialog):
             "速度最快：只进行一次参数查询，不扫描其余编号。"
         )
         self._radio_read_last.setToolTip(
-            "扫描编号 1 到 50 的全部惯量包络体，使用编号最大的有效保持测量结果。\n"
-            "速度较慢：每个缺失的编号均会产生一次 COM 异常，最多 49 次。"
+            f"扫描编号 1 到 {MAX_INERTIA_INDEX} 的全部惯量包络体，使用编号最大的有效保持测量结果。\n"
+            f"速度较慢：每个缺失的编号均会产生一次 COM 异常，最多 {MAX_INERTIA_INDEX - 1} 次。"
         )
         self._radio_read_all.setToolTip(
-            "扫描编号 1 到 50 的全部惯量包络体，读取所有有效测量并按平行轴定理汇总为单一质量特性。\n"
-            "速度较慢：每个缺失的编号均会产生一次 COM 异常，最多 49 次。"
+            f"扫描编号 1 到 {MAX_INERTIA_INDEX} 的全部惯量包络体，读取所有有效测量并按平行轴定理汇总为单一质量特性。\n"
+            f"速度较慢：每个缺失的编号均会产生一次 COM 异常，最多 {MAX_INERTIA_INDEX - 1} 次。"
         )
         self._radio_read_first.setChecked(self._read_mode == "first")
         self._radio_read_last.setChecked(self._read_mode == "last")
