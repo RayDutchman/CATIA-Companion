@@ -200,7 +200,7 @@ def _read_keep_inertia_params(
     导致结果不正确，此类测量将不被读取。
 
     读取策略（对每个编号 N，依次尝试以下前缀，取第一个能读到有效质量的前缀）：
-      1. "{part_number}\\惯量包络体.N\\"  ← CATIA 以零件号作为顶层命名空间
+      1. "{part_number}\\惯量包络体.N\\"  ← CATIA 以零件编号作为顶层命名空间
       2. "惯量包络体.N\\"                  ← 当前文档上下文回退前缀
     编号不要求连续，所有 1 ≤ N ≤ MAX_INERTIA_INDEX 中存在的测量均会被读取（取决于 read_mode）。
 
@@ -380,7 +380,7 @@ def _measure_part_mass_props(
 
     参数：
         part_com:    COM 对象（Part 层）。
-        part_number: 零件号（PartNumber），用于构造参数前缀。
+        part_number: 零件编号（PartNumber），用于构造参数前缀。
         read_mode:   控制读取哪些惯量包络体（"first"/"last"/"all"，默认 "all"）。
 
     返回字典：
@@ -821,7 +821,7 @@ def collect_mass_props_rows(
         """
         nonlocal _total_count
 
-        # 读取零件号（PartNumber）；失败时退而使用名称去掉扩展名
+        # 读取零件编号（PartNumber）；失败时退而使用名称去掉扩展名
         try:
             pn = product.part_number
         except Exception:

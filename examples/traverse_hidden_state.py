@@ -163,7 +163,7 @@ def collect_hidden_states(
     返回值中每个元素为：
         {
           "level":   int,   # 层级深度（根节点为 0）
-          "name":    str,   # 零件号（part_number）
+          "name":    str,   # 零件编号（part_number）
           "hidden":  bool,  # True = 隐藏，False = 可见
         }
     """

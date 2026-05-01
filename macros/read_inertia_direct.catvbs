@@ -11,7 +11,7 @@ Option Explicit
 '   · 将 SEARCH_KEYWORD 置为 "" 则显示全部参数。
 '
 ' iParameters 用法（由 SystemService.ExecuteScript 传入，也可手动运行）：
-'   iParameters — 目标零件的零件号（PartNumber 字符串，可选）。
+'   iParameters — 目标零件的零件编号（PartNumber 字符串，可选）。
 '     · 若提供且非空：在已打开的 PartDocument 中按 PartNumber 定位。
 '     · 若为空或省略：使用当前活动文档。
 ' ============================================================
@@ -22,7 +22,7 @@ Sub CATMain(PartNumber)
     Dim CATIA
     Set CATIA = GetObject(, "CATIA.Application")
 
-    ' ── 解析 iParameters：目标零件号（PartNumber，可选）─────────────────────
+    ' ── 解析 iParameters：目标零件编号（PartNumber，可选）─────────────────────
     Dim targetPN
     targetPN = ""
     On Error Resume Next
@@ -54,7 +54,7 @@ Sub CATMain(PartNumber)
         Next
         On Error GoTo 0
         If Not found Then
-            MsgBox "未找到零件号为 [" & targetPN & "] 的 PartDocument，已退出。", _
+            MsgBox "未找到零件编号为 [" & targetPN & "] 的 PartDocument，已退出。", _
                    vbExclamation, "read_inertia_direct"
             Exit Sub
         End If

@@ -174,7 +174,7 @@ def print_all_properties(product, indent: str = "") -> None:
         name = product.name
         pn   = name.rsplit(".", 1)[0] if "." in name else name
 
-    print(f"{indent}零件号（Part Number）: {pn}")
+    print(f"{indent}零件编号（Part Number）: {pn}")
 
     # ── 内置属性 ──────────────────────────────────────────────────────────
     print(f"{indent}【内置属性】")
