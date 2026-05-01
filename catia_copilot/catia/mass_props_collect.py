@@ -45,8 +45,7 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from pythoncom import VT_BYREF, VT_I4
-from win32com.client import VARIANT
+
 
 from catia_copilot.constants import FILENAME_NOT_FOUND, FILENAME_UNSAVED
 
@@ -778,10 +777,18 @@ def collect_mass_props_rows(
             sel = application.com_object.ActiveDocument.Selection
             sel.Clear()
             sel.Add(com)
-            show_var = VARIANT(VT_BYREF | VT_I4, 0)
-            sel.VisProperties.GetShow(show_var)
-            hidden = show_var.value != 0
-            logger.debug(f"[VIS] {tag}: Selection.VisProperties.GetShow()={show_var.value} → hidden={hidden}")
+            # In win32com late-binding (IDispatch), ByRef out-params are returned
+            # as Python return values when you pass an initial plain int.
+            # Passing a VARIANT(VT_BYREF|VT_I4,…) causes win32com to attempt
+            # int(variant) during dispatch argument marshalling which raises TypeError.
+            result = sel.VisProperties.GetShow(0)
+            # result may be the show-state int directly, or a tuple ending with it
+            if isinstance(result, tuple):
+                show_val = result[-1]
+            else:
+                show_val = result
+            hidden = bool(show_val) if show_val is not None else False
+            logger.debug(f"[VIS] {tag}: Selection.VisProperties.GetShow()={show_val} → hidden={hidden}")
             return hidden
         except Exception as e:
             logger.debug(f"[VIS] {tag}: Selection.VisProperties.GetShow() 不可用 ({e})，视为可见")
