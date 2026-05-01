@@ -494,6 +494,7 @@ class MassPropsDialog(QDialog):
         if saved_sort_idx >= 0:
             self._sort_col_combo.setCurrentIndex(saved_sort_idx)
         self._sort_col_combo.currentIndexChanged.connect(self._on_sort_col_changed)
+        self._sort_col_combo.setMaximumHeight(24)
         summary_opts_layout.addWidget(self._sort_col_combo)
         self._summary_opts_widget.setVisible(self._summarize)
         row2.addWidget(self._summary_opts_widget)
