@@ -121,8 +121,11 @@ def print_all_parameters(params_com, title: str = "") -> list[dict]:
         print(f"  文档：{title}")
     print(f"  共找到 {count} 个参数")
     print(f"{'=' * 60}")
-    print(f"  {'#':<5} {'参数名':<45} {'值（含单位）'}")
-    print(f"  {'-' * 5} {'-' * 45} {'-' * 20}")
+    # 并列打印两种读取方式：
+    #   ValueAsString() → 含单位的格式化字符串，如 "10.5mm"
+    #   param.Value     → 裸 SI float，如 0.0105（无单位，适合数值计算）
+    print(f"  {'#':<5} {'参数名':<45} {'ValueAsString()':<25} {'param.Value（SI裸值）'}")
+    print(f"  {'-' * 5} {'-' * 45} {'-' * 25} {'-' * 20}")
 
     results = []
     for i in range(1, count + 1):          # COM 集合索引从 1 开始
@@ -143,7 +146,7 @@ def print_all_parameters(params_com, title: str = "") -> list[dict]:
             except Exception:
                 val_raw = None
 
-            print(f"  {i:<5} {name:<45} {val_str}")
+            print(f"  {i:<5} {name:<45} {val_str:<25} {val_raw}")
 
             results.append({
                 "name":      name,
@@ -211,7 +214,7 @@ def main():
     if matches:
         print(f"包含关键词 '{search_keyword}' 的参数：")
         for m in matches:
-            print(f"  {m['name']} = {m['value_str']}")
+        print(f"  {m['name']} = {m['value_str']}  (SI裸值: {m['value_raw']})")
     else:
         print(f"未找到包含关键词 '{search_keyword}' 的参数。")
 
