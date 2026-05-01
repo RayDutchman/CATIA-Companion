@@ -182,7 +182,7 @@ BOM_THUMBNAIL_MAX_SIZE: int = 130
 
 MASS_PROPS_COLUMNS: list[str] = [
     "Level", "Type", "Filename", "Part Number", "Nomenclature", "Revision",
-    "Weight", "CogX", "CogY", "CogZ",
+    "Density", "Weight", "CogX", "CogY", "CogZ",
     "Ixx", "Iyy", "Izz", "Ixy", "Ixz", "Iyz",
 ]
 
@@ -195,6 +195,7 @@ MASS_PROPS_COLUMN_DISPLAY_NAMES: dict[str, str] = {
     "Nomenclature": "术语（中文名称）",
     "Revision":     "版本",
     "Quantity":     "数量",
+    "Density":      "密度 (kg/m³)",
     "Weight":       "重量 (kg)",
     "CogX":         "重心 X (mm)",
     "CogY":         "重心 Y (mm)",
@@ -208,7 +209,8 @@ MASS_PROPS_COLUMN_DISPLAY_NAMES: dict[str, str] = {
 }
 
 # Columns that are read-only in the mass properties dialog
-# (only "Weight" is editable for part rows)
+# (only "Weight" and "Density" with valid data are editable for part rows;
+#  density with value -1.0 is additionally locked in the delegate)
 MASS_PROPS_READONLY_COLUMNS: frozenset[str] = frozenset({
     "#", "Level", "Type", "Filename", "Part Number",
     "Nomenclature", "Revision", "Quantity",

@@ -42,6 +42,7 @@
 import gzip
 import json
 import logging
+import math
 from collections.abc import Callable
 from pathlib import Path
 
@@ -220,6 +221,10 @@ def _read_keep_inertia_params(
       2. 计算总重心：r_c = Σ(m_i · r_i) / M。
       3. 平行轴定理从原点移回总重心，得汇总惯量张量。
 
+    CATIA Keep 参数中亦可选读取密度字段：
+      密度                            CATIA 原始: kg/m³ → 内部存储: kg/m³（无需换算）
+      当单个测量内材料不统一时 CATIA 返回 -1；跨多个惯量包络体密度不一致时同样返回 -1。
+
     返回值结构（内部 SI 单位）：
       {
         "weight":  float,               # 总质量，kg
@@ -227,6 +232,7 @@ def _read_keep_inertia_params(
         "inertia": [[Ixx, Ixy, Ixz],    # 总重心处转动惯量张量（3×3 对称矩阵），kg·m²
                     [Ixy, Iyy, Iyz],
                     [Ixz, Iyz, Izz]],
+        "density": float | None,        # 密度，kg/m³；-1.0 表示不统一；None 表示无密度数据
       }
     若所有编号均未找到有效质量，则返回 None。
     """
@@ -283,6 +289,9 @@ def _read_keep_inertia_params(
                 logger.debug(f"{tag}{envelope_name} 部分参数缺失，跳过该测量")
                 continue
 
+            # 密度（可选参数）：CATIA 原始单位 kg/m³，不一致时返回 -1
+            density_raw = _get(prefix_ok, "密度")
+
             measurements.append({
                 "weight": mass_si,
                 # Gx/Gy/Gz 由 CATIA 以 mm 存储，÷1000 换算为内部 SI 单位（m）
@@ -292,6 +301,7 @@ def _read_keep_inertia_params(
                     [ixy_si, iyy_si, iyz_si],
                     [ixz_si, iyz_si, izz_si],
                 ],
+                "density": density_raw,  # None：无密度参数；-1.0：CATIA 报材料不统一；>0：kg/m³
             })
 
         if not measurements:
@@ -303,7 +313,7 @@ def _read_keep_inertia_params(
             measurements = [measurements[-1]]
 
         if len(measurements) == 1:
-            # 仅一个测量，无需汇总，直接返回
+            # 仅一个测量，无需汇总，直接返回（density 已含在 measurements[0] 中）
             return measurements[0]
 
         # ── 零件级汇总：平行轴定理（均在零件局部坐标系下）────────────────────────
@@ -334,11 +344,37 @@ def _read_keep_inertia_params(
                 delta = (1.0 if ii == jj else 0.0) * rc2 - rc[ii] * rc[jj]
                 I_final[ii][jj] = I_at_orig[ii][jj] - M_total * delta
 
+        # ── 跨多个惯量包络体的密度汇总 ────────────────────────────────────────
+        # 规则：任意一个测量报"不统一"（-1）→ 整体为 -1；
+        #       所有有效密度值（>0）不完全相同 → 整体为 -1（多材料）；
+        #       所有有效密度值相同 → 取该值；无任何密度数据 → None。
+        agg_density: float | None = None
+        has_inconsistent = False
+        valid_densities: list[float] = []
+        for meas in measurements:
+            d = meas.get("density")
+            if d is None:
+                continue
+            if d < 0:
+                has_inconsistent = True
+            else:
+                valid_densities.append(d)
+        if has_inconsistent:
+            agg_density = -1.0
+        elif valid_densities:
+            # 判断各密度值是否一致（相对误差 < 1e-9）
+            d0 = valid_densities[0]
+            if all(math.isclose(d, d0, rel_tol=1e-9) for d in valid_densities[1:]):
+                agg_density = d0
+            else:
+                agg_density = -1.0
+
         logger.debug(
             f"{tag}汇总 {len(measurements)} 个惯量包络体测量: "
-            f"weight={M_total:.4g} kg, cog={[round(v,4) for v in cog_total]} m"
+            f"weight={M_total:.4g} kg, cog={[round(v,4) for v in cog_total]} m, "
+            f"density={agg_density} kg/m³"
         )
-        return {"weight": M_total, "cog": cog_total, "inertia": I_final}
+        return {"weight": M_total, "cog": cog_total, "inertia": I_final, "density": agg_density}
 
     except Exception as e:
         logger.debug(f"{tag}惯量包络体参数读取异常: {e}")
@@ -796,7 +832,7 @@ def collect_mass_props_rows(
     返回：
         行字典列表，每行含以下键：
           Level, Type, Part Number, Filename, Nomenclature, Revision,
-          Weight, CogX, CogY, CogZ, Ixx, Iyy, Izz, Ixy, Ixz, Iyz,
+          Density, Weight, CogX, CogY, CogZ, Ixx, Iyy, Izz, Ixy, Ixz, Iyz,
           _filepath, _placement, _not_found, _no_file, _unreadable, _meas_failed
     """
     from pycatia import catia, CatWorkModeType
@@ -1018,6 +1054,7 @@ def collect_mass_props_rows(
                              else FILENAME_NOT_FOUND),
             "Nomenclature": nomenclature,
             "Revision":     revision,
+            "Density":      mp.get("density", None),  # kg/m³；-1.0 表示不统一；None 表示无密度数据
             "Weight":       mp.get("weight", None),
             "CogX":         cog[0] if mp else None,
             "CogY":         cog[1] if mp else None,

@@ -52,6 +52,8 @@ logger = logging.getLogger(__name__)
 _ROW_IDX_ROLE = Qt.ItemDataRole.UserRole
 # UserRole+1：锁定标志位（不可编辑行）
 _ITEM_LOCKED_ROLE = Qt.ItemDataRole.UserRole + 1
+# UserRole+2：密度锁定（密度值为 -1 或 None，不允许编辑密度列）
+_DENSITY_LOCKED_ROLE = Qt.ItemDataRole.UserRole + 2
 
 # 惯量列名 → (行索引, 列索引)，对应 3×3 张量位置
 _INERTIA_IDX: dict[str, tuple[int, int]] = {
@@ -91,6 +93,9 @@ class _MassPropsDelegate(QStyledItemDelegate):
             return None
         col_name = cols[index.column()]
         if col_name in MASS_PROPS_READONLY_COLUMNS:
+            return None
+        # 密度列：当该行密度不统一或无数据时不允许编辑
+        if col_name == "Density" and item.data(0, _DENSITY_LOCKED_ROLE):
             return None
         return super().createEditor(parent, option, index)
 
@@ -252,19 +257,21 @@ class MassPropsDialog(QDialog):
             for c in MASS_PROPS_HIDEABLE_COLUMNS:
                 if c in self._visible_hideable_cols:
                     base.append(c)
-            base += ["Quantity", "Weight", "CogX", "CogY", "CogZ",
+            base += ["Quantity", "Density", "Weight", "CogX", "CogY", "CogZ",
                      "Ixx", "Iyy", "Izz", "Ixy", "Ixz", "Iyz"]
         else:
             base = ["Level", "#", "Type"]
             for c in MASS_PROPS_HIDEABLE_COLUMNS:
                 if c in self._visible_hideable_cols:
                     base.append(c)
-            base += ["Weight", "CogX", "CogY", "CogZ",
+            base += ["Density", "Weight", "CogX", "CogY", "CogZ",
                      "Ixx", "Iyy", "Izz", "Ixy", "Ixz", "Iyz"]
         return base
 
     def _column_header(self, col_name: str) -> str:
         """返回列名的中文显示名（含当前单位后缀）。"""
+        if col_name == "Density":
+            return "密度 (kg/m³)"
         if col_name == "Weight":
             return f"重量 ({self._weight_unit_label()})"
         if col_name in _INERTIA_IDX:
@@ -1086,6 +1093,14 @@ class MassPropsDialog(QDialog):
                     item.setToolTip(col_idx, fp)
             elif col_name == "Quantity":
                 item.setText(col_idx, str(row_data.get("Quantity", 1)))
+            elif col_name == "Density":
+                density = row_data.get("Density")
+                if density is None:
+                    item.setText(col_idx, "—" if node_type == "零件" else "")
+                elif density < 0:
+                    item.setText(col_idx, "不统一")
+                else:
+                    item.setText(col_idx, _fmt(density))
             elif col_name == "Weight":
                 raw = row_data.get("Weight")
                 if raw is None:
@@ -1104,12 +1119,17 @@ class MassPropsDialog(QDialog):
             else:
                 item.setText(col_idx, str(row_data.get(col_name, "")))
 
-        # 可编辑性：仅未锁定零件行的 Weight 列可编辑
+        # 可编辑性：仅未锁定零件行的 Weight 和 Density（有效值）列可编辑
         if node_type == "零件" and not row_locked:
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
             item.setData(0, _ITEM_LOCKED_ROLE, False)
         else:
             item.setData(0, _ITEM_LOCKED_ROLE, True)
+
+        # 密度列锁定：密度为不统一（-1）或无数据（None）时不允许编辑密度列
+        density_val = row_data.get("Density")
+        density_locked = (density_val is None) or (density_val < 0)
+        item.setData(0, _DENSITY_LOCKED_ROLE, density_locked)
 
         # 行背景色设置
         if row_locked:
@@ -1180,10 +1200,14 @@ class MassPropsDialog(QDialog):
             return
 
         col_name = self._columns[col_idx]
-        if col_name != "Weight":
+        if col_name not in ("Weight", "Density"):
             return
 
         if item.data(0, _ITEM_LOCKED_ROLE):
+            return
+
+        # 密度列额外检查（-1 或 None 时不可编辑）
+        if col_name == "Density" and item.data(0, _DENSITY_LOCKED_ROLE):
             return
 
         row_data = self._rows[row_idx]
@@ -1191,25 +1215,61 @@ class MassPropsDialog(QDialog):
             return
 
         new_text = item.text(col_idx).strip()
-        try:
-            # 输入值为当前显示单位；除以 _unit_factor 还原到内部单位（kg）
-            new_display_val = float(new_text)
-            new_weight_stored = new_display_val / self._unit_factor
-        except (ValueError, TypeError):
-            self._is_updating = True
-            item.setText(col_idx, self._fmt_mass_val(row_data.get("Weight")))
-            self._is_updating = False
-            return
 
-        if new_weight_stored < 0.0:
-            QMessageBox.warning(
-                self, "重量不合法",
-                "重量不能为负数，请输入大于或等于 0 的值。",
-            )
-            self._is_updating = True
-            item.setText(col_idx, self._fmt_mass_val(row_data.get("Weight")))
-            self._is_updating = False
-            return
+        # ── 解析用户输入，计算新的内部存储重量和缩放比例 ─────────────────────
+        if col_name == "Weight":
+            try:
+                # 输入值为当前显示单位；除以 _unit_factor 还原到内部单位（kg）
+                new_weight_stored = float(new_text) / self._unit_factor
+            except (ValueError, TypeError):
+                self._is_updating = True
+                item.setText(col_idx, self._fmt_mass_val(row_data.get("Weight")))
+                self._is_updating = False
+                return
+            if new_weight_stored < 0.0:
+                QMessageBox.warning(
+                    self, "重量不合法",
+                    "重量不能为负数，请输入大于或等于 0 的值。",
+                )
+                self._is_updating = True
+                item.setText(col_idx, self._fmt_mass_val(row_data.get("Weight")))
+                self._is_updating = False
+                return
+            new_density_stored = row_data.get("Density")
+        else:  # col_name == "Density"
+            try:
+                new_density_stored = float(new_text)
+            except (ValueError, TypeError):
+                self._is_updating = True
+                density_old = row_data.get("Density")
+                item.setText(col_idx, _fmt(density_old) if density_old is not None and density_old >= 0 else "—")
+                self._is_updating = False
+                return
+            if new_density_stored <= 0.0:
+                QMessageBox.warning(
+                    self, "密度不合法",
+                    "密度必须为正数，请输入大于 0 的值。",
+                )
+                self._is_updating = True
+                density_old = row_data.get("Density")
+                item.setText(col_idx, _fmt(density_old) if density_old is not None and density_old >= 0 else "—")
+                self._is_updating = False
+                return
+            # 密度按比例缩放重量（体积不变，密度×体积=质量）
+            _raw_density = row_data.get("Density")
+            _raw_weight  = row_data.get("Weight")
+            try:
+                old_density = float(_raw_density) if _raw_density is not None else 0.0
+            except (ValueError, TypeError):
+                old_density = 0.0
+            try:
+                old_weight = float(_raw_weight) if _raw_weight is not None else 0.0
+            except (ValueError, TypeError):
+                old_weight = 0.0
+            if old_density > 0.0 and old_weight > 0.0:
+                new_weight_stored = old_weight * (new_density_stored / old_density)
+            else:
+                new_weight_stored = old_weight  # 无法计算缩放，重量保持不变
 
         pn = str(row_data.get("Part Number", ""))
 
@@ -1237,16 +1297,20 @@ class MassPropsDialog(QDialog):
         # Step 2：对共享 _mass_props 的惯量只缩放一次。
         if mp_shared is not None:
             mp_shared["weight"] = new_weight_stored
+            if new_density_stored is not None and new_density_stored >= 0:
+                mp_shared["density"] = new_density_stored
             if scale != 1.0:
                 orig_i = mp_shared.get("inertia", [[0.0] * 3 for _ in range(3)])
                 mp_shared["inertia"] = [[orig_i[ir][ic] * scale for ic in range(3)]
                                         for ir in range(3)]
 
-        # Step 3：遍历所有实例，更新 Weight / 行级显示字段 / _root_mp。
+        # Step 3：遍历所有实例，更新 Weight / Density / 行级显示字段 / _root_mp。
         for r in self._rows:
             if str(r.get("Part Number", "")) != pn or r.get("Type") != "零件":
                 continue
             r["Weight"] = new_weight_stored
+            if new_density_stored is not None and new_density_stored >= 0:
+                r["Density"] = new_density_stored
             mp = r.get("_mass_props")
             if mp:
                 # mp["inertia"] 已在 Step 2 缩放完毕；
@@ -1280,6 +1344,7 @@ class MassPropsDialog(QDialog):
         # ── 更新可见树节点中同 PN 的所有行 ────────────────────────────────
         self._is_updating = True
         w_idx = self._columns.index("Weight") if "Weight" in self._columns else -1
+        d_idx = self._columns.index("Density") if "Density" in self._columns else -1
 
         for vis_item in self._pn_to_items.get(pn, []):
             vis_row_idx = vis_item.data(0, _ROW_IDX_ROLE)
@@ -1290,6 +1355,10 @@ class MassPropsDialog(QDialog):
                 continue
             if w_idx >= 0:
                 vis_item.setText(w_idx, self._fmt_mass_val(vis_row.get("Weight")))
+            if d_idx >= 0:
+                d_val = vis_row.get("Density")
+                if d_val is not None and d_val >= 0:
+                    vis_item.setText(d_idx, _fmt(d_val))
             for ic_name, (ir, ic) in _INERTIA_IDX.items():
                 if ic_name in self._columns:
                     ic_idx = self._columns.index(ic_name)
@@ -1462,6 +1531,14 @@ class MassPropsDialog(QDialog):
                 raw = row_data.get(col_name)
                 if raw is None:
                     value = ""
+                elif col_name == "Density":
+                    if raw < 0:
+                        value = "不统一"
+                    else:
+                        try:
+                            value = float(raw)
+                        except (TypeError, ValueError):
+                            value = ""
                 elif col_name == "Weight":
                     try:
                         value = float(raw) * self._unit_factor
@@ -1536,6 +1613,13 @@ class MassPropsDialog(QDialog):
         def _cell_value(col_name: str, raw) -> str:
             if raw is None:
                 return ""
+            if col_name == "Density":
+                if isinstance(raw, (int, float)) and raw < 0:
+                    return "不统一"
+                try:
+                    return str(float(raw))
+                except (TypeError, ValueError):
+                    return ""
             if col_name == "Weight":
                 try:
                     return str(float(raw) * self._unit_factor)
@@ -1776,6 +1860,7 @@ class MassPropsDialog(QDialog):
 
             # 将所有实例的 _mass_props 指向同一个对象（与 _mass_cache 机制一致）
             r["_mass_props"]  = new_mp
+            r["Density"]      = new_mp.get("density", None)
             r["Weight"]       = new_mp["weight"]
             cog_local         = new_mp["cog"]
             r["CogX"]         = cog_local[0]
@@ -1851,10 +1936,22 @@ class MassPropsDialog(QDialog):
         item.setData(0, _ITEM_LOCKED_ROLE, False)
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
 
+        # 更新密度列锁定状态
+        density_val = row_data.get("Density")
+        item.setData(0, _DENSITY_LOCKED_ROLE, (density_val is None) or (density_val < 0))
+
         # 更新各数值列的显示内容
         rmp = row_data.get("_root_mp")
         for col_idx, col_name in enumerate(self._columns):
-            if col_name == "Weight":
+            if col_name == "Density":
+                d_val = row_data.get("Density")
+                if d_val is None:
+                    item.setText(col_idx, "—")
+                elif d_val < 0:
+                    item.setText(col_idx, "不统一")
+                else:
+                    item.setText(col_idx, _fmt(d_val))
+            elif col_name == "Weight":
                 item.setText(col_idx, self._fmt_mass_val(row_data.get("Weight")))
             elif col_name in ("CogX", "CogY", "CogZ"):
                 if self._summarize:
