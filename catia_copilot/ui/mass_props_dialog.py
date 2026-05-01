@@ -220,7 +220,7 @@ class MassPropsDialog(QDialog):
         独立惯量单位换算请使用 _calc_inertia_factor()。
         """
         mf = 1e3 if mass_unit == "g" else 1.0
-        cf = 1e3 if cog_unit  == "mm" else 1.0
+        cf = 1e3 if cog_unit == "mm" else 1.0
         return mf, mf * cf * cf, cf
 
     @staticmethod
@@ -331,7 +331,7 @@ class MassPropsDialog(QDialog):
         prereq_lbl = QLabel(
             "<b>⚠ 使用说明：</b>"
             "请在 CATIA 中<b>单独打开</b>每个零件（勿在产品窗口中操作），进入 SPA 执行惯量测量并勾选<b>保持测量</b>，"
-            "测量命名为 <b>惯量包络体.x</b>（x=1~50）。"
+            f"测量命名为 <b>惯量包络体.x</b>（x=1~{MAX_INERTIA_INDEX}）。"
             "在产品窗口建立的惯量包络体坐标系为根产品坐标系，"
             "会导致非原点零件结果不正确且不会被读取；产品级惯量包络体也不会被读取。"
         )
