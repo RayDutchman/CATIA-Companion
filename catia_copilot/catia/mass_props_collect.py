@@ -45,6 +45,9 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
+from pythoncom import VT_BYREF, VT_I4
+from win32com.client import VARIANT
+
 from catia_copilot.constants import FILENAME_NOT_FOUND, FILENAME_UNSAVED
 
 logger = logging.getLogger(__name__)
@@ -743,22 +746,29 @@ def collect_mass_props_rows(
         """检查产品实例（occurrence / 树节点）在父装配中是否处于隐藏状态。
 
         CATIA 的可见性是实例级属性，必须在 occurrence 的 com_object 上通过
-        CATIAVisProperties 接口读取，而非在 PartDocument 上读取。
-        GetShow() 返回：catVisShow=0（可见）/ catVisNoShow=1（隐藏）。
+        CATIAVisPropertySet 接口读取，而非在 PartDocument 上读取。
+
+        GetShow() 是一个 COM Sub，结果通过 ByRef out 参数写回，无返回值。
+        必须使用 VARIANT(VT_BYREF | VT_I4, 0) 接收该参数，而非直接调用取返回值。
+        返回：catVisShow=0（可见）/ catVisNoShow=1（隐藏）。
         读取失败则保守地视为可见，返回 False。
         """
         tag = pn or "<unknown>"
         com = product.com_object
 
-        # 主路径：VisProperties.GetShow()（occurrence 实例级可见性）
+        # GetTechnologicalObject("VisPropertySet") 取得 CATIAVisPropertySet 接口，
+        # GetShow 是 Sub(ByRef oShow As CATVisPropertyShow)，结果通过 VARIANT ByRef 写回。
         try:
-            show = int(com.VisProperties.GetShow())
+            vis = com.GetTechnologicalObject("VisPropertySet")
+            show_var = VARIANT(VT_BYREF | VT_I4, 0)
+            vis.GetShow(show_var)
+            show = int(show_var.value)
             # catVisNoShow = 1 → 隐藏；catVisShow = 0 → 可见
             hidden = show != 0
-            logger.debug(f"[VIS] {tag}: VisProperties.GetShow()={show} → hidden={hidden}")
+            logger.debug(f"[VIS] {tag}: VisPropertySet.GetShow()={show} → hidden={hidden}")
             return hidden
         except Exception as e:
-            logger.debug(f"[VIS] {tag}: VisProperties.GetShow() 不可用 ({e})，视为可见")
+            logger.debug(f"[VIS] {tag}: VisPropertySet.GetShow() 不可用 ({e})，视为可见")
 
         return False
 
