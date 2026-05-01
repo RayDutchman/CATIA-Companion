@@ -11,7 +11,7 @@
                       • 惯量单位 g·mm²/g·m²/kg·mm²/kg·m² 独立选择（4 种）
                       • 惯量包络体读取模式：只读.1 / 最大编号 / 全部汇总
                       • 文件名 / 零件编号 / 术语 / 版本列可隐藏
-                      • 计算装配体总质量特性并导出 Excel
+                      • 自动汇总装配体总质量特性并导出 Excel
 """
 
 import logging
@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QRadioButton, QButtonGroup, QWidget, QComboBox,
     QStyledItemDelegate, QMenu,
 )
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtCore import Qt, QSettings
 
 from catia_copilot.constants import (
@@ -40,7 +40,8 @@ from catia_copilot.constants import (
 )
 from catia_copilot.catia.mass_props_collect import (
     collect_mass_props_rows, _row_inertia_to_root, recompute_product_rows,
-    save_rows, load_rows, MAX_INERTIA_INDEX,
+    save_rows, load_rows, MAX_INERTIA_INDEX, remeasure_part_mass_props,
+    _compute_root_mp_from_placement,
 )
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
 from catia_copilot.ui.bom_widgets import _BomTreeWidget
@@ -51,6 +52,8 @@ logger = logging.getLogger(__name__)
 _ROW_IDX_ROLE = Qt.ItemDataRole.UserRole
 # UserRole+1：锁定标志位（不可编辑行）
 _ITEM_LOCKED_ROLE = Qt.ItemDataRole.UserRole + 1
+# UserRole+2：密度锁定（密度值为 -1 或 None，不允许编辑密度列）
+_DENSITY_LOCKED_ROLE = Qt.ItemDataRole.UserRole + 2
 
 # 惯量列名 → (行索引, 列索引)，对应 3×3 张量位置
 _INERTIA_IDX: dict[str, tuple[int, int]] = {
@@ -91,6 +94,9 @@ class _MassPropsDelegate(QStyledItemDelegate):
         col_name = cols[index.column()]
         if col_name in MASS_PROPS_READONLY_COLUMNS:
             return None
+        # 密度列：当该行密度不统一或无数据时不允许编辑
+        if col_name == "Density" and item.data(0, _DENSITY_LOCKED_ROLE):
+            return None
         return super().createEditor(parent, option, index)
 
 
@@ -120,7 +126,7 @@ class MassPropsDialog(QDialog):
     - 仅零件节点的"重量"列可编辑；修改后等比缩放该行惯量，
       并同步更新所有相同零件编号的行（及 _rows 中全部同PN数据）。
     - 单位可在 kg/g 间切换（影响重量列与转动惯量列的显示和导出）。
-    - "计算"按钮汇总装配体总质量特性（考虑位姿变换）。
+    - 修改密度或重量后自动重新计算装配体总质量特性，汇总结果实时更新。
     - "导出表格"将当前数据（含汇总行）写入 Excel。
     """
 
@@ -251,19 +257,21 @@ class MassPropsDialog(QDialog):
             for c in MASS_PROPS_HIDEABLE_COLUMNS:
                 if c in self._visible_hideable_cols:
                     base.append(c)
-            base += ["Quantity", "Weight", "CogX", "CogY", "CogZ",
+            base += ["Quantity", "Density", "Weight", "CogX", "CogY", "CogZ",
                      "Ixx", "Iyy", "Izz", "Ixy", "Ixz", "Iyz"]
         else:
             base = ["Level", "#", "Type"]
             for c in MASS_PROPS_HIDEABLE_COLUMNS:
                 if c in self._visible_hideable_cols:
                     base.append(c)
-            base += ["Weight", "CogX", "CogY", "CogZ",
+            base += ["Density", "Weight", "CogX", "CogY", "CogZ",
                      "Ixx", "Iyy", "Izz", "Ixy", "Ixz", "Iyz"]
         return base
 
     def _column_header(self, col_name: str) -> str:
         """返回列名的中文显示名（含当前单位后缀）。"""
+        if col_name == "Density":
+            return "密度 (kg/m³)"
         if col_name == "Weight":
             return f"重量 ({self._weight_unit_label()})"
         if col_name in _INERTIA_IDX:
@@ -316,12 +324,12 @@ class MassPropsDialog(QDialog):
 
         # ── 前提条件说明（窗口过窄时允许截断）──────────────────────────────
         prereq_lbl = QLabel(
-            "⚠ 使用说明：本功能读取指定产品树下的每个零件的'测量惯量'结果、"
-            "在根产品中的位置，计算出根产品的重量、重心、转动惯量。"
+            "⚠ 使用说明：本功能读取指定产品树下的每个零件的'测量惯量'结果和其"
+            "在根产品中的位置，用于计算根产品的重量、重心、转动惯量。"
             "请在 CATIA 中 <b>单独打开</b> 每个零件,执行'测量惯量'并勾选 <b>保持测量</b>,"
-            f"测量结果必须命名为 <b>惯量包络体.x</b>（x 为 1–{MAX_INERTIA_INDEX} 的整数）。"
-            "在产品窗口中建立的惯量包络体的坐标系为根产品坐标系（即使当前工作对象是零件），"
+            "在产品窗口中建立的惯量包络体的参考坐标系为根产品坐标系（即使当前工作对象是零件），"
             "这会导致坐标系与根产品不重合的零件的测量结果不正确。"
+            f"测量结果必须命名为 <b>惯量包络体.x</b>（x 为 1–{MAX_INERTIA_INDEX} 的整数）。"
             "支持一个零件具有多个惯量包络体，产品的惯量包络体将不被读取。"
         )
         prereq_lbl.setWordWrap(True)
@@ -387,9 +395,18 @@ class MassPropsDialog(QDialog):
         self._radio_read_first = QRadioButton("只读.1")
         self._radio_read_last  = QRadioButton("最大编号")
         self._radio_read_all   = QRadioButton("全部汇总")
-        self._radio_read_first.setToolTip('仅读取名为"惯量包络体.1"的保持测量结果')
-        self._radio_read_last.setToolTip("扫描所有编号，使用编号最大的有效保持测量结果")
-        self._radio_read_all.setToolTip("读取所有有效的惯量包络体测量，并按平行轴定理汇总为单一质量特性")
+        self._radio_read_first.setToolTip(
+            '仅读取名为"惯量包络体.1"的保持测量结果。\n'
+            "速度最快：只进行一次参数查询，不扫描其余编号。"
+        )
+        self._radio_read_last.setToolTip(
+            f"扫描编号 1 到 {MAX_INERTIA_INDEX} 的全部惯量包络体，使用编号最大的有效保持测量结果。\n"
+            f"速度较慢：每个缺失的编号均会产生一次 COM 异常，最多 {MAX_INERTIA_INDEX - 1} 次。"
+        )
+        self._radio_read_all.setToolTip(
+            f"扫描编号 1 到 {MAX_INERTIA_INDEX} 的全部惯量包络体，读取所有有效测量并按平行轴定理汇总为单一质量特性。\n"
+            f"速度较慢：每个缺失的编号均会产生一次 COM 异常，最多 {MAX_INERTIA_INDEX - 1} 次。"
+        )
         self._radio_read_first.setChecked(self._read_mode == "first")
         self._radio_read_last.setChecked(self._read_mode == "last")
         self._radio_read_all.setChecked(self._read_mode == "all")
@@ -621,12 +638,6 @@ class MassPropsDialog(QDialog):
         btn_row.addWidget(collapse_btn)
 
         btn_row.addStretch()
-
-        self._calc_btn = QPushButton("计算")
-        self._calc_btn.setToolTip("汇总装配体总质量特性（质量 / 重心 / 转动惯量）")
-        self._calc_btn.setEnabled(False)
-        self._calc_btn.clicked.connect(self._calculate)
-        btn_row.addWidget(self._calc_btn)
 
         self._save_json_btn = QPushButton("保存数据…")
         self._save_json_btn.setToolTip("将当前行数据保存为数据文件，可在不打开CATIA的情况下重新载入")
@@ -872,7 +883,6 @@ class MassPropsDialog(QDialog):
                 if col_name in self._col_widths:
                     self._table.setColumnWidth(col_idx, self._col_widths[col_name])
 
-        self._calc_btn.setEnabled(True)
         self._export_btn.setEnabled(True)
         self._save_json_btn.setEnabled(True)
 
@@ -1085,6 +1095,14 @@ class MassPropsDialog(QDialog):
                     item.setToolTip(col_idx, fp)
             elif col_name == "Quantity":
                 item.setText(col_idx, str(row_data.get("Quantity", 1)))
+            elif col_name == "Density":
+                density = row_data.get("Density")
+                if density is None:
+                    item.setText(col_idx, "—" if node_type == "零件" else "")
+                elif density < 0:
+                    item.setText(col_idx, "不统一")
+                else:
+                    item.setText(col_idx, _fmt(density))
             elif col_name == "Weight":
                 raw = row_data.get("Weight")
                 if raw is None:
@@ -1103,12 +1121,17 @@ class MassPropsDialog(QDialog):
             else:
                 item.setText(col_idx, str(row_data.get(col_name, "")))
 
-        # 可编辑性：仅未锁定零件行的 Weight 列可编辑
+        # 可编辑性：仅未锁定零件行的 Weight 和 Density（有效值）列可编辑
         if node_type == "零件" and not row_locked:
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
             item.setData(0, _ITEM_LOCKED_ROLE, False)
         else:
             item.setData(0, _ITEM_LOCKED_ROLE, True)
+
+        # 密度列锁定：密度为不统一（-1）或无数据（None）时不允许编辑密度列
+        density_val = row_data.get("Density")
+        density_locked = (density_val is None) or (density_val < 0)
+        item.setData(0, _DENSITY_LOCKED_ROLE, density_locked)
 
         # 行背景色设置
         if row_locked:
@@ -1179,10 +1202,14 @@ class MassPropsDialog(QDialog):
             return
 
         col_name = self._columns[col_idx]
-        if col_name != "Weight":
+        if col_name not in ("Weight", "Density"):
             return
 
         if item.data(0, _ITEM_LOCKED_ROLE):
+            return
+
+        # 密度列额外检查（-1 或 None 时不可编辑）
+        if col_name == "Density" and item.data(0, _DENSITY_LOCKED_ROLE):
             return
 
         row_data = self._rows[row_idx]
@@ -1190,25 +1217,75 @@ class MassPropsDialog(QDialog):
             return
 
         new_text = item.text(col_idx).strip()
-        try:
-            # 输入值为当前显示单位；除以 _unit_factor 还原到内部单位（kg）
-            new_display_val = float(new_text)
-            new_weight_stored = new_display_val / self._unit_factor
-        except (ValueError, TypeError):
-            self._is_updating = True
-            item.setText(col_idx, self._fmt_mass_val(row_data.get("Weight")))
-            self._is_updating = False
-            return
 
-        if new_weight_stored < 0.0:
-            QMessageBox.warning(
-                self, "重量不合法",
-                "重量不能为负数，请输入大于或等于 0 的值。",
-            )
-            self._is_updating = True
-            item.setText(col_idx, self._fmt_mass_val(row_data.get("Weight")))
-            self._is_updating = False
-            return
+        # ── 解析用户输入，计算新的内部存储重量和缩放比例 ─────────────────────
+        if col_name == "Weight":
+            try:
+                # 输入值为当前显示单位；除以 _unit_factor 还原到内部单位（kg）
+                new_weight_stored = float(new_text) / self._unit_factor
+            except (ValueError, TypeError):
+                self._is_updating = True
+                item.setText(col_idx, self._fmt_mass_val(row_data.get("Weight")))
+                self._is_updating = False
+                return
+            if new_weight_stored < 0.0:
+                QMessageBox.warning(
+                    self, "重量不合法",
+                    "重量不能为负数，请输入大于或等于 0 的值。",
+                )
+                self._is_updating = True
+                item.setText(col_idx, self._fmt_mass_val(row_data.get("Weight")))
+                self._is_updating = False
+                return
+            # 重量变动时，按相同比例更新密度（密度 = 质量 / 体积，体积不变）
+            _old_density = row_data.get("Density")
+            _old_weight  = row_data.get("Weight")
+            try:
+                _od = float(_old_density) if _old_density is not None else 0.0
+            except (ValueError, TypeError):
+                _od = 0.0
+            try:
+                _ow = float(_old_weight) if _old_weight is not None else 0.0
+            except (ValueError, TypeError):
+                _ow = 0.0
+            if _od > 0.0 and _ow > 0.0:
+                new_density_stored = _od * (new_weight_stored / _ow)
+            else:
+                new_density_stored = _old_density  # 无法计算，密度保持不变
+        else:  # col_name == "Density"
+            try:
+                new_density_stored = float(new_text)
+            except (ValueError, TypeError):
+                self._is_updating = True
+                density_old = row_data.get("Density")
+                item.setText(col_idx, _fmt(density_old) if density_old is not None and density_old >= 0 else "—")
+                self._is_updating = False
+                return
+            if new_density_stored <= 0.0:
+                QMessageBox.warning(
+                    self, "密度不合法",
+                    "密度必须为正数，请输入大于 0 的值。",
+                )
+                self._is_updating = True
+                density_old = row_data.get("Density")
+                item.setText(col_idx, _fmt(density_old) if density_old is not None and density_old >= 0 else "—")
+                self._is_updating = False
+                return
+            # 密度按比例缩放重量（体积不变，密度×体积=质量）
+            _raw_density = row_data.get("Density")
+            _raw_weight  = row_data.get("Weight")
+            try:
+                old_density = float(_raw_density) if _raw_density is not None else 0.0
+            except (ValueError, TypeError):
+                old_density = 0.0
+            try:
+                old_weight = float(_raw_weight) if _raw_weight is not None else 0.0
+            except (ValueError, TypeError):
+                old_weight = 0.0
+            if old_density > 0.0 and old_weight > 0.0:
+                new_weight_stored = old_weight * (new_density_stored / old_density)
+            else:
+                new_weight_stored = old_weight  # 无法计算缩放，重量保持不变
 
         pn = str(row_data.get("Part Number", ""))
 
@@ -1236,16 +1313,20 @@ class MassPropsDialog(QDialog):
         # Step 2：对共享 _mass_props 的惯量只缩放一次。
         if mp_shared is not None:
             mp_shared["weight"] = new_weight_stored
+            if new_density_stored is not None and new_density_stored >= 0:
+                mp_shared["density"] = new_density_stored
             if scale != 1.0:
                 orig_i = mp_shared.get("inertia", [[0.0] * 3 for _ in range(3)])
                 mp_shared["inertia"] = [[orig_i[ir][ic] * scale for ic in range(3)]
                                         for ir in range(3)]
 
-        # Step 3：遍历所有实例，更新 Weight / 行级显示字段 / _root_mp。
+        # Step 3：遍历所有实例，更新 Weight / Density / 行级显示字段 / _root_mp。
         for r in self._rows:
             if str(r.get("Part Number", "")) != pn or r.get("Type") != "零件":
                 continue
             r["Weight"] = new_weight_stored
+            if new_density_stored is not None and new_density_stored >= 0:
+                r["Density"] = new_density_stored
             mp = r.get("_mass_props")
             if mp:
                 # mp["inertia"] 已在 Step 2 缩放完毕；
@@ -1279,6 +1360,7 @@ class MassPropsDialog(QDialog):
         # ── 更新可见树节点中同 PN 的所有行 ────────────────────────────────
         self._is_updating = True
         w_idx = self._columns.index("Weight") if "Weight" in self._columns else -1
+        d_idx = self._columns.index("Density") if "Density" in self._columns else -1
 
         for vis_item in self._pn_to_items.get(pn, []):
             vis_row_idx = vis_item.data(0, _ROW_IDX_ROLE)
@@ -1289,6 +1371,10 @@ class MassPropsDialog(QDialog):
                 continue
             if w_idx >= 0:
                 vis_item.setText(w_idx, self._fmt_mass_val(vis_row.get("Weight")))
+            if d_idx >= 0:
+                d_val = vis_row.get("Density")
+                if d_val is not None and d_val >= 0:
+                    vis_item.setText(d_idx, _fmt(d_val))
             for ic_name, (ir, ic) in _INERTIA_IDX.items():
                 if ic_name in self._columns:
                     ic_idx = self._columns.index(ic_name)
@@ -1307,8 +1393,8 @@ class MassPropsDialog(QDialog):
                         vis_item.setText(ic_idx, self._fmt_inertia_val(raw_i))
 
         self._is_updating = False
-        self._rollup_result = None
-        self._clear_summary_labels()
+        # 编辑密度/重量后立即重新计算汇总结果（无需手动点击"计算"）
+        self._calculate()
 
     # ── 计算 ───────────────────────────────────────────────────────────────
 
@@ -1461,6 +1547,14 @@ class MassPropsDialog(QDialog):
                 raw = row_data.get(col_name)
                 if raw is None:
                     value = ""
+                elif col_name == "Density":
+                    if raw < 0:
+                        value = "不统一"
+                    else:
+                        try:
+                            value = float(raw)
+                        except (TypeError, ValueError):
+                            value = ""
                 elif col_name == "Weight":
                     try:
                         value = float(raw) * self._unit_factor
@@ -1535,6 +1629,13 @@ class MassPropsDialog(QDialog):
         def _cell_value(col_name: str, raw) -> str:
             if raw is None:
                 return ""
+            if col_name == "Density":
+                if isinstance(raw, (int, float)) and raw < 0:
+                    return "不统一"
+                try:
+                    return str(float(raw))
+                except (TypeError, ValueError):
+                    return ""
             if col_name == "Weight":
                 try:
                     return str(float(raw) * self._unit_factor)
@@ -1607,6 +1708,7 @@ class MassPropsDialog(QDialog):
         fp           = str(row_data.get("_filepath", ""))
         fp_path      = Path(fp) if fp else None
         is_component = row_data.get("Type") == "部件"
+        is_part      = row_data.get("Type") == "零件"
         not_found    = bool(row_data.get("_not_found"))
         no_file      = bool(row_data.get("_no_file"))
         unreadable   = bool(row_data.get("_unreadable"))
@@ -1637,6 +1739,22 @@ class MassPropsDialog(QDialog):
         )
         act_open_catia.setEnabled(catia_available)
 
+        menu.addSeparator()
+
+        # ── 重新读取质量特性 ───────────────────────────────────────────────
+        act_reread = menu.addAction("重新读取质量特性")
+        reread_available = (
+            is_part and not not_found
+            and fp_path is not None and fp_path.exists()
+        )
+        act_reread.setEnabled(reread_available)
+        if reread_available:
+            pn = str(row_data.get("Part Number", ""))
+            act_reread.setToolTip(
+                f"重新从 CATIA 读取零件「{pn}」的惯量包络体 Keep 测量参数，"
+                "并同步更新所有相同零件编号的节点。"
+            )
+
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
 
         if action == act_open_path:
@@ -1645,6 +1763,8 @@ class MassPropsDialog(QDialog):
             QApplication.clipboard().setText(fp)
         elif action == act_open_catia:
             self._open_in_catia(fp)
+        elif action == act_reread:
+            self._reread_mass_props_for_row(row_idx)
 
     def _open_path(self, fp: str) -> None:
         """在 Windows 资源管理器中打开包含 *fp* 的文件夹，并高亮选中该文件。"""
@@ -1696,3 +1816,176 @@ class MassPropsDialog(QDialog):
 
         except Exception as e:
             QMessageBox.warning(self, "在CATIA中打开失败", f"无法在CATIA中打开文件：\n{e}")
+
+    # ── 重新读取质量特性 ────────────────────────────────────────────────────
+
+    def _reread_mass_props_for_row(self, row_idx: int) -> None:
+        """重新从 CATIA 读取指定行（及所有同零件编号行）的质量特性。
+
+        用于用户在 CATIA 中补充或更改惯量包络体后，无需重新加载整个产品树
+        即可刷新单个零件的质量特性数据。若重新读取成功，同时恢复该零件所有
+        节点的正常显示状态（清除橙色背景、恢复文字颜色、解除行锁定），并
+        重新计算产品/部件节点的汇总质量特性。
+
+        按零件编号检索：所有在 self._rows 中拥有相同 Part Number 且类型为
+        "零件" 的行均会被同步更新，确保同一零件的多个实例数据一致。
+        """
+        row_data = self._rows[row_idx]
+        fp = str(row_data.get("_filepath", ""))
+        pn = str(row_data.get("Part Number", ""))
+        if not fp:
+            QMessageBox.warning(self, "无文件路径", "该零件没有有效的文件路径，无法重新读取。")
+            return
+
+        # 设置等待光标，提示用户正在操作
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            new_mp = remeasure_part_mass_props(fp, pn, self._read_mode)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if new_mp is None:
+            _read_mode_desc = {
+                "first": "「惯量包络体.1」",
+                "last":  f"编号最大的「惯量包络体.N」（N ≤ {MAX_INERTIA_INDEX}）",
+                "all":   f"「惯量包络体.1」至「惯量包络体.{MAX_INERTIA_INDEX}」",
+            }.get(self._read_mode, "惯量包络体")
+            QMessageBox.warning(
+                self, "重新读取失败",
+                f"未能从以下零件读取到有效的质量特性：\n{fp}\n\n"
+                "可能原因：\n"
+                "  • 该零件文档尚未在 CATIA 中打开\n"
+                f"  • 当前读取模式要求的 {_read_mode_desc} 保持测量不存在\n"
+                "  • 测量是在产品环境下建立的（使用产品坐标系，不会被读取）\n"
+                "  • 需单独打开零件文件，在SPA中建立惯量保持测量",
+            )
+            return
+
+        # ── 更新 _rows 中所有相同 PN 的零件实例 ─────────────────────────────
+        #
+        # 与初始加载时 _mass_cache 的设计一致：所有同 PN 实例共享同一个
+        # _mass_props 对象引用，以确保后续手动修改重量时缩放逻辑正确运行。
+        # 此处将所有实例的 _mass_props 统一指向同一个 new_mp 对象。
+        target_rows: list[int] = [
+            i for i, r in enumerate(self._rows)
+            if str(r.get("Part Number", "")) == pn and r.get("Type") == "零件"
+        ]
+
+        for ri in target_rows:
+            r = self._rows[ri]
+
+            # 将所有实例的 _mass_props 指向同一个对象（与 _mass_cache 机制一致）
+            r["_mass_props"]  = new_mp
+            r["Density"]      = new_mp.get("density", None)
+            r["Weight"]       = new_mp["weight"]
+            cog_local         = new_mp["cog"]
+            r["CogX"]         = cog_local[0]
+            r["CogY"]         = cog_local[1]
+            r["CogZ"]         = cog_local[2]
+            I_local           = new_mp["inertia"]
+            r["Ixx"]          = I_local[0][0]
+            r["Iyy"]          = I_local[1][1]
+            r["Izz"]          = I_local[2][2]
+            r["Ixy"]          = I_local[0][1]
+            r["Ixz"]          = I_local[0][2]
+            r["Iyz"]          = I_local[1][2]
+            r["_meas_failed"] = False
+
+            # 重新计算根坐标系质量特性（_placement 在初始加载时已保存，此处直接复用）
+            placement = r.get("_placement")
+            if placement is not None:
+                r["_root_mp"] = _compute_root_mp_from_placement(placement, new_mp)
+            else:
+                # _placement 不存在（异常情况）：根坐标系与局部坐标系视为相同
+                r["_root_mp"] = {
+                    "weight":  new_mp["weight"],
+                    "cog":     list(cog_local),
+                    "inertia": [list(row_i) for row_i in I_local],
+                }
+
+        # ── 刷新可见树节点（_pn_to_items 中同 PN 的所有条目）─────────────────
+        self._is_updating = True
+        try:
+            for vis_item in self._pn_to_items.get(pn, []):
+                vis_row_idx = vis_item.data(0, _ROW_IDX_ROLE)
+                if vis_row_idx is None:
+                    continue
+                vis_row = self._rows[vis_row_idx]
+                if vis_row.get("Type") != "零件":
+                    continue
+                self._refresh_part_item_after_reread(vis_item, vis_row)
+        finally:
+            self._is_updating = False
+
+        # ── 重新计算产品/部件汇总行并刷新底部计算结果 ──────────────────────
+        recompute_product_rows(self._rows)
+        self._refresh_product_items()
+        self._rollup_result = None
+        self._clear_summary_labels()
+        self._calculate()
+
+        QMessageBox.information(
+            self, "重新读取成功",
+            f"已成功重新读取零件「{pn}」的质量特性，\n"
+            f"共更新了 {len(target_rows)} 个节点。",
+        )
+
+    def _refresh_part_item_after_reread(
+        self,
+        item: QTreeWidgetItem,
+        row_data: dict,
+    ) -> None:
+        """重新读取质量特性成功后，更新零件行的视觉状态和显示值。
+
+        清除之前因测量失败而设置的橙色背景和灰色文字，解除行锁定，
+        并将新的质量特性数值写入各单元格。
+        """
+        default_brush = QBrush()  # 空画刷：传递给 setBackground/setForeground 时重置为系统默认样式
+
+        # 恢复背景色、前景色和工具提示至默认状态
+        for ci in range(len(self._columns)):
+            item.setBackground(ci, default_brush)
+            item.setForeground(ci, default_brush)
+            item.setToolTip(ci, "")
+
+        # 解除行锁定，允许编辑 Weight 列
+        item.setData(0, _ITEM_LOCKED_ROLE, False)
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+
+        # 更新密度列锁定状态
+        density_val = row_data.get("Density")
+        item.setData(0, _DENSITY_LOCKED_ROLE, (density_val is None) or (density_val < 0))
+
+        # 更新各数值列的显示内容
+        rmp = row_data.get("_root_mp")
+        for col_idx, col_name in enumerate(self._columns):
+            if col_name == "Density":
+                d_val = row_data.get("Density")
+                if d_val is None:
+                    item.setText(col_idx, "—")
+                elif d_val < 0:
+                    item.setText(col_idx, "不统一")
+                else:
+                    item.setText(col_idx, _fmt(d_val))
+            elif col_name == "Weight":
+                item.setText(col_idx, self._fmt_mass_val(row_data.get("Weight")))
+            elif col_name in ("CogX", "CogY", "CogZ"):
+                if self._summarize:
+                    # 汇总BOM：显示零件自身坐标系值
+                    raw = row_data.get(col_name)
+                else:
+                    # 层级BOM：显示根产品坐标系值（来自 _root_mp）
+                    cog_idx = ("CogX", "CogY", "CogZ").index(col_name)
+                    raw = rmp["cog"][cog_idx] if rmp else row_data.get(col_name)
+                item.setText(col_idx, self._fmt_cog_val(raw) if raw is not None else "—")
+            elif col_name in _INERTIA_IDX:
+                ir, ic = _INERTIA_IDX[col_name]
+                if self._summarize:
+                    raw = row_data.get(col_name)
+                else:
+                    raw = (
+                        rmp["inertia"][ir][ic]
+                        if rmp and rmp.get("inertia")
+                        else row_data.get(col_name)
+                    )
+                item.setText(col_idx, self._fmt_inertia_val(raw) if raw is not None else "—")

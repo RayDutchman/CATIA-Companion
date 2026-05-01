@@ -42,6 +42,7 @@
 import gzip
 import json
 import logging
+import math
 from collections.abc import Callable
 from pathlib import Path
 
@@ -57,7 +58,7 @@ logger = logging.getLogger(__name__)
 
 # 每个零件最多读取"惯量包络体.1"到"惯量包络体.MAX_INERTIA_INDEX"的保持测量。
 # 编号不要求连续；所有编号在此范围内存在的测量均会被读取并在零件级汇总。
-MAX_INERTIA_INDEX: int = 50
+MAX_INERTIA_INDEX: int = 20
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +221,10 @@ def _read_keep_inertia_params(
       2. 计算总重心：r_c = Σ(m_i · r_i) / M。
       3. 平行轴定理从原点移回总重心，得汇总惯量张量。
 
+    CATIA Keep 参数中亦可选读取密度字段：
+      密度                            CATIA 原始: kg/m³ → 内部存储: kg/m³（无需换算）
+      当单个测量内材料不统一时 CATIA 返回 -1；跨多个惯量包络体密度不一致时同样返回 -1。
+
     返回值结构（内部 SI 单位）：
       {
         "weight":  float,               # 总质量，kg
@@ -227,6 +232,7 @@ def _read_keep_inertia_params(
         "inertia": [[Ixx, Ixy, Ixz],    # 总重心处转动惯量张量（3×3 对称矩阵），kg·m²
                     [Ixy, Iyy, Iyz],
                     [Ixz, Iyz, Izz]],
+        "density": float | None,        # 密度，kg/m³；-1.0 表示不统一；None 表示无密度数据
       }
     若所有编号均未找到有效质量，则返回 None。
     """
@@ -240,18 +246,6 @@ def _read_keep_inertia_params(
             except Exception:
                 return None
 
-        # ── 一次性枚举全部参数名，用于快速跳过不存在的编号 ────────────────────────
-        # params.Count + params.Item(i).Name 共 (1 + N) 次 COM 调用，换取对每个缺失
-        # 编号的 mass_key 做 O(1) set 查找，避免后续对不存在参数触发 COM 异常。
-        # 枚举失败时 all_names 保持 None，退回原有逐一 Item() 查询行为。
-        all_names: set[str] | None = None
-        try:
-            cnt = params.Count
-            all_names = {params.Item(i).Name for i in range(1, cnt + 1)}
-            logger.debug(f"{tag}枚举到 {cnt} 个参数名")
-        except Exception:
-            pass  # 无法枚举时回退到逐一查询
-
         # ── 确定需要扫描的编号范围 ────────────────────────────────────────────────
         if read_mode == "first":
             check_indices = [1]
@@ -263,26 +257,14 @@ def _read_keep_inertia_params(
         measurements: list[dict] = []
         for idx in check_indices:
             envelope_name = f"惯量包络体.{idx}"
-            prefixes = []
-            if part_number:
-                prefixes.append(f"{part_number}\\{envelope_name}\\")
-            prefixes.append(f"{envelope_name}\\")
+            probe_prefix = (f"{part_number}\\{envelope_name}\\" if part_number
+                            else f"{envelope_name}\\")
 
-            prefix_ok = None
-            mass_si = None
-            for pfix in prefixes:
-                mass_key = pfix + "质量"
-                # 若已枚举参数名且 mass_key 不在其中，可直接跳过，无需触发 COM 异常
-                if all_names is not None and mass_key not in all_names:
-                    continue
-                v = _get(pfix, "质量")
-                if v is not None and v > 0.0:
-                    prefix_ok = pfix
-                    mass_si = v
-                    break
-
-            if prefix_ok is None:
+            mass_si = _get(probe_prefix, "质量")
+            if mass_si is None or mass_si <= 0.0:
                 continue  # 该编号不存在，跳过
+
+            prefix_ok = probe_prefix
 
             gx_si  = _get(prefix_ok, "Gx")
             gy_si  = _get(prefix_ok, "Gy")
@@ -301,6 +283,9 @@ def _read_keep_inertia_params(
                 logger.debug(f"{tag}{envelope_name} 部分参数缺失，跳过该测量")
                 continue
 
+            # 密度（可选参数）：CATIA 原始单位 kg/m³，不一致时返回 -1
+            density_raw = _get(prefix_ok, "密度")
+
             measurements.append({
                 "weight": mass_si,
                 # Gx/Gy/Gz 由 CATIA 以 mm 存储，÷1000 换算为内部 SI 单位（m）
@@ -310,6 +295,7 @@ def _read_keep_inertia_params(
                     [ixy_si, iyy_si, iyz_si],
                     [ixz_si, iyz_si, izz_si],
                 ],
+                "density": density_raw,  # None：无密度参数；-1.0：CATIA 报材料不统一；>0：kg/m³
             })
 
         if not measurements:
@@ -321,7 +307,7 @@ def _read_keep_inertia_params(
             measurements = [measurements[-1]]
 
         if len(measurements) == 1:
-            # 仅一个测量，无需汇总，直接返回
+            # 仅一个测量，无需汇总，直接返回（density 已含在 measurements[0] 中）
             return measurements[0]
 
         # ── 零件级汇总：平行轴定理（均在零件局部坐标系下）────────────────────────
@@ -352,11 +338,37 @@ def _read_keep_inertia_params(
                 delta = (1.0 if ii == jj else 0.0) * rc2 - rc[ii] * rc[jj]
                 I_final[ii][jj] = I_at_orig[ii][jj] - M_total * delta
 
+        # ── 跨多个惯量包络体的密度汇总 ────────────────────────────────────────
+        # 规则：任意一个测量报"不统一"（-1）→ 整体为 -1；
+        #       所有有效密度值（>0）不完全相同 → 整体为 -1（多材料）；
+        #       所有有效密度值相同 → 取该值；无任何密度数据 → None。
+        agg_density: float | None = None
+        has_inconsistent = False
+        valid_densities: list[float] = []
+        for meas in measurements:
+            d = meas.get("density")
+            if d is None:
+                continue
+            if d < 0:
+                has_inconsistent = True
+            else:
+                valid_densities.append(d)
+        if has_inconsistent:
+            agg_density = -1.0
+        elif valid_densities:
+            # 判断各密度值是否一致（相对误差 < 1e-9）
+            d0 = valid_densities[0]
+            if all(math.isclose(d, d0, rel_tol=1e-9) for d in valid_densities[1:]):
+                agg_density = d0
+            else:
+                agg_density = -1.0
+
         logger.debug(
             f"{tag}汇总 {len(measurements)} 个惯量包络体测量: "
-            f"weight={M_total:.4g} kg, cog={[round(v,4) for v in cog_total]} m"
+            f"weight={M_total:.4g} kg, cog={[round(v,4) for v in cog_total]} m, "
+            f"density={agg_density} kg/m³"
         )
-        return {"weight": M_total, "cog": cog_total, "inertia": I_final}
+        return {"weight": M_total, "cog": cog_total, "inertia": I_final, "density": agg_density}
 
     except Exception as e:
         logger.debug(f"{tag}惯量包络体参数读取异常: {e}")
@@ -696,6 +708,93 @@ def load_rows(file_path: str) -> list[dict]:
 # 主收集函数
 # ---------------------------------------------------------------------------
 
+def _compute_root_mp_from_placement(
+    placement: list[list[float]],
+    mass_props: dict,
+) -> dict:
+    """利用 4×4 变换矩阵将零件局部坐标系下的质量特性变换到根坐标系。
+
+    从 *placement*（零件局部→根的 4×4 齐次变换矩阵）中提取 3×3 旋转矩阵 R
+    和平移向量 T，对 *mass_props* 中的重心坐标和转动惯量张量执行坐标变换：
+      - 重心坐标：r_root = R @ r_local + T
+      - 惯量张量：I_root = R @ I_local @ R^T
+
+    返回字典格式与 ``_mass_props`` / ``_root_mp`` 字段一致（内部 SI 单位）。
+    """
+    R  = [[placement[i][j] for j in range(3)] for i in range(3)]
+    T  = [placement[i][3] for i in range(3)]
+    cog_local = mass_props.get("cog", [0.0, 0.0, 0.0])
+    cog_root  = [
+        sum(R[i][k] * cog_local[k] for k in range(3)) + T[i]
+        for i in range(3)
+    ]
+    I_local = mass_props.get("inertia", [[0.0] * 3 for _ in range(3)])
+    RT = [[R[j][i] for j in range(3)] for i in range(3)]
+    RI = [
+        [sum(R[i][k] * I_local[k][j] for k in range(3)) for j in range(3)]
+        for i in range(3)
+    ]
+    I_root = [
+        [sum(RI[i][k] * RT[k][j] for k in range(3)) for j in range(3)]
+        for i in range(3)
+    ]
+    return {
+        "weight":  mass_props.get("weight", 0.0),
+        "cog":     cog_root,
+        "inertia": I_root,
+    }
+
+
+def remeasure_part_mass_props(
+    filepath: str,
+    part_number: str = "",
+    read_mode: str = "all",
+) -> dict | None:
+    """通过 CATIA COM 接口重新读取指定零件的质量特性（惯量包络体 Keep 测量）。
+
+    在 CATIA 当前已打开的文档中查找与 *filepath* 匹配的零件文档，再调用
+    :func:`_measure_part_mass_props` 读取 Keep 测量参数。适用于用户在 CATIA 中
+    补充或更改惯量包络体后，无需重新遍历整棵产品树即可刷新单个零件的质量特性。
+
+    参数：
+        filepath:    零件文档的磁盘完整路径（若文档尚未在 CATIA 中打开则返回 None）。
+        part_number: 零件编号（PartNumber），用于构造 Keep 参数前缀。
+        read_mode:   控制读取哪些惯量包络体（"first"/"last"/"all"）。
+
+    返回：
+        成功时返回质量特性字典（内部 SI 单位，与 :func:`collect_mass_props_rows`
+        相同格式）；找不到文档或读取失败时返回 None。
+    """
+    from pycatia import catia  # 运行时导入，避免无 CATIA 环境时报错
+    try:
+        caa = catia()
+        application = caa.application
+        application.visible = True
+        documents = application.documents
+
+        fp_resolved = Path(filepath).resolve()
+        target_doc = None
+        doc_count = documents.count  # 缓存文档数量，减少重复 COM 属性访问
+        for i in range(1, doc_count + 1):
+            try:
+                doc = documents.item(i)
+                if Path(doc.full_name).resolve() == fp_resolved:
+                    target_doc = doc
+                    break
+            except Exception:
+                pass
+
+        if target_doc is None:
+            logger.debug(f"[REMEAS] 找不到已打开的文档: {filepath}")
+            return None
+
+        part_com = target_doc.com_object.Part
+        return _measure_part_mass_props(part_com, part_number, read_mode=read_mode)
+    except Exception as e:
+        logger.debug(f"[REMEAS] 重新读取质量特性失败 ({filepath}): {e}")
+        return None
+
+
 def collect_mass_props_rows(
     file_path: str | None,
     progress_callback: Callable[[int], None] | None = None,
@@ -727,7 +826,7 @@ def collect_mass_props_rows(
     返回：
         行字典列表，每行含以下键：
           Level, Type, Part Number, Filename, Nomenclature, Revision,
-          Weight, CogX, CogY, CogZ, Ixx, Iyy, Izz, Ixy, Ixz, Iyz,
+          Density, Weight, CogX, CogY, CogZ, Ixx, Iyy, Izz, Ixy, Ixz, Iyz,
           _filepath, _placement, _not_found, _no_file, _unreadable, _meas_failed
     """
     from pycatia import catia, CatWorkModeType
@@ -807,17 +906,15 @@ def collect_mass_props_rows(
         level: int,
         parent_filepath: str,
         parent_mat4: list[list[float]],
-        documents,
     ) -> None:
         """递归遍历产品树，将每个节点的质量特性信息追加到 rows。
 
         参数：
-            product:          当前节点的 pycatia Product 对象。
-            rows:             行字典列表，结果追加于此。
-            level:            当前节点的层级深度（根节点为 0）。
-            parent_filepath:  父节点的文件路径（用于判断"嵌入式部件"）。
-            parent_mat4:      父节点到根的累积 4×4 变换矩阵。
-            documents:        CATIA Application.Documents 集合，用于查找零件文档。
+            product:         当前节点的 pycatia Product 对象。
+            rows:            行字典列表，结果追加于此。
+            level:           当前节点的层级深度（根节点为 0）。
+            parent_filepath: 父节点的文件路径（用于判断"嵌入式部件"）。
+            parent_mat4:     父节点到根的累积 4×4 变换矩阵。
         """
         nonlocal _total_count
 
@@ -906,45 +1003,29 @@ def collect_mass_props_rows(
                 # 同一文件路径已测量过（多实例复用），直接取缓存，避免重复耗时测量
                 mass_props = _mass_cache[filepath]
             else:
-                # 在已打开的文档集合中查找与本零件路径匹配的文档
-                target_doc = None
-                fp_resolved = Path(filepath).resolve()
-                for i in range(1, documents.count + 1):
-                    try:
-                        doc = documents.item(i)
-                        if Path(doc.full_name).resolve() == fp_resolved:
-                            target_doc = doc
-                            break
-                    except Exception:
-                        pass
-
-                if target_doc is not None:
-                    try:
-                        # 通过 COM 获取 Part 对象（仅 PartDocument 拥有 .Part 属性）
-                        part_doc_com  = target_doc.com_object
-                        part_com      = part_doc_com.Part
-                        mass_props    = _measure_part_mass_props(part_com, pn, read_mode=read_mode)
-                    except Exception as e:
-                        logger.debug(f"无法测量零件 {filepath}: {e}")
-                        mass_props  = None
-                        meas_failed  = True
-
-                    if mass_props is not None:
-                        logger.debug(
-                            f"[TRAV] {pn} 测量成功: "
-                            f"weight={mass_props.get('weight')}g, "
-                            f"cog={[round(v,3) for v in mass_props.get('cog',[0,0,0])]}, "
-                            f"Ixx={mass_props.get('inertia',[[0]])[0][0]:.3g}g·mm²"
-                        )
-                    else:
-                        logger.debug(f"[TRAV] {pn} 惯量包络体参数不存在或读取失败")
-
-                    # 写入缓存（即使测量失败也缓存 None，防止重复尝试）
-                    _mass_cache[filepath] = mass_props
-                else:
-                    # 文档未在 CATIA 中打开，无法完成测量
-                    logger.debug(f"找不到已打开的文档: {filepath}")
+                try:
+                    # ReferenceProduct.Parent 就是该零件的 PartDocument COM 对象，
+                    # 无需遍历 Documents 集合按路径查找，直接取 .Part 即可。
+                    part_doc_com = product.com_object.ReferenceProduct.Parent
+                    part_com     = part_doc_com.Part
+                    mass_props   = _measure_part_mass_props(part_com, pn, read_mode=read_mode)
+                except Exception as e:
+                    logger.debug(f"无法测量零件 {filepath}: {e}")
+                    mass_props  = None
                     meas_failed = True
+
+                if mass_props is not None:
+                    logger.debug(
+                        f"[TRAV] {pn} 测量成功: "
+                        f"weight={mass_props.get('weight')}g, "
+                        f"cog={[round(v,3) for v in mass_props.get('cog',[0,0,0])]}, "
+                        f"Ixx={mass_props.get('inertia',[[0]])[0][0]:.3g}g·mm²"
+                    )
+                else:
+                    logger.debug(f"[TRAV] {pn} 惯量包络体参数不存在或读取失败")
+
+                # 写入缓存（即使测量失败也缓存 None，防止重复尝试）
+                _mass_cache[filepath] = mass_props
 
         # 若零件本应可测但最终无数据，标记 meas_failed（无论是找不到文档还是读参数失败）
         if mass_props is None:
@@ -967,6 +1048,7 @@ def collect_mass_props_rows(
                              else FILENAME_NOT_FOUND),
             "Nomenclature": nomenclature,
             "Revision":     revision,
+            "Density":      mp.get("density", None),  # kg/m³；-1.0 表示不统一；None 表示无密度数据
             "Weight":       mp.get("weight", None),
             "CogX":         cog[0] if mp else None,
             "CogY":         cog[1] if mp else None,
@@ -1001,8 +1083,7 @@ def collect_mass_props_rows(
                     child = product.products.item(i)
                     _traverse(child, rows, level + 1,
                               parent_filepath=filepath,
-                              parent_mat4=abs_mat4,
-                              documents=documents)
+                              parent_mat4=abs_mat4)
                 except Exception as e:
                     logger.debug(f"遍历子节点 {i} 失败: {e}")
         except Exception:
@@ -1021,7 +1102,7 @@ def collect_mass_props_rows(
         rows: list[dict] = []
         # 根节点的父矩阵为单位矩阵（无变换），从第 0 层开始遍历
         _traverse(root_product, rows, level=0, parent_filepath="",
-                  parent_mat4=_identity_4x4(), documents=documents)
+                  parent_mat4=_identity_4x4())
         _post_process_rows(rows)
         # 遍历过程中 VBS 可能激活了各子零件文档；恢复活动文档为根产品
         try:
@@ -1061,7 +1142,7 @@ def collect_mass_props_rows(
     rows = []
     # 根节点的父矩阵为单位矩阵，从第 0 层开始遍历
     _traverse(root_product, rows, level=0, parent_filepath="",
-              parent_mat4=_identity_4x4(), documents=documents)
+              parent_mat4=_identity_4x4())
     _post_process_rows(rows)
     # 遍历过程中 VBS 可能激活了各子零件文档；恢复活动文档为根产品
     try:
