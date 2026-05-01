@@ -761,30 +761,36 @@ def collect_mass_props_rows(
     def _is_hidden(product, pn: str = "") -> bool:
         """检查产品实例（occurrence / 树节点）在父装配中是否处于隐藏状态。
 
-        CATIA 的可见性是实例级属性，必须在 occurrence 的 com_object 上通过
-        CATIAVisPropertySet 接口读取，而非在 PartDocument 上读取。
+        通过 ActiveDocument.Selection 读取实例级可见性：
+          1. 清空选择集
+          2. 将当前节点的 COM 对象加入选择集
+          3. 从 Selection.VisProperties 读取 GetShow() 结果
 
-        GetShow() 是一个 COM Sub，结果通过 ByRef out 参数写回，无返回值。
-        必须使用 VARIANT(VT_BYREF | VT_I4, 0) 接收该参数，而非直接调用取返回值。
-        返回：catVisShow=0（可见）/ catVisNoShow=1（隐藏）。
-        读取失败则保守地视为可见，返回 False。
+        此方式会临时修改 CATIA 当前选择集（副作用），finally 块中自动清空，
+        以将影响降至最低。读取失败则保守地视为可见，返回 False。
+
+        返回：catVisNoShow=1（隐藏）→ True；catVisShow=0（可见）→ False。
         """
         tag = pn or "<unknown>"
         com = product.com_object
-
-        # GetTechnologicalObject("VisPropertySet") 取得 CATIAVisPropertySet 接口，
-        # GetShow 是 Sub(ByRef oShow As CATVisPropertyShow)，结果通过 VARIANT ByRef 写回。
+        sel = None
         try:
-            vis = com.GetTechnologicalObject("VisPropertySet")
+            sel = application.com_object.ActiveDocument.Selection
+            sel.Clear()
+            sel.Add(com)
             show_var = VARIANT(VT_BYREF | VT_I4, 0)
-            vis.GetShow(show_var)
-            show = int(show_var.value)
-            # catVisNoShow = 1 → 隐藏；catVisShow = 0 → 可见
-            hidden = show != 0
-            logger.debug(f"[VIS] {tag}: VisPropertySet.GetShow()={show} → hidden={hidden}")
+            sel.VisProperties.GetShow(show_var)
+            hidden = int(show_var.value) != 0
+            logger.debug(f"[VIS] {tag}: Selection.VisProperties.GetShow()={show_var.value} → hidden={hidden}")
             return hidden
         except Exception as e:
-            logger.debug(f"[VIS] {tag}: VisPropertySet.GetShow() 不可用 ({e})，视为可见")
+            logger.debug(f"[VIS] {tag}: Selection.VisProperties.GetShow() 不可用 ({e})，视为可见")
+        finally:
+            try:
+                if sel is not None:
+                    sel.Clear()
+            except Exception:
+                pass
 
         return False
 
