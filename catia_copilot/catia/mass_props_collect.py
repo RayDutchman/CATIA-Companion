@@ -60,11 +60,6 @@ logger = logging.getLogger(__name__)
 # 编号不要求连续；所有编号在此范围内存在的测量均会被读取并在零件级汇总。
 MAX_INERTIA_INDEX: int = 50
 
-# "all"/"last" 模式扫描时，若连续出现此数量的缺失编号则提前停止扫描。
-# 设为 5 时：对仅含"惯量包络体.1"的零件，原需 49 次 COM 异常，现仅需 5 次；
-# 同时允许编号间存在最多 4 个空洞（如"惯量包络体.1"与"惯量包络体.6"共存仍可正确读取）。
-_MAX_CONSECUTIVE_MISS: int = 5
-
 
 # ---------------------------------------------------------------------------
 # 纯 Python 4×4 齐次变换矩阵辅助函数（不依赖 numpy）
@@ -258,51 +253,28 @@ def _read_keep_inertia_params(
             # "last" 和 "all" 均需扫描全范围，以找到所有或编号最大的有效测量
             check_indices = list(range(1, MAX_INERTIA_INDEX + 1))
 
-        # ── 预枚举全部参数名（一次性 COM 遍历，之后 Python 侧 O(1) 查找）────────
-        # 用 params.Count 次 params.Item(i).Name 一次性把所有参数名读入 set，
-        # 此后对"不存在的编号"直接跳过，无需触发 COM 异常。
-        # 当零件参数总量 N 较大时，枚举开销约 N×(成功COM调用时延)；
-        # 若 N 远小于 50×(COM异常时延) 则整体更快。
-        try:
-            n_params = params.Count
-            all_names: set[str] = {params.Item(i).Name for i in range(1, n_params + 1)}
-        except Exception:
-            all_names = None  # 枚举失败时退回到逐项查询
-
-        def _get_fast(prefix: str, name: str) -> float | None:
-            """先查 all_names 避免 COM 异常，再取值。"""
-            key = prefix + name
-            if all_names is not None and key not in all_names:
-                return None
-            return _get(prefix, name)
-
         # ── 逐编号读取，收集所有有效测量 ──────────────────────────────────────────
         measurements: list[dict] = []
-        consecutive_miss = 0
         for idx in check_indices:
             envelope_name = f"惯量包络体.{idx}"
             probe_prefix = (f"{part_number}\\{envelope_name}\\" if part_number
                             else f"{envelope_name}\\")
 
-            mass_si = _get_fast(probe_prefix, "质量")
+            mass_si = _get(probe_prefix, "质量")
             if mass_si is None or mass_si <= 0.0:
-                consecutive_miss += 1
-                if consecutive_miss >= _MAX_CONSECUTIVE_MISS:
-                    break  # 连续多次缺失，提前退出（仅对 all_names 枚举失败的回退路径有意义）
                 continue  # 该编号不存在，跳过
 
-            consecutive_miss = 0  # 找到有效测量，重置连续缺失计数器
             prefix_ok = probe_prefix
 
-            gx_si  = _get_fast(prefix_ok, "Gx")
-            gy_si  = _get_fast(prefix_ok, "Gy")
-            gz_si  = _get_fast(prefix_ok, "Gz")
-            ixx_si = _get_fast(prefix_ok, "IoxG")
-            iyy_si = _get_fast(prefix_ok, "IoyG")
-            izz_si = _get_fast(prefix_ok, "IozG")
-            ixy_si = _get_fast(prefix_ok, "IxyG")
-            ixz_si = _get_fast(prefix_ok, "IxzG")
-            iyz_si = _get_fast(prefix_ok, "IyzG")
+            gx_si  = _get(prefix_ok, "Gx")
+            gy_si  = _get(prefix_ok, "Gy")
+            gz_si  = _get(prefix_ok, "Gz")
+            ixx_si = _get(prefix_ok, "IoxG")
+            iyy_si = _get(prefix_ok, "IoyG")
+            izz_si = _get(prefix_ok, "IozG")
+            ixy_si = _get(prefix_ok, "IxyG")
+            ixz_si = _get(prefix_ok, "IxzG")
+            iyz_si = _get(prefix_ok, "IyzG")
 
             # 惯量分量允许为 0（球对称体），但不允许任意分量读取失败
             if any(v is None for v in (gx_si, gy_si, gz_si,
@@ -312,7 +284,7 @@ def _read_keep_inertia_params(
                 continue
 
             # 密度（可选参数）：CATIA 原始单位 kg/m³，不一致时返回 -1
-            density_raw = _get_fast(prefix_ok, "密度")
+            density_raw = _get(prefix_ok, "密度")
 
             measurements.append({
                 "weight": mass_si,

@@ -395,9 +395,18 @@ class MassPropsDialog(QDialog):
         self._radio_read_first = QRadioButton("只读.1")
         self._radio_read_last  = QRadioButton("最大编号")
         self._radio_read_all   = QRadioButton("全部汇总")
-        self._radio_read_first.setToolTip('仅读取名为"惯量包络体.1"的保持测量结果')
-        self._radio_read_last.setToolTip("扫描所有编号，使用编号最大的有效保持测量结果")
-        self._radio_read_all.setToolTip("读取所有有效的惯量包络体测量，并按平行轴定理汇总为单一质量特性")
+        self._radio_read_first.setToolTip(
+            '仅读取名为"惯量包络体.1"的保持测量结果。\n'
+            "速度最快：只进行一次参数查询，不扫描其余编号。"
+        )
+        self._radio_read_last.setToolTip(
+            "扫描编号 1 到 50 的全部惯量包络体，使用编号最大的有效保持测量结果。\n"
+            "速度较慢：每个缺失的编号均会产生一次 COM 异常，最多 49 次。"
+        )
+        self._radio_read_all.setToolTip(
+            "扫描编号 1 到 50 的全部惯量包络体，读取所有有效测量并按平行轴定理汇总为单一质量特性。\n"
+            "速度较慢：每个缺失的编号均会产生一次 COM 异常，最多 49 次。"
+        )
         self._radio_read_first.setChecked(self._read_mode == "first")
         self._radio_read_last.setChecked(self._read_mode == "last")
         self._radio_read_all.setChecked(self._read_mode == "all")
