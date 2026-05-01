@@ -780,7 +780,7 @@ def collect_mass_props_rows(
             sel.Add(com)
             show_var = VARIANT(VT_BYREF | VT_I4, 0)
             sel.VisProperties.GetShow(show_var)
-            hidden = int(show_var.value) != 0
+            hidden = show_var.value != 0
             logger.debug(f"[VIS] {tag}: Selection.VisProperties.GetShow()={show_var.value} → hidden={hidden}")
             return hidden
         except Exception as e:
