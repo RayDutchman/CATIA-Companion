@@ -181,6 +181,9 @@ class MassPropsDialog(QDialog):
         # ── 忽略隐藏节点 ──────────────────────────────────────────────────────
         self._skip_hidden: bool = self._settings.value("skip_hidden", False, type=bool)
 
+        # ── 加载时更新零件 ────────────────────────────────────────────────────
+        self._update_parts: bool = self._settings.value("update_parts", False, type=bool)
+
         # ── 汇总BOM专用选项 ───────────────────────────────────────────────────
         self._summary_sort_column: str = self._settings.value(
             "summary_sort_column", ""
@@ -449,6 +452,22 @@ class MassPropsDialog(QDialog):
         self._skip_hidden_chk.toggled.connect(self._on_skip_hidden_changed)
         row1.addWidget(self._skip_hidden_chk)
 
+        _sep4b = QFrame(); _sep4b.setFrameShape(QFrame.Shape.VLine)
+        _sep4b.setFrameShadow(QFrame.Shadow.Sunken)
+        row1.addSpacing(4); row1.addWidget(_sep4b); row1.addSpacing(4)
+
+        # 加载时更新零件
+        self._update_parts_chk = QCheckBox("加载时更新零件")
+        self._update_parts_chk.setChecked(self._update_parts)
+        self._update_parts_chk.setToolTip(
+            "勾选时：加载数据前对每个零件调用 Part.Update()，\n"
+            "强制重新计算惯量包络体保持测量，\n"
+            "可解决惯量包络体未更新导致读取到旧值的问题。\n"
+            "注意：更新耗时较长，零件数量多时请耐心等待。"
+        )
+        self._update_parts_chk.toggled.connect(self._on_update_parts_changed)
+        row1.addWidget(self._update_parts_chk)
+
         row1.addStretch()
         opts_main.addLayout(row1)
 
@@ -714,6 +733,10 @@ class MassPropsDialog(QDialog):
         self._skip_hidden = self._skip_hidden_chk.isChecked()
         self._settings.setValue("skip_hidden", self._skip_hidden)
 
+    def _on_update_parts_changed(self, checked: bool) -> None:
+        self._update_parts = checked
+        self._settings.setValue("update_parts", self._update_parts)
+
     def _on_unit_changed(self, checked: bool) -> None:
         self._mass_unit = "g" if self._radio_mass_g.isChecked() else "kg"
         self._cog_unit  = "mm" if self._radio_cog_mm.isChecked() else "m"
@@ -833,7 +856,8 @@ class MassPropsDialog(QDialog):
         try:
             rows = collect_mass_props_rows(file_path, progress_callback=_on_row_collected,
                                            read_mode=self._read_mode,
-                                           skip_hidden=self._skip_hidden)
+                                           skip_hidden=self._skip_hidden,
+                                           update_parts=self._update_parts)
         except Exception as e:
             progress.close()
             logger.error(f"加载质量特性失败: {e}")

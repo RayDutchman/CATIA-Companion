@@ -800,6 +800,7 @@ def collect_mass_props_rows(
     progress_callback: Callable[[int], None] | None = None,
     read_mode: str = "all",
     skip_hidden: bool = False,
+    update_parts: bool = False,
 ) -> list[dict]:
     """遍历产品树，返回每个节点的质量特性行列表。
 
@@ -822,6 +823,10 @@ def collect_mass_props_rows(
         skip_hidden:
             若为 True，则跳过处于隐藏状态的节点：
             零件隐藏时不读取该行；产品/部件隐藏时连同其全部子孙一并跳过。
+        update_parts:
+            若为 True，在读取每个零件的质量特性之前先调用 ``Part.Update()``，
+            强制更新零件模型（含惯量包络体保持测量），以应对惯量包络体未更新
+            导致读取到旧值的情况。每个唯一零件文件仅更新一次。
 
     返回：
         行字典列表，每行含以下键：
@@ -1008,6 +1013,16 @@ def collect_mass_props_rows(
                     # 无需遍历 Documents 集合按路径查找，直接取 .Part 即可。
                     part_doc_com = product.com_object.ReferenceProduct.Parent
                     part_com     = part_doc_com.Part
+                    if update_parts:
+                        # 强制更新零件模型（含惯量包络体保持测量），
+                        # 以确保读取到最新的惯量参数值。
+                        # 注：此代码块仅在首次遇到该文件路径时执行（_mass_cache 保证每个
+                        # 唯一零件文件只更新一次，多实例零件不会重复调用 Update）。
+                        try:
+                            part_com.Update()
+                            logger.debug(f"[UPDATE] {pn} Part.Update() 完成")
+                        except Exception as ue:
+                            logger.debug(f"[UPDATE] {pn} Part.Update() 失败（忽略）: {ue}")
                     mass_props   = _measure_part_mass_props(part_com, pn, read_mode=read_mode)
                 except Exception as e:
                     logger.debug(f"无法测量零件 {filepath}: {e}")
