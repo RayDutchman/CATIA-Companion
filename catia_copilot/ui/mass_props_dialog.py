@@ -1864,7 +1864,8 @@ class MassPropsDialog(QDialog):
         # 设置等待光标，提示用户正在操作
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            new_mp = remeasure_part_mass_props(fp, pn, self._read_mode)
+            new_mp = remeasure_part_mass_props(fp, pn, self._read_mode,
+                                               update_parts=self._update_parts)
         finally:
             QApplication.restoreOverrideCursor()
 

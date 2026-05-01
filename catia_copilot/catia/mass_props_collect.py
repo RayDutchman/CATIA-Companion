@@ -375,6 +375,21 @@ def _read_keep_inertia_params(
         return None
 
 
+def _try_update_part_com(part_com, label: str = "") -> None:
+    """对 part_com 调用 Part.Update()，失败时仅记录调试日志（不抛出异常）。
+
+    参数：
+        part_com: COM 对象（Part 层）。
+        label:    日志标识字符串（通常为零件编号），用于区分日志来源。
+    """
+    tag = label or "<unknown>"
+    try:
+        part_com.Update()
+        logger.debug(f"[UPDATE] {tag} Part.Update() 完成")
+    except Exception as ue:
+        logger.debug(f"[UPDATE] {tag} Part.Update() 失败（忽略）: {ue}")
+
+
 def _measure_part_mass_props(
     part_com,
     part_number: str = "",
@@ -749,6 +764,7 @@ def remeasure_part_mass_props(
     filepath: str,
     part_number: str = "",
     read_mode: str = "all",
+    update_parts: bool = False,
 ) -> dict | None:
     """通过 CATIA COM 接口重新读取指定零件的质量特性（惯量包络体 Keep 测量）。
 
@@ -757,9 +773,12 @@ def remeasure_part_mass_props(
     补充或更改惯量包络体后，无需重新遍历整棵产品树即可刷新单个零件的质量特性。
 
     参数：
-        filepath:    零件文档的磁盘完整路径（若文档尚未在 CATIA 中打开则返回 None）。
-        part_number: 零件编号（PartNumber），用于构造 Keep 参数前缀。
-        read_mode:   控制读取哪些惯量包络体（"first"/"last"/"all"）。
+        filepath:     零件文档的磁盘完整路径（若文档尚未在 CATIA 中打开则返回 None）。
+        part_number:  零件编号（PartNumber），用于构造 Keep 参数前缀。
+        read_mode:    控制读取哪些惯量包络体（"first"/"last"/"all"）。
+        update_parts: 若为 True，在读取参数前先调用 ``Part.Update()``，强制更新
+                      零件模型（含惯量包络体保持测量），以应对惯量包络体未更新
+                      导致读取到旧值的情况。
 
     返回：
         成功时返回质量特性字典（内部 SI 单位，与 :func:`collect_mass_props_rows`
@@ -789,6 +808,8 @@ def remeasure_part_mass_props(
             return None
 
         part_com = target_doc.com_object.Part
+        if update_parts:
+            _try_update_part_com(part_com, part_number)
         return _measure_part_mass_props(part_com, part_number, read_mode=read_mode)
     except Exception as e:
         logger.debug(f"[REMEAS] 重新读取质量特性失败 ({filepath}): {e}")
@@ -1018,11 +1039,7 @@ def collect_mass_props_rows(
                         # 以确保读取到最新的惯量参数值。
                         # 注：此代码块仅在首次遇到该文件路径时执行（_mass_cache 保证每个
                         # 唯一零件文件只更新一次，多实例零件不会重复调用 Update）。
-                        try:
-                            part_com.Update()
-                            logger.debug(f"[UPDATE] {pn} Part.Update() 完成")
-                        except Exception as ue:
-                            logger.debug(f"[UPDATE] {pn} Part.Update() 失败（忽略）: {ue}")
+                        _try_update_part_com(part_com, pn)
                     mass_props   = _measure_part_mass_props(part_com, pn, read_mode=read_mode)
                 except Exception as e:
                     logger.debug(f"无法测量零件 {filepath}: {e}")
