@@ -11,7 +11,7 @@
                       • 惯量单位 g·mm²/g·m²/kg·mm²/kg·m² 独立选择（4 种）
                       • 惯量包络体读取模式：只读.1 / 最大编号 / 全部汇总
                       • 文件名 / 零件编号 / 术语 / 版本列可隐藏
-                      • 计算装配体总质量特性并导出 Excel
+                      • 自动汇总装配体总质量特性并导出 Excel
 """
 
 import logging
@@ -126,7 +126,7 @@ class MassPropsDialog(QDialog):
     - 仅零件节点的"重量"列可编辑；修改后等比缩放该行惯量，
       并同步更新所有相同零件编号的行（及 _rows 中全部同PN数据）。
     - 单位可在 kg/g 间切换（影响重量列与转动惯量列的显示和导出）。
-    - "计算"按钮汇总装配体总质量特性（考虑位姿变换）。
+    - 修改密度或重量后自动重新计算装配体总质量特性，汇总结果实时更新。
     - "导出表格"将当前数据（含汇总行）写入 Excel。
     """
 
@@ -630,12 +630,6 @@ class MassPropsDialog(QDialog):
 
         btn_row.addStretch()
 
-        self._calc_btn = QPushButton("计算")
-        self._calc_btn.setToolTip("汇总装配体总质量特性（质量 / 重心 / 转动惯量）")
-        self._calc_btn.setEnabled(False)
-        self._calc_btn.clicked.connect(self._calculate)
-        btn_row.addWidget(self._calc_btn)
-
         self._save_json_btn = QPushButton("保存数据…")
         self._save_json_btn.setToolTip("将当前行数据保存为数据文件，可在不打开CATIA的情况下重新载入")
         self._save_json_btn.setEnabled(False)
@@ -880,7 +874,6 @@ class MassPropsDialog(QDialog):
                 if col_name in self._col_widths:
                     self._table.setColumnWidth(col_idx, self._col_widths[col_name])
 
-        self._calc_btn.setEnabled(True)
         self._export_btn.setEnabled(True)
         self._save_json_btn.setEnabled(True)
 
@@ -1377,8 +1370,8 @@ class MassPropsDialog(QDialog):
                         vis_item.setText(ic_idx, self._fmt_inertia_val(raw_i))
 
         self._is_updating = False
-        self._rollup_result = None
-        self._clear_summary_labels()
+        # 编辑密度/重量后立即重新计算汇总结果（无需手动点击"计算"）
+        self._calculate()
 
     # ── 计算 ───────────────────────────────────────────────────────────────
 
