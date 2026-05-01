@@ -124,8 +124,8 @@ def print_all_parameters(params_com, title: str = "") -> list[dict]:
     # 并列打印两种读取方式：
     #   ValueAsString() → 含单位的格式化字符串，如 "10.5mm"
     #   param.Value     → 裸 SI float，如 0.0105（无单位，适合数值计算）
-    print(f"  {'#':<5} {'参数名':<45} {'ValueAsString()':<25} {'param.Value（SI裸值）'}")
-    print(f"  {'-' * 5} {'-' * 45} {'-' * 25} {'-' * 20}")
+    print(f"  {'#':<5} {'参数名':<80} {'ValueAsString()':<40} {'param.Value（SI裸值）'}")
+    print(f"  {'-' * 5} {'-' * 80} {'-' * 40} {'-' * 20}")
 
     results = []
     for i in range(1, count + 1):          # COM 集合索引从 1 开始
@@ -146,7 +146,7 @@ def print_all_parameters(params_com, title: str = "") -> list[dict]:
             except Exception:
                 val_raw = None
 
-            print(f"  {i:<5} {name:<45} {val_str:<25} {val_raw}")
+            print(f"  {i:<5} {name:<80} {val_str:<40} {val_raw}")
 
             results.append({
                 "name":      name,
@@ -169,7 +169,6 @@ def main():
     # ── 1. 连接 CATIA（后期绑定）──────────────────────────────────────────────
     print("正在连接 CATIA Application ...")
     catia = win32com.client.Dispatch("CATIA.Application")
-    print(f"  CATIA 版本：{catia.Version}")
 
     # ── 2. 获取活动文档 ────────────────────────────────────────────────────────
     try:
@@ -214,7 +213,7 @@ def main():
     if matches:
         print(f"包含关键词 '{search_keyword}' 的参数：")
         for m in matches:
-        print(f"  {m['name']} = {m['value_str']}  (SI裸值: {m['value_raw']})")
+            print(f"  {m['name']} = {m['value_str']}  (SI裸值: {m['value_raw']})")
     else:
         print(f"未找到包含关键词 '{search_keyword}' 的参数。")
 
