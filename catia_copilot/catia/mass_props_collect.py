@@ -815,11 +815,11 @@ def collect_mass_props_rows(
             name = product.name
             pn   = name.rsplit(".", 1)[0] if "." in name else name
 
-        # 可见性探测（始终执行以输出 DEBUG 日志，便于诊断）；
+        # 可见性探测：仅在需要过滤隐藏节点时才发起 COM 调用，
+        # 避免在 skip_hidden=False（默认）时产生无意义的异常开销。
         # 根节点（level=0）的实例是虚拟根，不存在 parent 上下文，跳过探测。
-        if level >= 1:
-            _hidden = _is_hidden(product, pn)
-            if skip_hidden and _hidden:
+        if level >= 1 and skip_hidden:
+            if _is_hidden(product, pn):
                 return
 
         # 解析本节点对应的磁盘文件路径（通过 COM ReferenceProduct.Parent.FullName）
