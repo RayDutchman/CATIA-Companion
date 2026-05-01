@@ -310,10 +310,13 @@ class MassPropsDialog(QDialog):
 
         # ── 前提条件说明 ────────────────────────────────────────────────────
         prereq_lbl = QLabel(
-            "⚠ 使用前提：请在 CATIA 中 <b>单独打开</b> 每个零件文件（不在产品环境下），"
-            "进入 SPA（惯量分析），执行测量惯量并勾选 <b>保持测量</b>。"
+            "⚠ 使用说明：本功能读取指定产品树下的每个零件的惯量测量结果、"
+            "在根产品中的位置，计算出根产品的重量、重心、转动惯量。"
+            "请在 CATIA 中 <b>单独打开</b> 每个零件,执行惯量测量并勾选 <b>保持测量</b>,"
             "测量结果必须命名为 <b>惯量包络体.x</b>（x 为 1–50 的整数）。"
-            "在产品下建立的惯量测量使用产品坐标系，结果不正确，将不被读取。"
+            "在产品窗口中建立的惯量包络体的坐标系为根产品坐标系（即使当前工作对象是零件），"
+            "这会导致坐标系与根产品不重合的零件的测量结果不正确。"
+            "支持一个零件具有多个惯量包络体，产品的惯量包络体将不被读取。"
         )
         prereq_lbl.setWordWrap(True)
         prereq_lbl.setStyleSheet(
@@ -356,7 +359,9 @@ class MassPropsDialog(QDialog):
 
         self._bom_type_group = QButtonGroup(self)
         self._radio_hier = QRadioButton("层级BOM")
+        self._radio_hier.setMinimumHeight(24)
         self._radio_summ = QRadioButton("汇总BOM")
+        self._radio_summ.setMinimumHeight(24)
         self._radio_hier.setChecked(not self._summarize)
         self._radio_summ.setChecked(self._summarize)
         self._bom_type_group.addButton(self._radio_hier)
