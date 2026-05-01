@@ -1228,7 +1228,21 @@ class MassPropsDialog(QDialog):
                 item.setText(col_idx, self._fmt_mass_val(row_data.get("Weight")))
                 self._is_updating = False
                 return
-            new_density_stored = row_data.get("Density")
+            # 重量变动时，按相同比例更新密度（密度 = 质量 / 体积，体积不变）
+            _old_density = row_data.get("Density")
+            _old_weight  = row_data.get("Weight")
+            try:
+                _od = float(_old_density) if _old_density is not None else 0.0
+            except (ValueError, TypeError):
+                _od = 0.0
+            try:
+                _ow = float(_old_weight) if _old_weight is not None else 0.0
+            except (ValueError, TypeError):
+                _ow = 0.0
+            if _od > 0.0 and _ow > 0.0:
+                new_density_stored = _od * (new_weight_stored / _ow)
+            else:
+                new_density_stored = _old_density  # 无法计算，密度保持不变
         else:  # col_name == "Density"
             try:
                 new_density_stored = float(new_text)
