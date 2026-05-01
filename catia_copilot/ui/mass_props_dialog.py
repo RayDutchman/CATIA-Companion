@@ -153,29 +153,18 @@ class MassPropsDialog(QDialog):
         self._summarize: bool = self._settings.value("summarize", False, type=bool)
 
         # ── 单位制 ────────────────────────────────────────────────────────────
-        # 向后兼容旧版本保存的 "unit" 键（"g"/"kg"/"kg_m2"）
-        _legacy_unit = self._settings.value("unit", "")
-        _legacy_map = {"g": ("g", "mm"), "kg": ("kg", "mm"), "kg_m2": ("kg", "m")}
-        _legacy_defaults = _legacy_map.get(_legacy_unit, None)
-        self._mass_unit: str = self._settings.value(
-            "mass_unit",
-            _legacy_defaults[0] if _legacy_defaults else "g",
-        )
-        self._cog_unit: str = self._settings.value(
-            "cog_unit",
-            _legacy_defaults[1] if _legacy_defaults else "mm",
-        )
+        self._mass_unit: str = self._settings.value("mass_unit", "g")
+        self._cog_unit: str = self._settings.value("cog_unit", "mm")
         if self._mass_unit not in ("g", "kg"):
             self._mass_unit = "g"
         if self._cog_unit not in ("mm", "m"):
             self._cog_unit = "mm"
 
-        # 惯量单位独立选择（4 种，默认从重量×长度²推导以兼容旧版）
-        _default_inertia = f"{self._mass_unit}\u00b7{self._cog_unit}\u00b2"
-        self._inertia_unit: str = self._settings.value("inertia_unit", _default_inertia)
+        # 惯量单位独立选择（4 种）
         _valid_inertia_units = ("g\u00b7mm\u00b2", "g\u00b7m\u00b2", "kg\u00b7mm\u00b2", "kg\u00b7m\u00b2")
+        self._inertia_unit: str = self._settings.value("inertia_unit", "g\u00b7mm\u00b2")
         if self._inertia_unit not in _valid_inertia_units:
-            self._inertia_unit = _default_inertia
+            self._inertia_unit = "g\u00b7mm\u00b2"
 
         # 内部单位为 SI（kg / m / kg·m²）；根据所选显示单位制设置换算因子
         self._unit_factor, _, self._cog_unit_factor = (
@@ -327,15 +316,18 @@ class MassPropsDialog(QDialog):
         layout.setSpacing(8)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        # ── 前提条件说明（最多2行，超宽自动折行）────────────────────────────
+        # ── 前提条件说明（窗口过窄时允许截断）──────────────────────────────
         prereq_lbl = QLabel(
-            "<b>⚠ 使用说明：</b>"
-            "请在 CATIA 中<b>单独打开</b>每个零件（勿在产品窗口中操作），进入 SPA 执行惯量测量并勾选<b>保持测量</b>，"
-            f"测量命名为 <b>惯量包络体.x</b>（x=1~{MAX_INERTIA_INDEX}）。"
-            "在产品窗口建立的惯量包络体坐标系为根产品坐标系，"
-            "会导致非原点零件结果不正确且不会被读取；产品级惯量包络体也不会被读取。"
+            "⚠ 使用说明：本功能读取指定产品树下的每个零件的惯量测量结果、"
+            "在根产品中的位置，计算出根产品的重量、重心、转动惯量。"
+            "请在 CATIA 中 <b>单独打开</b> 每个零件,执行惯量测量并勾选 <b>保持测量</b>,"
+            f"测量结果必须命名为 <b>惯量包络体.x</b>（x 为 1–{MAX_INERTIA_INDEX} 的整数）。"
+            "在产品窗口中建立的惯量包络体的坐标系为根产品坐标系（即使当前工作对象是零件），"
+            "这会导致坐标系与根产品不重合的零件的测量结果不正确。"
+            "支持一个零件具有多个惯量包络体，产品的惯量包络体将不被读取。"
         )
         prereq_lbl.setWordWrap(True)
+        prereq_lbl.setMaximumHeight(46)
         prereq_lbl.setStyleSheet(
             "QLabel { background-color: #FFF8E1; border: 1px solid #F9A825;"
             " border-radius: 4px; padding: 4px 8px; color: #5D4037; font-size: 11px; }"
