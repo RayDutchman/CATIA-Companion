@@ -45,6 +45,8 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
+
+
 from catia_copilot.constants import FILENAME_NOT_FOUND, FILENAME_UNSAVED
 
 logger = logging.getLogger(__name__)
@@ -183,17 +185,29 @@ def _position_to_mat4(product) -> list[list[float]]:
 # ---------------------------------------------------------------------------
 
 
-def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") -> dict | None:
+def _read_keep_inertia_params(
+    part_com,
+    part_number: str = "",
+    label: str = "",
+    read_mode: str = "all",
+) -> dict | None:
     """读取 CATIA SPA Keep 测量写入的"惯量包络体.1"至"惯量包络体.MAX_INERTIA_INDEX"参数，
     并在零件级按平行轴定理汇总为单一质量特性。
 
     先决条件：零件已在 SPA（惯量分析）中执行"测量惯量"并勾选"保持测量"，
     使参数树中出现 "惯量包络体.N\\质量"、"惯量包络体.N\\Gx" 等字段（N ≥ 1）。
+    **必须单独打开零件文件再建立测量**——在产品环境下建立的测量其参考系为产品坐标系，
+    导致结果不正确，此类测量将不被读取。
 
     读取策略（对每个编号 N，依次尝试以下前缀，取第一个能读到有效质量的前缀）：
-      1. "{part_number}\\惯量包络体.N\\"  ← CATIA 以零件号作为顶层命名空间
+      1. "{part_number}\\惯量包络体.N\\"  ← CATIA 以零件编号作为顶层命名空间
       2. "惯量包络体.N\\"                  ← 当前文档上下文回退前缀
-    编号不要求连续，所有 1 ≤ N ≤ MAX_INERTIA_INDEX 中存在的测量均会被读取。
+    编号不要求连续，所有 1 ≤ N ≤ MAX_INERTIA_INDEX 中存在的测量均会被读取（取决于 read_mode）。
+
+    read_mode 参数控制读取哪些惯量包络体编号：
+      "first" — 仅读取"惯量包络体.1"（固定取编号 1 的测量结果）。
+      "last"  — 扫描所有编号，仅返回编号最大的有效测量结果。
+      "all"   — 读取全部有效编号并按平行轴定理汇总（默认行为）。
 
     CATIA Keep 参数的原始单位（注意坐标为 mm，非 m）：
       质量                            CATIA 原始: kg   → 内部存储: kg  （无需换算）
@@ -226,9 +240,28 @@ def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") 
             except Exception:
                 return None
 
+        # ── 一次性枚举全部参数名，用于快速跳过不存在的编号 ────────────────────────
+        # params.Count + params.Item(i).Name 共 (1 + N) 次 COM 调用，换取对每个缺失
+        # 编号的 mass_key 做 O(1) set 查找，避免后续对不存在参数触发 COM 异常。
+        # 枚举失败时 all_names 保持 None，退回原有逐一 Item() 查询行为。
+        all_names: set[str] | None = None
+        try:
+            cnt = params.Count
+            all_names = {params.Item(i).Name for i in range(1, cnt + 1)}
+            logger.debug(f"{tag}枚举到 {cnt} 个参数名")
+        except Exception:
+            pass  # 无法枚举时回退到逐一查询
+
+        # ── 确定需要扫描的编号范围 ────────────────────────────────────────────────
+        if read_mode == "first":
+            check_indices = [1]
+        else:
+            # "last" 和 "all" 均需扫描全范围，以找到所有或编号最大的有效测量
+            check_indices = list(range(1, MAX_INERTIA_INDEX + 1))
+
         # ── 逐编号读取，收集所有有效测量 ──────────────────────────────────────────
         measurements: list[dict] = []
-        for idx in range(1, MAX_INERTIA_INDEX + 1):
+        for idx in check_indices:
             envelope_name = f"惯量包络体.{idx}"
             prefixes = []
             if part_number:
@@ -238,6 +271,10 @@ def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") 
             prefix_ok = None
             mass_si = None
             for pfix in prefixes:
+                mass_key = pfix + "质量"
+                # 若已枚举参数名且 mass_key 不在其中，可直接跳过，无需触发 COM 异常
+                if all_names is not None and mass_key not in all_names:
+                    continue
                 v = _get(pfix, "质量")
                 if v is not None and v > 0.0:
                     prefix_ok = pfix
@@ -278,6 +315,10 @@ def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") 
         if not measurements:
             logger.debug(f"{tag}未找到任何有效的惯量包络体参数，返回 None")
             return None
+
+        # "last" 模式：仅保留编号最大的有效测量（已按升序扫描，取最后一个）
+        if read_mode == "last":
+            measurements = [measurements[-1]]
 
         if len(measurements) == 1:
             # 仅一个测量，无需汇总，直接返回
@@ -322,7 +363,11 @@ def _read_keep_inertia_params(part_com, part_number: str = "", label: str = "") 
         return None
 
 
-def _measure_part_mass_props(part_com, part_number: str = "") -> dict | None:
+def _measure_part_mass_props(
+    part_com,
+    part_number: str = "",
+    read_mode: str = "all",
+) -> dict | None:
     """测量零件质量特性。
 
     所有返回值均使用 **SI 单位制（kg / m / kg·m²）**。
@@ -330,11 +375,13 @@ def _measure_part_mass_props(part_com, part_number: str = "") -> dict | None:
     先决条件：
       零件已在 SPA 中执行"测量惯量"并勾选"保持测量"，
       从而在参数树中生成 "惯量包络体.N\\质量" 等 Keep 参数（N ≥ 1）。
-      所有编号 1 ≤ N ≤ MAX_INERTIA_INDEX 的测量均会被读取并在零件级汇总。
+      **必须单独打开零件文件再建立测量**——在产品环境下建立的测量使用产品坐标系，
+      将导致结果不正确。
 
     参数：
         part_com:    COM 对象（Part 层）。
-        part_number: 零件号（PartNumber），用于构造参数前缀。
+        part_number: 零件编号（PartNumber），用于构造参数前缀。
+        read_mode:   控制读取哪些惯量包络体（"first"/"last"/"all"，默认 "all"）。
 
     返回字典：
       {
@@ -346,7 +393,7 @@ def _measure_part_mass_props(part_com, part_number: str = "") -> dict | None:
       }
     若所有惯量包络体参数均不存在（零件未执行 Keep 测量）则返回 None。
     """
-    return _read_keep_inertia_params(part_com, part_number)
+    return _read_keep_inertia_params(part_com, part_number, read_mode=read_mode)
 
 
 # ---------------------------------------------------------------------------
@@ -652,6 +699,8 @@ def load_rows(file_path: str) -> list[dict]:
 def collect_mass_props_rows(
     file_path: str | None,
     progress_callback: Callable[[int], None] | None = None,
+    read_mode: str = "all",
+    skip_hidden: bool = False,
 ) -> list[dict]:
     """遍历产品树，返回每个节点的质量特性行列表。
 
@@ -666,6 +715,14 @@ def collect_mass_props_rows(
             ``.CATProduct`` 文件路径，或 ``None`` 表示使用当前 CATIA 活动文档。
         progress_callback:
             可选回调，每追加一行后调用，传入当前行数。可通过抛出异常中止遍历。
+        read_mode:
+            控制读取哪些惯量包络体（传递给 ``_measure_part_mass_props``）：
+            "first" — 仅读取惯量包络体.1；
+            "last"  — 读取编号最大的惯量包络体；
+            "all"   — 全部读取并按平行轴定理汇总（默认）。
+        skip_hidden:
+            若为 True，则跳过处于隐藏状态的节点：
+            零件隐藏时不读取该行；产品/部件隐藏时连同其全部子孙一并跳过。
 
     返回：
         行字典列表，每行含以下键：
@@ -700,6 +757,50 @@ def collect_mass_props_rows(
                 pass
         return ""
 
+    def _is_hidden(product, pn: str = "") -> bool:
+        """检查产品实例（occurrence / 树节点）在父装配中是否处于隐藏状态。
+
+        通过 ActiveDocument.Selection 读取实例级可见性：
+          1. 清空选择集
+          2. 将当前节点的 COM 对象加入选择集
+          3. 从 Selection.VisProperties 读取 GetShow() 结果
+
+        此方式会临时修改 CATIA 当前选择集（副作用），finally 块中自动清空，
+        以将影响降至最低。读取失败则保守地视为可见，返回 False。
+
+        返回：catVisNoShow=1（隐藏）→ True；catVisShow=0（可见）→ False。
+        """
+        tag = pn or "<unknown>"
+        com = product.com_object
+        sel = None
+        try:
+            sel = application.com_object.ActiveDocument.Selection
+            sel.Clear()
+            sel.Add(com)
+            # In win32com late-binding (IDispatch), ByRef out-params are returned
+            # as Python return values when you pass an initial plain int.
+            # Passing a VARIANT(VT_BYREF|VT_I4,…) causes win32com to attempt
+            # int(variant) during dispatch argument marshalling which raises TypeError.
+            result = sel.VisProperties.GetShow(0)
+            # result may be the show-state int directly, or a tuple ending with it
+            if isinstance(result, tuple):
+                show_val = result[-1]
+            else:
+                show_val = result
+            hidden = bool(show_val) if show_val is not None else False
+            logger.debug(f"[VIS] {tag}: Selection.VisProperties.GetShow()={show_val} → hidden={hidden}")
+            return hidden
+        except Exception as e:
+            logger.debug(f"[VIS] {tag}: Selection.VisProperties.GetShow() 不可用 ({e})，视为可见")
+        finally:
+            try:
+                if sel is not None:
+                    sel.Clear()
+            except Exception:
+                pass
+
+        return False
+
     def _traverse(
         product,
         rows: list,
@@ -720,12 +821,20 @@ def collect_mass_props_rows(
         """
         nonlocal _total_count
 
-        # 读取零件号（PartNumber）；失败时退而使用名称去掉扩展名
+        # 读取零件编号（PartNumber）；失败时退而使用名称去掉扩展名
         try:
             pn = product.part_number
         except Exception:
             name = product.name
             pn   = name.rsplit(".", 1)[0] if "." in name else name
+
+        # 可见性探测：仅当用户勾选"忽略隐藏的节点"（skip_hidden=True）时才发起
+        # COM 调用（Selection.VisProperties.GetShow）；skip_hidden=False 时完全不
+        # 调用 _is_hidden()，从而避免任何多余的 COM 开销。
+        # 根节点（level=0）的实例是虚拟根，不存在 parent 上下文，跳过探测。
+        if level >= 1 and skip_hidden:
+            if _is_hidden(product, pn):
+                return
 
         # 解析本节点对应的磁盘文件路径（通过 COM ReferenceProduct.Parent.FullName）
         try:
@@ -814,20 +923,18 @@ def collect_mass_props_rows(
                         # 通过 COM 获取 Part 对象（仅 PartDocument 拥有 .Part 属性）
                         part_doc_com  = target_doc.com_object
                         part_com      = part_doc_com.Part
-                        mass_props    = _measure_part_mass_props(part_com, pn)
+                        mass_props    = _measure_part_mass_props(part_com, pn, read_mode=read_mode)
                     except Exception as e:
                         logger.debug(f"无法测量零件 {filepath}: {e}")
                         mass_props  = None
                         meas_failed  = True
 
-                    # ── DEBUG：记录每个零件的测量结果概要 ────────────────────
                     if mass_props is not None:
-                        _mp_dbg = mass_props
                         logger.debug(
                             f"[TRAV] {pn} 测量成功: "
-                            f"weight={_mp_dbg.get('weight')}g, "
-                            f"cog={[round(v,3) for v in _mp_dbg.get('cog',[0,0,0])]}, "
-                            f"Ixx={_mp_dbg.get('inertia',[[0]])[0][0]:.3g}g·mm²"
+                            f"weight={mass_props.get('weight')}g, "
+                            f"cog={[round(v,3) for v in mass_props.get('cog',[0,0,0])]}, "
+                            f"Ixx={mass_props.get('inertia',[[0]])[0][0]:.3g}g·mm²"
                         )
                     else:
                         logger.debug(f"[TRAV] {pn} 惯量包络体参数不存在或读取失败")

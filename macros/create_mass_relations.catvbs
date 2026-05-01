@@ -25,18 +25,18 @@ Option Explicit
 '   若该参数不存在，脚本静默退出（不弹对话框），以便外部批量调用。
 '
 ' iParameters 用法（由 SystemService.ExecuteScript 传入）：
-'   iParameters — 目标零件的零件号（PartNumber 字符串，可选）。
+'   iParameters — 目标零件的零件编号（PartNumber 字符串，可选）。
 '     · 若提供且非空：脚本遍历已打开的 PartDocument，找到
 '       doc.Product.PartNumber 与传入值匹配的文档并激活，再执行绑定。
 '     · 若为空或省略：弹出提示后对 CATIA 当前活动文档执行绑定。
 '
 ' 前缀说明（两用途使用不同前缀）：
 '   paramPrefix  — 用于 Parameters.Item() 查找 Keep 参数，
-'                  当通过零件号定位文档时需加 "PartNumber\" 命名空间前缀：
+'                  当通过零件编号定位文档时需加 "PartNumber\" 命名空间前缀：
 '                    有 targetPN：  "<PN>\惯量包络体.1\"
 '                    无 targetPN：  "惯量包络体.1\"
 '   formulaPrefix — 用于公式右侧表达式 "`<prefix><field>` / <unit>"，
-'                  始终不加零件号前缀，CATIA 公式引擎在当前文档上下文中
+'                  始终不加零件编号前缀，CATIA 公式引擎在当前文档上下文中
 '                  解析参数名时不需要顶层命名空间：  "惯量包络体.1\"
 '
 ' 幂等性：
@@ -49,7 +49,7 @@ Sub CATMain(iParameters)
     Dim CATIA
     Set CATIA = GetObject(, "CATIA.Application")
 
-    ' ── 解析 iParameters：目标零件号（PartNumber，可选）───────────────────
+    ' ── 解析 iParameters：目标零件编号（PartNumber，可选）───────────────────
     ' VBScript 下 iParameters 可能是数组也可能是单值；CStr() 做容错转换。
     Dim targetPN
     targetPN = ""
@@ -64,7 +64,7 @@ Sub CATMain(iParameters)
     Set partDoc = Nothing
 
     If targetPN <> "" Then
-        ' 按零件号在已打开文档中查找，并激活目标文档
+        ' 按零件编号在已打开文档中查找，并激活目标文档
         Dim i, found
         found = False
 
@@ -88,8 +88,8 @@ Sub CATMain(iParameters)
         ' 没找到目标文档：静默退出，避免外部批量调用时出现误报
         If Not found Then Exit Sub
     Else
-        ' 未传入零件号：提示后对当前活动文档执行绑定
-        MsgBox "未传入零件号：使用当前活动文档进行参数绑定。"
+        ' 未传入零件编号：提示后对当前活动文档执行绑定
+        MsgBox "未传入零件编号：使用当前活动文档进行参数绑定。"
         If CATIA.Documents.Count = 0 Then Exit Sub
         If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then Exit Sub
         Set partDoc = CATIA.ActiveDocument
@@ -108,7 +108,7 @@ Sub CATMain(iParameters)
     ' ── 构造两种前缀 ─────────────────────────────────────────────────────────
     '
     ' paramPrefix（用于 Parameters.Item() 查找 Keep 测量参数）：
-    '   CATIA 在 Part.Parameters 集合中，以零件号作为顶层命名空间：
+    '   CATIA 在 Part.Parameters 集合中，以零件编号作为顶层命名空间：
     '     有 targetPN  →  "<PN>\惯量包络体.1\"
     '     无 targetPN  →  "惯量包络体.1\"
     Dim paramPrefix
@@ -120,7 +120,7 @@ Sub CATMain(iParameters)
 
     ' formulaPrefix（用于公式右侧表达式 "`<prefix><field>` / <unit>"）：
     '   CATIA 公式引擎在当前文档上下文中解析参数名，不需要顶层命名空间，
-    '   因此始终使用不含零件号的短路径，两种调用方式统一。
+    '   因此始终使用不含零件编号的短路径，两种调用方式统一。
     Dim formulaPrefix
     formulaPrefix = "惯量包络体.1\"
 
@@ -177,7 +177,7 @@ End Sub
 '   → "`惯量包络体.1\质量` / 1g"
 '
 ' 参数：
-'   prefix    — 参数路径前缀（公式中统一使用 formulaPrefix，即不含零件号）
+'   prefix    — 参数路径前缀（公式中统一使用 formulaPrefix，即不含零件编号）
 '   fieldName — CATIA Keep 参数的字段名（如 "质量"、"Gx" 等）
 '   unitConst — 单位除数常量字符串，用于将 CATIA 有量纲值转换为无量纲实数
 ' ============================================================

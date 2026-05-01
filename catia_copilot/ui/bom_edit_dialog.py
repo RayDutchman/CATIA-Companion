@@ -167,7 +167,6 @@ class BomEditDialog(QDialog):
 
         # ── BOM类型与显示选项（紧凑分组）────────────────────────────────────
         display_group  = QGroupBox("BOM类型与显示选项")
-        display_group.setMinimumHeight(60)  # 切换BOM类型时防止高度抖动
         display_layout = QVBoxLayout(display_group)
         display_layout.setSpacing(4)
         display_layout.setContentsMargins(8, 6, 8, 6)
@@ -177,6 +176,7 @@ class BomEditDialog(QDialog):
         self._bom_type_btn_group = QButtonGroup(self)
         self._radio_hierarchical = QRadioButton("层级BOM")
         self._radio_summary_bom  = QRadioButton("汇总BOM")
+        self._radio_hierarchical.setMinimumHeight(24)
         if self._summarize:
             self._radio_summary_bom.setChecked(True)
         else:
@@ -214,6 +214,7 @@ class BomEditDialog(QDialog):
         if sort_saved_idx >= 0:
             self._sort_col_combo.setCurrentIndex(sort_saved_idx)
         self._sort_col_combo.currentIndexChanged.connect(self._on_sort_col_changed)
+        self._sort_col_combo.setMaximumHeight(24)
         summary_opts_layout.addWidget(self._sort_col_combo)
 
         self._summary_opts_widget.setVisible(self._summarize)
