@@ -255,22 +255,16 @@ def _read_keep_inertia_params(
         measurements: list[dict] = []
         for idx in check_indices:
             envelope_name = f"惯量包络体.{idx}"
-            prefixes = []
-            if part_number:
-                prefixes.append(f"{part_number}\\{envelope_name}\\")
-            prefixes.append(f"{envelope_name}\\")
+            # 每个 idx 仅用一个前缀探测是否存在：带零件编号的前缀优先；
+            # part_number 为空时退而使用裸前缀。这样每个不存在的 idx 只触发 1 次 COM 异常。
+            probe_prefix = (f"{part_number}\\{envelope_name}\\" if part_number
+                            else f"{envelope_name}\\")
 
-            prefix_ok = None
-            mass_si = None
-            for pfix in prefixes:
-                v = _get(pfix, "质量")
-                if v is not None and v > 0.0:
-                    prefix_ok = pfix
-                    mass_si = v
-                    break
-
-            if prefix_ok is None:
+            mass_si = _get(probe_prefix, "质量")
+            if mass_si is None or mass_si <= 0.0:
                 continue  # 该编号不存在，跳过
+
+            prefix_ok = probe_prefix
 
             gx_si  = _get(prefix_ok, "Gx")
             gy_si  = _get(prefix_ok, "Gy")
@@ -882,17 +876,15 @@ def collect_mass_props_rows(
         level: int,
         parent_filepath: str,
         parent_mat4: list[list[float]],
-        documents,
     ) -> None:
         """递归遍历产品树，将每个节点的质量特性信息追加到 rows。
 
         参数：
-            product:          当前节点的 pycatia Product 对象。
-            rows:             行字典列表，结果追加于此。
-            level:            当前节点的层级深度（根节点为 0）。
-            parent_filepath:  父节点的文件路径（用于判断"嵌入式部件"）。
-            parent_mat4:      父节点到根的累积 4×4 变换矩阵。
-            documents:        CATIA Application.Documents 集合，用于查找零件文档。
+            product:         当前节点的 pycatia Product 对象。
+            rows:            行字典列表，结果追加于此。
+            level:           当前节点的层级深度（根节点为 0）。
+            parent_filepath: 父节点的文件路径（用于判断"嵌入式部件"）。
+            parent_mat4:     父节点到根的累积 4×4 变换矩阵。
         """
         nonlocal _total_count
 
@@ -981,45 +973,29 @@ def collect_mass_props_rows(
                 # 同一文件路径已测量过（多实例复用），直接取缓存，避免重复耗时测量
                 mass_props = _mass_cache[filepath]
             else:
-                # 在已打开的文档集合中查找与本零件路径匹配的文档
-                target_doc = None
-                fp_resolved = Path(filepath).resolve()
-                for i in range(1, documents.count + 1):
-                    try:
-                        doc = documents.item(i)
-                        if Path(doc.full_name).resolve() == fp_resolved:
-                            target_doc = doc
-                            break
-                    except Exception:
-                        pass
-
-                if target_doc is not None:
-                    try:
-                        # 通过 COM 获取 Part 对象（仅 PartDocument 拥有 .Part 属性）
-                        part_doc_com  = target_doc.com_object
-                        part_com      = part_doc_com.Part
-                        mass_props    = _measure_part_mass_props(part_com, pn, read_mode=read_mode)
-                    except Exception as e:
-                        logger.debug(f"无法测量零件 {filepath}: {e}")
-                        mass_props  = None
-                        meas_failed  = True
-
-                    if mass_props is not None:
-                        logger.debug(
-                            f"[TRAV] {pn} 测量成功: "
-                            f"weight={mass_props.get('weight')}g, "
-                            f"cog={[round(v,3) for v in mass_props.get('cog',[0,0,0])]}, "
-                            f"Ixx={mass_props.get('inertia',[[0]])[0][0]:.3g}g·mm²"
-                        )
-                    else:
-                        logger.debug(f"[TRAV] {pn} 惯量包络体参数不存在或读取失败")
-
-                    # 写入缓存（即使测量失败也缓存 None，防止重复尝试）
-                    _mass_cache[filepath] = mass_props
-                else:
-                    # 文档未在 CATIA 中打开，无法完成测量
-                    logger.debug(f"找不到已打开的文档: {filepath}")
+                try:
+                    # ReferenceProduct.Parent 就是该零件的 PartDocument COM 对象，
+                    # 无需遍历 Documents 集合按路径查找，直接取 .Part 即可。
+                    part_doc_com = product.com_object.ReferenceProduct.Parent
+                    part_com     = part_doc_com.Part
+                    mass_props   = _measure_part_mass_props(part_com, pn, read_mode=read_mode)
+                except Exception as e:
+                    logger.debug(f"无法测量零件 {filepath}: {e}")
+                    mass_props  = None
                     meas_failed = True
+
+                if mass_props is not None:
+                    logger.debug(
+                        f"[TRAV] {pn} 测量成功: "
+                        f"weight={mass_props.get('weight')}g, "
+                        f"cog={[round(v,3) for v in mass_props.get('cog',[0,0,0])]}, "
+                        f"Ixx={mass_props.get('inertia',[[0]])[0][0]:.3g}g·mm²"
+                    )
+                else:
+                    logger.debug(f"[TRAV] {pn} 惯量包络体参数不存在或读取失败")
+
+                # 写入缓存（即使测量失败也缓存 None，防止重复尝试）
+                _mass_cache[filepath] = mass_props
 
         # 若零件本应可测但最终无数据，标记 meas_failed（无论是找不到文档还是读参数失败）
         if mass_props is None:
@@ -1076,8 +1052,7 @@ def collect_mass_props_rows(
                     child = product.products.item(i)
                     _traverse(child, rows, level + 1,
                               parent_filepath=filepath,
-                              parent_mat4=abs_mat4,
-                              documents=documents)
+                              parent_mat4=abs_mat4)
                 except Exception as e:
                     logger.debug(f"遍历子节点 {i} 失败: {e}")
         except Exception:
@@ -1096,7 +1071,7 @@ def collect_mass_props_rows(
         rows: list[dict] = []
         # 根节点的父矩阵为单位矩阵（无变换），从第 0 层开始遍历
         _traverse(root_product, rows, level=0, parent_filepath="",
-                  parent_mat4=_identity_4x4(), documents=documents)
+                  parent_mat4=_identity_4x4())
         _post_process_rows(rows)
         # 遍历过程中 VBS 可能激活了各子零件文档；恢复活动文档为根产品
         try:
@@ -1136,7 +1111,7 @@ def collect_mass_props_rows(
     rows = []
     # 根节点的父矩阵为单位矩阵，从第 0 层开始遍历
     _traverse(root_product, rows, level=0, parent_filepath="",
-              parent_mat4=_identity_4x4(), documents=documents)
+              parent_mat4=_identity_4x4())
     _post_process_rows(rows)
     # 遍历过程中 VBS 可能激活了各子零件文档；恢复活动文档为根产品
     try:
