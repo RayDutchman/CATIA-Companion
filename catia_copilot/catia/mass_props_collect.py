@@ -828,8 +828,9 @@ def collect_mass_props_rows(
             name = product.name
             pn   = name.rsplit(".", 1)[0] if "." in name else name
 
-        # 可见性探测：仅在需要过滤隐藏节点时才发起 COM 调用，
-        # 避免在 skip_hidden=False（默认）时产生无意义的异常开销。
+        # 可见性探测：仅当用户勾选"忽略隐藏的节点"（skip_hidden=True）时才发起
+        # COM 调用（Selection.VisProperties.GetShow）；skip_hidden=False 时完全不
+        # 调用 _is_hidden()，从而避免任何多余的 COM 开销。
         # 根节点（level=0）的实例是虚拟根，不存在 parent 上下文，跳过探测。
         if level >= 1 and skip_hidden:
             if _is_hidden(product, pn):
@@ -928,14 +929,12 @@ def collect_mass_props_rows(
                         mass_props  = None
                         meas_failed  = True
 
-                    # ── DEBUG：记录每个零件的测量结果概要 ────────────────────
                     if mass_props is not None:
-                        _mp_dbg = mass_props
                         logger.debug(
                             f"[TRAV] {pn} 测量成功: "
-                            f"weight={_mp_dbg.get('weight')}g, "
-                            f"cog={[round(v,3) for v in _mp_dbg.get('cog',[0,0,0])]}, "
-                            f"Ixx={_mp_dbg.get('inertia',[[0]])[0][0]:.3g}g·mm²"
+                            f"weight={mass_props.get('weight')}g, "
+                            f"cog={[round(v,3) for v in mass_props.get('cog',[0,0,0])]}, "
+                            f"Ixx={mass_props.get('inertia',[[0]])[0][0]:.3g}g·mm²"
                         )
                     else:
                         logger.debug(f"[TRAV] {pn} 惯量包络体参数不存在或读取失败")
