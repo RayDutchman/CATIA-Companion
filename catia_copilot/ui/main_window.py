@@ -382,18 +382,53 @@ class MainWindow(QMainWindow):
     def _show_dialog(self, attr: str, factory: Callable[[], QDialog]) -> None:
         """以非模态方式打开对话框，若已存在则将其置于前台。
 
+        所有通过此方法打开的对话框均被设置为独立顶级窗口，使其在 Windows
+        任务栏中拥有独立条目并可单独最小化，同时仍与主窗口归属同一应用程序分组。
+
+        关键点：仅调用 setWindowFlags() 无法让对话框在任务栏独立显示，因为
+        dialog 仍持有 Qt 父窗口引用，Qt 在创建原生窗口时会将父窗口作为 Win32
+        "Owner 窗口"传给 CreateWindowEx。Windows 规定有 Owner 的窗口不会在
+        任务栏单独出现。必须通过 setParent(None, flags) 同时清除父引用并设置
+        窗口类型，确保原生窗口创建时无 Owner，从而获得独立的任务栏条目。
+
         :param attr: 用于在 MainWindow 上缓存对话框实例的属性名。
         :param factory: 无参可调用对象，返回新的 QDialog 实例。
         """
         dlg = getattr(self, attr, None)
         if dlg is None:
             dlg = factory()
+            # setParent(None, flags) 同时：
+            #   1. 清除 Qt 父引用（使 Win32 原生窗口创建时无 Owner）
+            #   2. 设置 Window 类型和标准按钮标志
+            # 这是使对话框出现在任务栏的必要条件；单独调用 setWindowFlags()
+            # 无效，因为那不会断开已有的 Qt 父子关系和 Win32 Owner 关联。
+            dlg.setParent(
+                None,
+                Qt.WindowType.Window
+                | Qt.WindowType.WindowTitleHint
+                | Qt.WindowType.WindowSystemMenuHint
+                | Qt.WindowType.WindowCloseButtonHint
+                | Qt.WindowType.WindowMaximizeButtonHint
+                | Qt.WindowType.WindowMinimizeButtonHint,
+            )
             dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
             dlg.destroyed.connect(lambda _=None, a=attr: setattr(self, a, None))
             setattr(self, attr, dlg)
         dlg.show()
         dlg.raise_()
         dlg.activateWindow()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        """主窗口关闭时，同时关闭所有通过 _show_dialog 打开的子窗口。
+
+        由于子窗口通过 ``setParent(None, ...)`` 清除了 Qt 父引用（以获得独立
+        的任务栏条目），Qt 的默认父子关闭机制对其无效，需在此手动关闭。
+        所有子窗口均设有 ``WA_DeleteOnClose``，close() 会触发其销毁和清理。
+        """
+        for attr, value in list(vars(self).items()):
+            if attr.startswith("_dlg_") and isinstance(value, QDialog):
+                value.close()
+        super().closeEvent(event)
 
     # ── 宏菜单辅助方法 ────────────────────────────────────────────────────
 
