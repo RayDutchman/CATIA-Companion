@@ -418,6 +418,18 @@ class MainWindow(QMainWindow):
         dlg.raise_()
         dlg.activateWindow()
 
+    def closeEvent(self, event) -> None:  # noqa: N802
+        """主窗口关闭时，同时关闭所有通过 _show_dialog 打开的子窗口。
+
+        由于子窗口通过 ``setParent(None, ...)`` 清除了 Qt 父引用（以获得独立
+        的任务栏条目），Qt 的默认父子关闭机制对其无效，需在此手动关闭。
+        所有子窗口均设有 ``WA_DeleteOnClose``，close() 会触发其销毁和清理。
+        """
+        for attr, value in list(vars(self).items()):
+            if attr.startswith("_dlg_") and isinstance(value, QDialog):
+                value.close()
+        super().closeEvent(event)
+
     # ── 宏菜单辅助方法 ────────────────────────────────────────────────────
 
     def _macros_dir(self) -> Path:
