@@ -740,70 +740,26 @@ def collect_mass_props_rows(
         return ""
 
     def _is_hidden(product, pn: str = "") -> bool:
-        """检查节点在父装配中是否处于隐藏状态。
-        按顺序尝试多条 CATIA COM 路径读取可见性，每条路径均输出 DEBUG 日志。
-        所有路径均失败时保守地视为可见，返回 False。
+        """检查产品实例（occurrence / 树节点）在父装配中是否处于隐藏状态。
+
+        CATIA 的可见性是实例级属性，必须在 occurrence 的 com_object 上通过
+        CATIAVisProperties 接口读取，而非在 PartDocument 上读取。
+        GetShow() 返回：catVisShow=0（可见）/ catVisNoShow=1（隐藏）。
+        读取失败则保守地视为可见，返回 False。
         """
         tag = pn or "<unknown>"
         com = product.com_object
 
-        # 路径 1：AnyObject.ShowFlag（catShow=1 / catNoShow=0）
+        # 主路径：VisProperties.GetShow()（occurrence 实例级可见性）
         try:
-            raw = com.ShowFlag
-            val = int(raw)
-            hidden = val == 0
-            logger.debug(f"[VIS] {tag}: ShowFlag={raw!r} → hidden={hidden}")
+            show = int(com.VisProperties.GetShow())
+            # catVisNoShow = 1 → 隐藏；catVisShow = 0 → 可见
+            hidden = show != 0
+            logger.debug(f"[VIS] {tag}: VisProperties.GetShow()={show} → hidden={hidden}")
             return hidden
         except Exception as e:
-            logger.debug(f"[VIS] {tag}: ShowFlag 不可用 ({e})")
+            logger.debug(f"[VIS] {tag}: VisProperties.GetShow() 不可用 ({e})，视为可见")
 
-        # 路径 2：AnyObject.Visibility（catVisShow=1 / catVisNoShow=0）
-        try:
-            raw = com.Visibility
-            val = int(raw)
-            hidden = val == 0
-            logger.debug(f"[VIS] {tag}: Visibility={raw!r} → hidden={hidden}")
-            return hidden
-        except Exception as e:
-            logger.debug(f"[VIS] {tag}: Visibility 不可用 ({e})")
-
-        # 路径 3：VisibleFlag（部分 CATIA 版本使用 CATIAVisProperties）
-        try:
-            raw = com.VisibleFlag
-            val = int(raw)
-            hidden = val == 0
-            logger.debug(f"[VIS] {tag}: VisibleFlag={raw!r} → hidden={hidden}")
-            return hidden
-        except Exception as e:
-            logger.debug(f"[VIS] {tag}: VisibleFlag 不可用 ({e})")
-
-        # 路径 4：GraphicObject.ShowFlag（通过图形对象访问）
-        try:
-            raw = com.GraphicObject.ShowFlag
-            val = int(raw)
-            hidden = val == 0
-            logger.debug(f"[VIS] {tag}: GraphicObject.ShowFlag={raw!r} → hidden={hidden}")
-            return hidden
-        except Exception as e:
-            logger.debug(f"[VIS] {tag}: GraphicObject.ShowFlag 不可用 ({e})")
-
-        # 路径 5：ReferenceProduct.ShowFlag（实例的引用产品上）
-        try:
-            raw = com.ReferenceProduct.ShowFlag
-            val = int(raw)
-            hidden = val == 0
-            logger.debug(f"[VIS] {tag}: ReferenceProduct.ShowFlag={raw!r} → hidden={hidden}")
-            return hidden
-        except Exception as e:
-            logger.debug(f"[VIS] {tag}: ReferenceProduct.ShowFlag 不可用 ({e})")
-
-        # 所有路径均失败 → 输出 com_object 上可用属性，便于进一步排查
-        try:
-            attrs = [a for a in dir(com) if not a.startswith("_")]
-            logger.debug(f"[VIS] {tag}: 全部路径失败，com_object 可用属性: {attrs}")
-        except Exception:
-            pass
-        logger.debug(f"[VIS] {tag}: 无法读取可见性，视为可见")
         return False
 
     def _traverse(
