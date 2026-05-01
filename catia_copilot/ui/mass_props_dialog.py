@@ -414,7 +414,7 @@ class MassPropsDialog(QDialog):
         row1.addSpacing(4); row1.addWidget(_sep2); row1.addSpacing(4)
 
         # 显示列
-        row1.addWidget(QLabel("排序列:"))
+        row1.addWidget(QLabel("显示列:"))
         self._hid_col_checks: dict[str, QCheckBox] = {}
         for col_name in MASS_PROPS_HIDEABLE_COLUMNS:
             cb = QCheckBox(MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
@@ -503,7 +503,7 @@ class MassPropsDialog(QDialog):
         summary_opts_layout = QHBoxLayout(self._summary_opts_widget)
         summary_opts_layout.setContentsMargins(0, 0, 0, 0)
         summary_opts_layout.setSpacing(6)
-        summary_opts_layout.addWidget(QLabel("排序:"))
+        summary_opts_layout.addWidget(QLabel("排序列:"))
         self._sort_col_combo = QComboBox()
         self._sort_col_combo.addItem("（不排序）", "")
         for col in _SUMMARY_SORT_COLUMNS:
