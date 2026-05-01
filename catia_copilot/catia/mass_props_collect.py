@@ -682,6 +682,7 @@ def collect_mass_props_rows(
     file_path: str | None,
     progress_callback: Callable[[int], None] | None = None,
     read_mode: str = "all",
+    skip_hidden: bool = False,
 ) -> list[dict]:
     """遍历产品树，返回每个节点的质量特性行列表。
 
@@ -701,6 +702,9 @@ def collect_mass_props_rows(
             "first" — 仅读取惯量包络体.1；
             "last"  — 读取编号最大的惯量包络体；
             "all"   — 全部读取并按平行轴定理汇总（默认）。
+        skip_hidden:
+            若为 True，则跳过处于隐藏状态的节点：
+            零件隐藏时不读取该行；产品/部件隐藏时连同其全部子孙一并跳过。
 
     返回：
         行字典列表，每行含以下键：
@@ -735,6 +739,21 @@ def collect_mass_props_rows(
                 pass
         return ""
 
+    def _is_hidden(product) -> bool:
+        """检查节点在父装配中是否处于隐藏状态。
+        优先读取 ShowFlag（0=隐藏 / 1=可见），不可用时回退到 Visibility。
+        读取失败则保守地视为可见，返回 False。
+        """
+        try:
+            return int(product.com_object.ShowFlag) == 0  # catNoShow=0
+        except Exception:
+            pass
+        try:
+            return int(product.com_object.Visibility) == 0  # catVisNoShow=0
+        except Exception:
+            pass
+        return False
+
     def _traverse(
         product,
         rows: list,
@@ -754,6 +773,10 @@ def collect_mass_props_rows(
             documents:        CATIA Application.Documents 集合，用于查找零件文档。
         """
         nonlocal _total_count
+
+        # 忽略隐藏节点：若启用且当前节点处于隐藏状态，则跳过该节点及其全部子孙
+        if skip_hidden and level >= 1 and _is_hidden(product):
+            return
 
         # 读取零件号（PartNumber）；失败时退而使用名称去掉扩展名
         try:

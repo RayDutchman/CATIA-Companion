@@ -177,6 +177,9 @@ class MassPropsDialog(QDialog):
         if self._read_mode not in ("first", "last", "all"):
             self._read_mode = "all"
 
+        # ── 忽略隐藏节点 ──────────────────────────────────────────────────────
+        self._skip_hidden: bool = self._settings.value("skip_hidden", False, type=bool)
+
         # ── 汇总BOM专用选项 ───────────────────────────────────────────────────
         self._summary_sort_column: str = self._settings.value(
             "summary_sort_column", ""
@@ -420,6 +423,19 @@ class MassPropsDialog(QDialog):
             cb.toggled.connect(self._on_col_visibility_changed)
             row1.addWidget(cb)
             self._hid_col_checks[col_name] = cb
+
+        _sep3 = QFrame(); _sep3.setFrameShape(QFrame.Shape.VLine)
+        _sep3.setFrameShadow(QFrame.Shadow.Sunken)
+        row1.addSpacing(4); row1.addWidget(_sep3); row1.addSpacing(4)
+
+        # 忽略隐藏节点
+        self._skip_hidden_chk = QCheckBox("忽略隐藏的节点")
+        self._skip_hidden_chk.setChecked(self._skip_hidden)
+        self._skip_hidden_chk.setToolTip(
+            "勾选时：零件处于隐藏状态则跳过；产品/部件处于隐藏状态则连同其子孙一并跳过"
+        )
+        self._skip_hidden_chk.toggled.connect(self._on_skip_hidden_changed)
+        row1.addWidget(self._skip_hidden_chk)
 
         row1.addStretch()
         opts_main.addLayout(row1)
@@ -688,6 +704,10 @@ class MassPropsDialog(QDialog):
             self._read_mode = "all"
         self._settings.setValue("read_mode", self._read_mode)
 
+    def _on_skip_hidden_changed(self, checked: bool) -> None:
+        self._skip_hidden = self._skip_hidden_chk.isChecked()
+        self._settings.setValue("skip_hidden", self._skip_hidden)
+
     def _on_unit_changed(self, checked: bool) -> None:
         self._mass_unit = "g" if self._radio_mass_g.isChecked() else "kg"
         self._cog_unit  = "mm" if self._radio_cog_mm.isChecked() else "m"
@@ -806,7 +826,8 @@ class MassPropsDialog(QDialog):
 
         try:
             rows = collect_mass_props_rows(file_path, progress_callback=_on_row_collected,
-                                           read_mode=self._read_mode)
+                                           read_mode=self._read_mode,
+                                           skip_hidden=self._skip_hidden)
         except Exception as e:
             progress.close()
             logger.error(f"加载质量特性失败: {e}")
