@@ -318,9 +318,9 @@ class MassPropsDialog(QDialog):
 
         # ── 前提条件说明（窗口过窄时允许截断）──────────────────────────────
         prereq_lbl = QLabel(
-            "⚠ 使用说明：本功能读取指定产品树下的每个零件的惯量测量结果、"
+            "⚠ 使用说明：本功能读取指定产品树下的每个零件的'测量惯量'结果、"
             "在根产品中的位置，计算出根产品的重量、重心、转动惯量。"
-            "请在 CATIA 中 <b>单独打开</b> 每个零件,执行惯量测量并勾选 <b>保持测量</b>,"
+            "请在 CATIA 中 <b>单独打开</b> 每个零件,执行'测量惯量'并勾选 <b>保持测量</b>,"
             f"测量结果必须命名为 <b>惯量包络体.x</b>（x 为 1–{MAX_INERTIA_INDEX} 的整数）。"
             "在产品窗口中建立的惯量包络体的坐标系为根产品坐标系（即使当前工作对象是零件），"
             "这会导致坐标系与根产品不重合的零件的测量结果不正确。"
@@ -370,6 +370,7 @@ class MassPropsDialog(QDialog):
         self._bom_type_group = QButtonGroup(self)
         self._radio_hier = QRadioButton("层级BOM")
         self._radio_summ = QRadioButton("汇总BOM")
+        self._radio_summ.setMinimumHeight(24)
         self._radio_hier.setChecked(not self._summarize)
         self._radio_summ.setChecked(self._summarize)
         self._bom_type_group.addButton(self._radio_hier)
@@ -400,7 +401,7 @@ class MassPropsDialog(QDialog):
         self._radio_read_first.toggled.connect(self._on_read_mode_changed)
         self._radio_read_last.toggled.connect(self._on_read_mode_changed)
         self._radio_read_all.toggled.connect(self._on_read_mode_changed)
-        row1.addWidget(QLabel("读取:"))
+        row1.addWidget(QLabel("惯量包络体读取:"))
         row1.addWidget(self._radio_read_first)
         row1.addWidget(self._radio_read_last)
         row1.addWidget(self._radio_read_all)
@@ -410,7 +411,7 @@ class MassPropsDialog(QDialog):
         row1.addSpacing(4); row1.addWidget(_sep2); row1.addSpacing(4)
 
         # 显示列
-        row1.addWidget(QLabel("列:"))
+        row1.addWidget(QLabel("排序列:"))
         self._hid_col_checks: dict[str, QCheckBox] = {}
         for col_name in MASS_PROPS_HIDEABLE_COLUMNS:
             cb = QCheckBox(MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
@@ -431,6 +432,7 @@ class MassPropsDialog(QDialog):
         self._mass_unit_group = QButtonGroup(self)
         self._radio_mass_g  = QRadioButton("g")
         self._radio_mass_kg = QRadioButton("kg")
+        self._radio_mass_g.setMinimumHeight(24)
         self._radio_mass_g.setChecked(self._mass_unit == "g")
         self._radio_mass_kg.setChecked(self._mass_unit == "kg")
         self._mass_unit_group.addButton(self._radio_mass_g)
