@@ -4,7 +4,7 @@
 
 本文件演示如何通过 win32com 后期绑定（late-binding）接口，
 枚举并读取 CATIA 当前活动文档中的 **所有参数**（Parameters 集合），
-包括参数名称、类型、数值以及单位。
+包括参数名称、类型与数值。
 
 适用文档类型
 ------------
@@ -18,19 +18,37 @@
 
 win32com 后期绑定与参数读取说明
 --------------------------------
-CATIA 参数对象（Parameter）的常用属性：
+CATIA 参数对象（Parameter）有两种常用的取值方式，行为差异如下：
 
+  param.ValueAsString()
+      返回 **含单位的格式化字符串**，例如 "10.5mm"、"2.3kg"。
+      这是 CATIA 内部按用户显示格式拼接的字符串，单位已嵌入其中。
+      本例程使用此方法读取并打印参数值。
+
+  param.Value
+      返回 **裸 SI 数值**（Python float），例如 0.0105（单位 m）、
+      0.0023（单位 kg）。CATIA 内部始终以 SI 单位（kg / m / kg·m²）
+      存储数值，Value 直接暴露该原始浮点数，不携带任何单位信息。
+      mass_props_collect.py 正是通过 param.Value 读取 Keep 测量参数，
+      因为后续代码需要对数值做换算，刻意避免解析带单位的字符串。
+
+  param.UserUnit（RealParam 专属）
+      理论上返回用户为该参数设置的显示单位字符串（如 "mm"、"kg"）。
+      但在 win32com **后期绑定**（late-binding）模式下，CATIA 的
+      Parameters 集合以基类 Parameter 接口暴露所有参数，无法直接
+      访问 RealParam 子类的 UserUnit 属性，调用通常会抛出 COM 异常
+      并返回空串，因此本例程不再尝试读取该属性。
+
+综上：
+- 若只需**显示**参数值，用 ValueAsString()，单位已包含在字符串里。
+- 若需**数值计算**，用 Value，得到裸 SI float，再自行按需换算。
+- 不要依赖 UserUnit 在后期绑定下正常工作。
+
+其他常用属性
+------------
   param.Name          # 完整参数名，例如 "Part1\\质量"
-  param.Value         # 当前值（Python float / int / str，取决于参数类型）
   param.UserAccessMode# 0=读写, 1=只读, 2=隐藏
   param.Comment       # 备注字符串（可能为空）
-
-此外，若需获取 **带单位的字符串**（如 "10.5mm"），可调用：
-  param.ValueAsString()  # 返回含单位的字符串
-
-对于 RealParam（实数类型），还支持：
-  param.UserUnit       # 用户单位字符串，如 "mm"、"kg"
-  param.Magnitude      # 量纲字符串，如 "LENGTH"、"MASS"
 
 注意事项
 --------
@@ -54,7 +72,13 @@ import win32com.client
 # 辅助：从参数对象安全读取带单位的字符串表示
 # ─────────────────────────────────────────────────────────────────────────────
 def _value_str(param) -> str:
-    """返回参数的字符串表示（含单位）。失败时退回 str(param.Value)。"""
+    """返回 ValueAsString() 的结果（含单位），失败时退回 str(param.Value)。
+
+    ValueAsString() 返回 CATIA 格式化后的字符串，单位已嵌入其中，例如
+    "10.5mm"、"2.3kg"。注意：这与 param.Value 返回的裸 SI float 不同——
+    param.Value 不含单位，适合做数值计算（mass_props_collect.py 即使用
+    param.Value 以便后续统一换算）。
+    """
     try:
         return param.ValueAsString()
     except Exception:
@@ -62,14 +86,6 @@ def _value_str(param) -> str:
             return str(param.Value)
         except Exception:
             return "<不可读>"
-
-
-def _user_unit(param) -> str:
-    """返回参数的用户单位（仅 RealParam 有效）。无单位时返回空串。"""
-    try:
-        return str(param.UserUnit)
-    except Exception:
-        return ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -87,7 +103,12 @@ def print_all_parameters(params_com, title: str = "") -> list[dict]:
     Returns
     -------
     list[dict]  每个参数的字典，键为：
-                  name, value_str, value_raw, user_unit, comment
+                  name, value_str, value_raw, comment
+
+    注意：不再返回 user_unit。在 win32com 后期绑定模式下，Parameters 集合
+    以基类 Parameter 接口暴露参数，无法访问 RealParam 子类的 UserUnit 属性，
+    调用通常会抛出 COM 异常。单位信息已包含在 value_str（ValueAsString()）
+    的字符串里，无需单独的单位列。
     """
     try:
         count = params_com.Count
@@ -100,16 +121,15 @@ def print_all_parameters(params_com, title: str = "") -> list[dict]:
         print(f"  文档：{title}")
     print(f"  共找到 {count} 个参数")
     print(f"{'=' * 60}")
-    print(f"  {'#':<5} {'参数名':<45} {'值（含单位）':<20} {'用户单位'}")
-    print(f"  {'-' * 5} {'-' * 45} {'-' * 20} {'-' * 10}")
+    print(f"  {'#':<5} {'参数名':<45} {'值（含单位）'}")
+    print(f"  {'-' * 5} {'-' * 45} {'-' * 20}")
 
     results = []
     for i in range(1, count + 1):          # COM 集合索引从 1 开始
         try:
             param = params_com.Item(i)
-            name       = str(param.Name)
-            val_str    = _value_str(param)
-            unit       = _user_unit(param)
+            name    = str(param.Name)
+            val_str = _value_str(param)
 
             # 尝试读取注释（部分参数没有 Comment 属性）
             try:
@@ -123,14 +143,13 @@ def print_all_parameters(params_com, title: str = "") -> list[dict]:
             except Exception:
                 val_raw = None
 
-            print(f"  {i:<5} {name:<45} {val_str:<20} {unit}")
+            print(f"  {i:<5} {name:<45} {val_str}")
 
             results.append({
-                "name":       name,
-                "value_str":  val_str,
-                "value_raw":  val_raw,
-                "user_unit":  unit,
-                "comment":    comment,
+                "name":      name,
+                "value_str": val_str,
+                "value_raw": val_raw,
+                "comment":   comment,
             })
 
         except Exception as exc:
@@ -192,7 +211,7 @@ def main():
     if matches:
         print(f"包含关键词 '{search_keyword}' 的参数：")
         for m in matches:
-            print(f"  {m['name']} = {m['value_str']}  ({m['user_unit']})")
+            print(f"  {m['name']} = {m['value_str']}")
     else:
         print(f"未找到包含关键词 '{search_keyword}' 的参数。")
 
