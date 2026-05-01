@@ -241,6 +241,18 @@ def _read_keep_inertia_params(
             except Exception:
                 return None
 
+        # ── 一次性枚举全部参数名，用于快速跳过不存在的编号 ────────────────────────
+        # params.Count + params.Item(i).Name 共 (1 + N) 次 COM 调用，换取对每个缺失
+        # 编号的 mass_key 做 O(1) set 查找，避免后续对不存在参数触发 COM 异常。
+        # 枚举失败时 all_names 保持 None，退回原有逐一 Item() 查询行为。
+        all_names: set[str] | None = None
+        try:
+            cnt = params.Count
+            all_names = {params.Item(i).Name for i in range(1, cnt + 1)}
+            logger.debug(f"{tag}枚举到 {cnt} 个参数名")
+        except Exception:
+            pass  # 无法枚举时回退到逐一查询
+
         # ── 确定需要扫描的编号范围 ────────────────────────────────────────────────
         if read_mode == "first":
             check_indices = [1]
@@ -260,6 +272,10 @@ def _read_keep_inertia_params(
             prefix_ok = None
             mass_si = None
             for pfix in prefixes:
+                mass_key = pfix + "质量"
+                # 若已枚举参数名且 mass_key 不在其中，可直接跳过，无需触发 COM 异常
+                if all_names is not None and mass_key not in all_names:
+                    continue
                 v = _get(pfix, "质量")
                 if v is not None and v > 0.0:
                     prefix_ok = pfix
