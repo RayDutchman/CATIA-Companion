@@ -884,13 +884,13 @@ class MassPropsDialog(QDialog):
                 "all":   f"「惯量包络体.1」至「惯量包络体.{MAX_INERTIA_INDEX}」",
             }.get(self._read_mode, "惯量包络体")
             QMessageBox.information(
-                self, "部分零件测量失败",
-                f"有 {failed_count} 个零件节点无法完成质量特性测量（显示橙色背景）。\n\n"
+                self, "部分零件质量特性读取失败",
+                f"有 {failed_count} 个零件节点无法完成质量特性读取（显示橙色背景）。\n\n"
                 "可能原因：\n"
-                "  • 零件文档未加载到CATIA会话中\n"
+                "  • 零件文档无法加载到CATIA会话中\n"
                 f"  • 当前读取模式要求的 {_read_mode_desc} 保持测量不存在\n"
-                "  • 测量是在产品环境下建立的（使用产品坐标系，不会被读取）\n"
-                "  • 需单独打开零件文件，在SPA中建立惯量保持测量\n\n"
+                "  • 惯量包络体建立在产品中，而不是零件中\n"
+                "  • 需单独打开零件文件，测量惯量并勾选保持测量\n\n"
                 "未能测量的零件不参与最终汇总计算。",
             )
 
