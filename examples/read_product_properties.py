@@ -200,38 +200,25 @@ def print_all_properties(product, indent: str = "") -> None:
 
 if __name__ == "__main__":
     from pycatia import catia
+    from pycatia.product_structure_interfaces.product_document import ProductDocument
 
     caa = catia()
     app = caa.application
 
-    # 获取当前活动文档的根产品
-    # 支持 .CATProduct 和 .CATPart 文档
+    # 获取当前活动文档
+    # bom_collect.py 的做法：直接用 ProductDocument 包装 com_object，
+    # 该方法对 .CATPart 和 .CATProduct 均有效，无需探测文档类型。
     active_doc = app.active_document
-    com_doc = active_doc.com_object
+    com_doc    = active_doc.com_object
 
-    # 用 try/except 探测文档类型，比 .Type 属性字符串更可靠
-    # （.Type 在部分 CATIA 版本 / win32com 后期绑定下会抛异常或返回意外值）
-    is_product = False
-    try:
-        com_doc.Product   # ProductDocument 有此 COM 属性；PartDocument 会抛异常
-        is_product = True
-    except Exception:
-        pass
-
-    if is_product:
-        from pycatia.product_structure_interfaces.product_document import ProductDocument
-        root = ProductDocument(com_doc).product
+    # 通过文件扩展名区分零件 / 产品，仅用于展示信息（不影响后续读取）
+    doc_name = active_doc.full_name
+    if doc_name.lower().endswith(".catpart"):
+        print(f"当前文档为 .CATPart：{doc_name}")
     else:
-        # 检查是否为 Part 文档，给出友好提示
-        try:
-            com_doc.Part   # PartDocument 有此 COM 属性
-            print("当前文档为 .CATPart，本例程针对产品文档（.CATProduct）。")
-            print(f"文档名称: {com_doc.Name}")
-            raise SystemExit(0)
-        except SystemExit:
-            raise
-        except Exception:
-            raise RuntimeError("不支持的文档类型，请先在 CATIA 中打开一个 .CATProduct 文件。")
+        print(f"当前文档为 .CATProduct：{doc_name}")
+
+    root = ProductDocument(com_doc).product
 
     print("=" * 55)
     print("读取根产品的内置属性与用户自定义属性")
