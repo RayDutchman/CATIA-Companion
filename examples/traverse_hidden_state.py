@@ -97,7 +97,8 @@ def is_instance_hidden(product, application) -> bool:
         # 时对其调用 int()，导致 TypeError。
         result = sel.VisProperties.GetShow(0)
 
-        # 部分 CATIA 版本可能将返回值包装为 tuple，取最后一个元素
+        # 部分 CATIA 版本可能将返回值包装为 tuple，取最后一个元素。
+        # 使用 diagnose_getshow_return_type() 可在本机确认实际类型。
         show_val = result[-1] if isinstance(result, tuple) else result
         return bool(show_val) if show_val is not None else False
 
@@ -197,6 +198,76 @@ def collect_hidden_states(
 
 
 # ---------------------------------------------------------------------------
+# 诊断工具：确认 GetShow(0) 在本机 CATIA / win32com 版本下的实际返回类型
+# ---------------------------------------------------------------------------
+
+def diagnose_getshow_return_type(product, application) -> None:
+    """在控制台打印 GetShow(0) 的原始返回值及其 Python 类型。
+
+    目的
+    ----
+    文档注释中提到"部分 CATIA 版本可能将返回值包装为 tuple"。本函数直接把
+    ``sel.VisProperties.GetShow(0)`` 的原始返回值打印出来，让你一眼看清：
+
+    - 你的环境里它是 ``int``（最常见）还是 ``tuple``（少数版本）；
+    - 如果是 tuple，它包含几个元素，每个元素是什么类型；
+    - 最终 ``show_val`` 会被解析为哪个整数，0=可见 / 1=隐藏。
+
+    用法
+    ----
+    在 ``__main__`` 中传入产品树的第一个子节点即可，也可以传任意节点::
+
+        diagnose_getshow_return_type(first_child, app)
+
+    参数
+    ----
+    product     : pycatia Product 包装对象（任意非根节点）
+    application : CATIA Application COM 对象
+    """
+    com = product.com_object
+    sel = None
+    print("─" * 55)
+    print("【诊断】GetShow(0) 返回类型")
+    print("─" * 55)
+    try:
+        sel = application.com_object.ActiveDocument.Selection
+        sel.Clear()
+        sel.Add(com)
+
+        result = sel.VisProperties.GetShow(0)
+
+        print(f"  原始返回值  : {result!r}")
+        print(f"  Python 类型 : {type(result).__name__}")
+
+        if isinstance(result, tuple):
+            print(f"  元组长度    : {len(result)}")
+            for idx, elem in enumerate(result):
+                print(f"    [{idx}] {elem!r}  ({type(elem).__name__})")
+            show_val = result[-1]
+            print(f"  取最后元素  : {show_val!r}")
+        else:
+            show_val = result
+            print("  不是元组，直接使用返回值")
+
+        if show_val is None:
+            print("  show_val 为 None，视为可见（False）")
+        else:
+            hidden = bool(show_val)
+            label = "隐藏（catVisNoShow=1）" if hidden else "可见（catVisShow=0）"
+            print(f"  解析结果    : {label}")
+
+    except Exception as exc:
+        print(f"  [错误] {exc}")
+    finally:
+        try:
+            if sel is not None:
+                sel.Clear()
+        except Exception:
+            pass
+    print("─" * 55)
+
+
+# ---------------------------------------------------------------------------
 # 主入口：直接运行本脚本即可演示遍历与隐藏状态读取
 # ---------------------------------------------------------------------------
 
@@ -209,6 +280,14 @@ if __name__ == "__main__":
     product_doc = ProductDocument(app.active_document.com_object)
     root = product_doc.product
 
+    # ── 诊断：先打印 GetShow(0) 的实际返回类型，确认是 int 还是 tuple ──────
+    try:
+        first_child = root.products.item(1)
+        diagnose_getshow_return_type(first_child, app)
+    except Exception as _e:
+        print(f"[诊断跳过] 产品树无子节点或读取失败：{_e}")
+
+    print()
     print("=== 遍历产品树：显示每个节点的可见状态 ===\n")
     traverse_and_print_hidden(root, app, level=0)
 
