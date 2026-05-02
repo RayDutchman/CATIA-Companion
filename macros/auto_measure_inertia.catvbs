@@ -1,0 +1,295 @@
+Option Explicit
+
+' ============================================================
+' auto_measure_inertia.catvbs   (VBScript / CATScript)
+'
+' 功能概述：
+'   在 CATIA V5 零件文档中，通过 SPAWorkbench 自动创建"测量惯量（保持测量）"
+'   特征（即参数树中的"惯量包络体.1"），供后续 Python 端直接读取 Keep 参数。
+'
+'   · 若零件已有"惯量包络体.1\质量"参数（即已完成 Keep 测量），
+'     脚本跳过创建，仅弹窗报告当前质量，保证幂等性。
+'   · 测量对象为零件的第一个几何体（Bodies.Item(1)，通常为"零件体"）。
+'     若零件含多个几何体但需要整体测量，请手动在 CATIA SPA 中操作后再运行其他脚本。
+'   · 创建后调用 Part.Update() 刷新参数值，并弹窗显示质量 / 重心 / 惯量主对角
+'     元素，便于在 CATIA 中验证结果。
+'
+' 先决条件：
+'   · 零件文档已在 CATIA 中打开，且含有有效的实体几何（PartBody 非空）。
+'   · CATIA 语言包为中文（参数名包含中文字符"惯量包络体"）；
+'     若使用英文版 CATIA，惯量包络体的名称将为"Inertia.1"，需自行修改
+'     脚本中的检测字符串。
+'
+' iParameters 用法（由 SystemService.ExecuteScript 传入，也可直接在宏编辑器中运行）：
+'   iParameters — 目标零件的零件编号（PartNumber 字符串，可选）。
+'     · 若提供且非空：遍历已打开的 PartDocument，按 PartNumber 定位并激活，
+'       再执行测量创建。
+'     · 若为空或省略：对 CATIA 当前活动文档执行。
+'
+' 输出：
+'   成功时弹窗显示：零件编号、质量（kg）、重心（mm）、Ixx/Iyy/Izz（kg·m²）
+'   已存在时弹窗报告当前质量并跳过。
+'   失败时弹窗显示具体错误信息，便于诊断（几何体为空、文档类型错误等）。
+' ============================================================
+
+Sub CATMain(iParameters)
+
+    ' ── 获取 CATIA 应用对象 ────────────────────────────────────────────────
+    Dim CATIA
+    Set CATIA = GetObject(, "CATIA.Application")
+
+    ' ── 解析 iParameters：目标零件编号（PartNumber，可选）───────────────────
+    Dim targetPN
+    targetPN = ""
+    On Error Resume Next
+    targetPN = CStr(iParameters)
+    If Err.Number <> 0 Then targetPN = ""
+    Err.Clear
+    On Error GoTo 0
+
+    ' ── 定位目标 PartDocument ──────────────────────────────────────────────
+    Dim partDoc
+    Set partDoc = Nothing
+
+    If targetPN <> "" Then
+        ' 按零件编号在已打开文档中查找
+        Dim i, found
+        found = False
+        On Error Resume Next
+        For i = 1 To CATIA.Documents.Count
+            Dim doc
+            Set doc = CATIA.Documents.Item(i)
+            If Err.Number = 0 And TypeName(doc) = "PartDocument" Then
+                Dim pn
+                pn = doc.Product.PartNumber
+                If Err.Number = 0 And pn = targetPN Then
+                    Set partDoc = doc
+                    partDoc.Activate
+                    found = True
+                    Exit For
+                End If
+            End If
+            Err.Clear
+        Next
+        On Error GoTo 0
+
+        If Not found Then
+            MsgBox "未找到零件编号为 [" & targetPN & "] 的 PartDocument。" & vbCrLf & _
+                   "请确认该零件文档已在 CATIA 中打开。", _
+                   vbExclamation, "auto_measure_inertia"
+            Exit Sub
+        End If
+    Else
+        ' 使用当前活动文档
+        On Error Resume Next
+        If CATIA.Documents.Count = 0 Then
+            MsgBox "没有已打开的文档，已退出。", vbExclamation, "auto_measure_inertia"
+            Exit Sub
+        End If
+        If TypeName(CATIA.ActiveDocument) <> "PartDocument" Then
+            MsgBox "当前活动文档不是 PartDocument（类型=" & TypeName(CATIA.ActiveDocument) & "）。" & vbCrLf & _
+                   "请先激活一个零件文档，或通过 iParameters 传入零件编号。", _
+                   vbExclamation, "auto_measure_inertia"
+            Exit Sub
+        End If
+        Set partDoc = CATIA.ActiveDocument
+        On Error GoTo 0
+    End If
+
+    ' ── 获取 Part 对象与零件编号 ───────────────────────────────────────────
+    Dim part
+    Set part = partDoc.Part
+
+    Dim actualPN
+    On Error Resume Next
+    actualPN = part.PartNumber
+    If Err.Number <> 0 Or actualPN = "" Then actualPN = "(读取失败)"
+    Err.Clear
+    On Error GoTo 0
+
+    ' ── 幂等性检查：若"惯量包络体.1\质量"参数已存在，则跳过创建 ──────────
+    ' 参数名前缀规则：CATIA 以零件编号作为顶层命名空间，
+    '   若 actualPN 非空则用 "<PN>\惯量包络体.1\质量"，否则用 "惯量包络体.1\质量"
+    Dim checkPrefix
+    If actualPN <> "" And actualPN <> "(读取失败)" Then
+        checkPrefix = actualPN & "\惯量包络体.1\"
+    Else
+        checkPrefix = "惯量包络体.1\"
+    End If
+
+    If ParameterExists(part.Parameters, checkPrefix & "质量") Then
+        ' 已有 Keep 测量，读出当前质量值汇报后退出
+        Dim existMass
+        existMass = "（读取失败）"
+        On Error Resume Next
+        existMass = CStr(part.Parameters.Item(checkPrefix & "质量").Value)
+        Err.Clear
+        On Error GoTo 0
+        MsgBox "零件 [" & actualPN & "] 已存在惯量包络体.1（质量 = " & existMass & " kg），无需重复创建。", _
+               vbInformation, "auto_measure_inertia"
+        Exit Sub
+    End If
+
+    ' ── 获取第一个几何体（零件体）引用 ─────────────────────────────────────
+    Dim oBody
+    On Error Resume Next
+    Set oBody = part.Bodies.Item(1)
+    If Err.Number <> 0 Or oBody Is Nothing Then
+        MsgBox "零件 [" & actualPN & "] 无法访问 Bodies.Item(1)：" & vbCrLf & _
+               "错误 " & Err.Number & "：" & Err.Description & vbCrLf & vbCrLf & _
+               "请确认零件含有实体几何体（PartBody）。", _
+               vbExclamation, "auto_measure_inertia"
+        Err.Clear
+        On Error GoTo 0
+        Exit Sub
+    End If
+    On Error GoTo 0
+
+    ' ── 创建到几何体的引用 ─────────────────────────────────────────────────
+    Dim oRef
+    On Error Resume Next
+    Set oRef = part.CreateReferenceFromObject(oBody)
+    If Err.Number <> 0 Or oRef Is Nothing Then
+        MsgBox "无法为 Bodies.Item(1) 创建引用：" & vbCrLf & _
+               "错误 " & Err.Number & "：" & Err.Description, _
+               vbExclamation, "auto_measure_inertia"
+        Err.Clear
+        On Error GoTo 0
+        Exit Sub
+    End If
+    On Error GoTo 0
+
+    ' ── 获取 SPAWorkbench ──────────────────────────────────────────────────
+    Dim oSPA
+    On Error Resume Next
+    Set oSPA = partDoc.GetWorkbench("SPAWorkbench")
+    If Err.Number <> 0 Or oSPA Is Nothing Then
+        MsgBox "无法获取 SPAWorkbench：" & vbCrLf & _
+               "错误 " & Err.Number & "：" & Err.Description & vbCrLf & vbCrLf & _
+               "请确认 CATIA SPA（惯量分析）模块已安装并授权。", _
+               vbExclamation, "auto_measure_inertia"
+        Err.Clear
+        On Error GoTo 0
+        Exit Sub
+    End If
+    On Error GoTo 0
+
+    ' ── 通过 Measurable.GetMeasurableInertia() 创建 Keep 惯量测量 ─────────
+    ' GetMeasurable(ref) 返回 Measurable 接口；
+    ' 调用 GetMeasurableInertia() 会在零件树中创建持久化的"惯量包络体.1"特征
+    ' 并返回 MeasureInertia 对象，可直接读取测量结果。
+    Dim oMeasurable
+    On Error Resume Next
+    Set oMeasurable = oSPA.GetMeasurable(oRef)
+    If Err.Number <> 0 Or oMeasurable Is Nothing Then
+        MsgBox "GetMeasurable() 失败：" & vbCrLf & _
+               "错误 " & Err.Number & "：" & Err.Description & vbCrLf & vbCrLf & _
+               "可能原因：零件体为空或无实体几何。", _
+               vbExclamation, "auto_measure_inertia"
+        Err.Clear
+        On Error GoTo 0
+        Exit Sub
+    End If
+    On Error GoTo 0
+
+    Dim oMI
+    On Error Resume Next
+    Set oMI = oMeasurable.GetMeasurableInertia()
+    If Err.Number <> 0 Or oMI Is Nothing Then
+        MsgBox "GetMeasurableInertia() 失败：" & vbCrLf & _
+               "错误 " & Err.Number & "：" & Err.Description & vbCrLf & vbCrLf & _
+               "可能原因：" & vbCrLf & _
+               "  · 零件体无实体几何（面积/体积为零）" & vbCrLf & _
+               "  · CATIA 版本不支持该 API（建议 V5R20 及以上）", _
+               vbExclamation, "auto_measure_inertia"
+        Err.Clear
+        On Error GoTo 0
+        Exit Sub
+    End If
+    On Error GoTo 0
+
+    ' ── 刷新零件，使 Keep 参数值写入参数树 ────────────────────────────────
+    On Error Resume Next
+    part.Update
+    If Err.Number <> 0 Then
+        MsgBox "Part.Update() 失败（非致命，测量特征可能已创建但参数值未刷新）：" & vbCrLf & _
+               "错误 " & Err.Number & "：" & Err.Description, _
+               vbExclamation, "auto_measure_inertia"
+        Err.Clear
+    End If
+    On Error GoTo 0
+
+    ' ── 从 MeasureInertia 对象直接读取测量结果用于报告 ─────────────────────
+    ' MeasureInertia 属性（CATIA 原始单位）：
+    '   .Mass              — 质量，kg
+    '   .GX / .GY / .GZ   — 重心坐标，mm（零件局部坐标系）
+    '   .P1X / .P1Y / .P1Z — 第一主轴方向（无量纲）
+    '   .Ixx / .Iyy / .Izz — 对角惯量分量，kg·m²
+    Dim massVal, gxVal, gyVal, gzVal, ixxVal, iyyVal, izzVal
+    massVal = "?": gxVal = "?": gyVal = "?": gzVal = "?": ixxVal = "?": iyyVal = "?": izzVal = "?"
+
+    On Error Resume Next
+    massVal = FormatNumber(oMI.Mass,    6)
+    gxVal   = FormatNumber(oMI.GX,     4)
+    gyVal   = FormatNumber(oMI.GY,     4)
+    gzVal   = FormatNumber(oMI.GZ,     4)
+    ixxVal  = FormatNumber(oMI.Ixx,    6)
+    iyyVal  = FormatNumber(oMI.Iyy,    6)
+    izzVal  = FormatNumber(oMI.Izz,    6)
+    Err.Clear
+    On Error GoTo 0
+
+    ' ── 验证：确认 Keep 参数已出现在参数树中 ─────────────────────────────
+    Dim keepOK
+    keepOK = ParameterExists(part.Parameters, checkPrefix & "质量")
+
+    ' ── 汇报结果 ──────────────────────────────────────────────────────────
+    Dim resultMsg
+    resultMsg = "零件 [" & actualPN & "] 惯量包络体创建" & IIf(keepOK, "成功", "完成（参数树验证失败，请检查）") & "！" & vbCrLf & vbCrLf & _
+                "── MeasureInertia 测量结果（CATIA 原始单位）─────────────────" & vbCrLf & _
+                "  质量（Mass）    = " & massVal & " kg" & vbCrLf & _
+                "  重心 Gx         = " & gxVal   & " mm" & vbCrLf & _
+                "  重心 Gy         = " & gyVal   & " mm" & vbCrLf & _
+                "  重心 Gz         = " & gzVal   & " mm" & vbCrLf & _
+                "  Ixx（IoxG）     = " & ixxVal  & " kg·m²" & vbCrLf & _
+                "  Iyy（IoyG）     = " & iyyVal  & " kg·m²" & vbCrLf & _
+                "  Izz（IozG）     = " & izzVal  & " kg·m²" & vbCrLf & vbCrLf & _
+                "── 验证 ──────────────────────────────────────────────────────" & vbCrLf & _
+                "  参数树中「" & checkPrefix & "质量」= " & IIf(keepOK, "已存在 ✔", "未找到 ✘（异常！）") & vbCrLf & vbCrLf & _
+                "下一步：" & vbCrLf & _
+                "  · 如需在 Python 端读取，请重新运行「加载」即可（无需其他操作）。" & vbCrLf & _
+                "  · 如需绑定 MP_* 用户参数，请运行 create_mass_relations.catvbs。"
+
+    MsgBox resultMsg, vbInformation, "auto_measure_inertia"
+
+End Sub
+
+
+' ============================================================
+' IIf — VBScript 没有内置 IIf，此处手动实现
+' ============================================================
+Private Function IIf(condition, trueVal, falseVal)
+    If condition Then
+        IIf = trueVal
+    Else
+        IIf = falseVal
+    End If
+End Function
+
+
+' ============================================================
+' ParameterExists — 检查指定全名的参数是否存在于 Parameters 集合
+'
+' 参数：
+'   params    — Part.Parameters 集合
+'   fullName  — 参数全名（含路径前缀，如 "<PN>\惯量包络体.1\质量"）
+' 返回：True 表示参数存在，False 表示不存在
+' ============================================================
+Private Function ParameterExists(params, fullName)
+    On Error Resume Next
+    Dim p
+    Set p = params.Item(fullName)
+    ParameterExists = (Err.Number = 0 And IsObject(p) And Not p Is Nothing)
+    Err.Clear
+    On Error GoTo 0
+End Function
