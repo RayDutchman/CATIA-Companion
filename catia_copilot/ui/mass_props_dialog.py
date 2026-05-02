@@ -181,6 +181,9 @@ class MassPropsDialog(QDialog):
         # ── 忽略隐藏节点 ──────────────────────────────────────────────────────
         self._skip_hidden: bool = self._settings.value("skip_hidden", False, type=bool)
 
+        # ── 使用当前活动文档 ──────────────────────────────────────────────────
+        self._use_active: bool = self._settings.value("use_active", True, type=bool)
+
         # ── 汇总BOM专用选项 ───────────────────────────────────────────────────
         self._summary_sort_column: str = self._settings.value(
             "summary_sort_column", ""
@@ -342,6 +345,7 @@ class MassPropsDialog(QDialog):
 
         # ── 数据来源选择 ────────────────────────────────────────────────────
         self._use_active_chk = QCheckBox("使用当前CATIA活动文档（不选择文件）")
+        self._use_active_chk.setChecked(self._use_active)
         self._use_active_chk.toggled.connect(self._toggle_file_row)
         layout.addWidget(self._use_active_chk)
 
@@ -368,7 +372,7 @@ class MassPropsDialog(QDialog):
         opts_main.setSpacing(4)
         opts_main.setContentsMargins(8, 6, 8, 6)
 
-        # ── 第一行：BOM类型 ｜ 读取模式 ｜ 显示列 ──────────────────────────
+        # ── 第一行：BOM类型 ｜ 读取模式 ｜ 排序列 ──────────────────────────
         row1 = QHBoxLayout()
         row1.setSpacing(6)
 
@@ -425,16 +429,24 @@ class MassPropsDialog(QDialog):
         _sep2.setFrameShadow(QFrame.Shadow.Sunken)
         row1.addSpacing(4); row1.addWidget(_sep2); row1.addSpacing(4)
 
-        # 显示列
-        row1.addWidget(QLabel("显示列:"))
-        self._hid_col_checks: dict[str, QCheckBox] = {}
-        for col_name in MASS_PROPS_HIDEABLE_COLUMNS:
-            cb = QCheckBox(MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
-            cb.setChecked(col_name in self._visible_hideable_cols)
-            cb.setProperty("col_name", col_name)
-            cb.toggled.connect(self._on_col_visibility_changed)
-            row1.addWidget(cb)
-            self._hid_col_checks[col_name] = cb
+        # 汇总BOM专用选项（排序列）
+        self._summary_opts_widget = QWidget()
+        summary_opts_layout = QHBoxLayout(self._summary_opts_widget)
+        summary_opts_layout.setContentsMargins(0, 0, 0, 0)
+        summary_opts_layout.setSpacing(6)
+        summary_opts_layout.addWidget(QLabel("排序列:"))
+        self._sort_col_combo = QComboBox()
+        self._sort_col_combo.addItem("（不排序）", "")
+        for col in _SUMMARY_SORT_COLUMNS:
+            self._sort_col_combo.addItem(MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col, col), col)
+        saved_sort_idx = self._sort_col_combo.findData(self._summary_sort_column)
+        if saved_sort_idx >= 0:
+            self._sort_col_combo.setCurrentIndex(saved_sort_idx)
+        self._sort_col_combo.currentIndexChanged.connect(self._on_sort_col_changed)
+        self._sort_col_combo.setMaximumHeight(24)
+        summary_opts_layout.addWidget(self._sort_col_combo)
+        self._summary_opts_widget.setVisible(self._summarize)
+        row1.addWidget(self._summary_opts_widget)
 
         _sep3 = QFrame(); _sep3.setFrameShape(QFrame.Shape.VLine)
         _sep3.setFrameShadow(QFrame.Shadow.Sunken)
@@ -452,7 +464,7 @@ class MassPropsDialog(QDialog):
         row1.addStretch()
         opts_main.addLayout(row1)
 
-        # ── 第二行：重量单位 ｜ 长度单位 ｜ 惯量单位（4选1）｜ 汇总BOM排序列 ──
+        # ── 第二行：重量单位 ｜ 长度单位 ｜ 惯量单位（4选1）｜ 显示列 ──
         row2 = QHBoxLayout()
         row2.setSpacing(6)
 
@@ -510,24 +522,16 @@ class MassPropsDialog(QDialog):
         _sep5.setFrameShadow(QFrame.Shadow.Sunken)
         row2.addSpacing(4); row2.addWidget(_sep5); row2.addSpacing(4)
 
-        # 汇总BOM专用选项（排序列）
-        self._summary_opts_widget = QWidget()
-        summary_opts_layout = QHBoxLayout(self._summary_opts_widget)
-        summary_opts_layout.setContentsMargins(0, 0, 0, 0)
-        summary_opts_layout.setSpacing(6)
-        summary_opts_layout.addWidget(QLabel("排序列:"))
-        self._sort_col_combo = QComboBox()
-        self._sort_col_combo.addItem("（不排序）", "")
-        for col in _SUMMARY_SORT_COLUMNS:
-            self._sort_col_combo.addItem(MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col, col), col)
-        saved_sort_idx = self._sort_col_combo.findData(self._summary_sort_column)
-        if saved_sort_idx >= 0:
-            self._sort_col_combo.setCurrentIndex(saved_sort_idx)
-        self._sort_col_combo.currentIndexChanged.connect(self._on_sort_col_changed)
-        self._sort_col_combo.setMaximumHeight(24)
-        summary_opts_layout.addWidget(self._sort_col_combo)
-        self._summary_opts_widget.setVisible(self._summarize)
-        row2.addWidget(self._summary_opts_widget)
+        # 显示列
+        row2.addWidget(QLabel("显示列:"))
+        self._hid_col_checks: dict[str, QCheckBox] = {}
+        for col_name in MASS_PROPS_HIDEABLE_COLUMNS:
+            cb = QCheckBox(MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
+            cb.setChecked(col_name in self._visible_hideable_cols)
+            cb.setProperty("col_name", col_name)
+            cb.toggled.connect(self._on_col_visibility_changed)
+            row2.addWidget(cb)
+            self._hid_col_checks[col_name] = cb
 
         row2.addStretch()
         opts_main.addLayout(row2)
@@ -680,6 +684,7 @@ class MassPropsDialog(QDialog):
     def _toggle_file_row(self, use_active: bool) -> None:
         self._file_edit.setEnabled(not use_active)
         self._file_browse_btn.setEnabled(not use_active)
+        self._settings.setValue("use_active", use_active)
 
     def _browse_file(self) -> None:
         file, _ = QFileDialog.getOpenFileName(

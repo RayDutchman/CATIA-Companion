@@ -117,6 +117,7 @@ class BomEditDialog(QDialog):
         self._show_filename_col: bool = self._edit_settings.value(
             "show_filename_column", True, type=bool,
         )
+        self._use_active: bool = self._edit_settings.value("use_active", True, type=bool)
 
         self._columns: list[str] = self._build_visible_columns()
 
@@ -149,6 +150,7 @@ class BomEditDialog(QDialog):
 
         # 数据来源选择行
         self._use_active_chk = QCheckBox("使用当前CATIA活动文档（不选择文件）")
+        self._use_active_chk.setChecked(self._use_active)
         self._use_active_chk.toggled.connect(self._toggle_file_row)
         layout.addWidget(self._use_active_chk)
 
@@ -371,6 +373,7 @@ class BomEditDialog(QDialog):
     def _toggle_file_row(self, use_active: bool) -> None:
         self._file_edit.setEnabled(not use_active)
         self._file_browse_btn.setEnabled(not use_active)
+        self._edit_settings.setValue("use_active", use_active)
 
     # ── BOM类型切换 ───────────────────────────────────────────────────────────
 
