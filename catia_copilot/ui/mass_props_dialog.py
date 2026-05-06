@@ -1565,6 +1565,7 @@ class MassPropsDialog(QDialog):
 
         # 写入数据行
         display_rows = self._get_display_rows()
+        display_rows = [r for r in display_rows if not r.get("_excluded")]
         for ri, row_data in enumerate(display_rows, start=2):
             for ci, col_name in enumerate(export_cols, start=1):
                 raw = row_data.get(col_name)
@@ -1648,6 +1649,7 @@ class MassPropsDialog(QDialog):
 
         export_cols = [c for c in self._columns if c != "#"]
         display_rows = self._get_display_rows()
+        display_rows = [r for r in display_rows if not r.get("_excluded")]
 
         def _cell_value(col_name: str, raw) -> str:
             if raw is None:
