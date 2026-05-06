@@ -55,10 +55,19 @@ Sub CATMain()
 
         Case "ProductDocument"
             ' processedDocs："|fullpath1|fullpath2|..." 形式的已处理路径列表，用于跨递归层去重
+            ' skippedNodes：换行分隔的未能访问的节点名列表，用于最终警告提示
             Dim processedDocs
             processedDocs = "|"
-            RecurseProduct oDoc.Product, processedDocs
-            MsgBox "已隐藏装配体及所有子孙零件中的点、线、曲线、草图、轴系、平面。", vbInformation, "hide_wireframe"
+            Dim skippedNodes
+            skippedNodes = ""
+            RecurseProduct oDoc.Product, processedDocs, skippedNodes
+            If skippedNodes = "" Then
+                MsgBox "已隐藏装配体及所有子孙零件中的点、线、曲线、草图、轴系、平面。", vbInformation, "hide_wireframe"
+            Else
+                MsgBox "已隐藏可访问零件中的线框几何。" & vbCrLf & vbCrLf & _
+                       "以下节点未能加载（已跳过）：" & vbCrLf & skippedNodes, _
+                       vbExclamation, "hide_wireframe"
+            End If
 
         Case Else
             MsgBox "当前活动文档不是零件（CATPart）或装配体（CATProduct），无法执行。", _
@@ -110,12 +119,14 @@ End Sub
 '
 ' 通过 ByRef 传递 processedDocs 字符串实现跨层去重：
 ' 同一份零件被多个实例引用时，仅在首次遇到时执行隐藏操作。
+' 无法加载的节点（unresolved / ReferenceProduct 为 Nothing）记录进 skippedNodes。
 '
 ' 参数：
 '   oProduct      — 当前层级的 Product 对象
 '   processedDocs — ByRef 字符串，记录已处理文档路径，格式："|path1|path2|"
+'   skippedNodes  — ByRef 字符串，记录跳过节点的显示名，换行分隔
 ' ============================================================
-Private Sub RecurseProduct(oProduct, ByRef processedDocs)
+Private Sub RecurseProduct(oProduct, ByRef processedDocs, ByRef skippedNodes)
 
     Dim i
     For i = 1 To oProduct.Products.Count
@@ -174,14 +185,38 @@ Private Sub RecurseProduct(oProduct, ByRef processedDocs)
                         Else
 
                             ' 子装配体：递归向下处理
-                            RecurseProduct refProd, processedDocs
+                            RecurseProduct refProd, processedDocs, skippedNodes
 
                         End If
 
+                    Else
+                        ' ReferenceProduct 为 Nothing：节点未加载（unresolved）
+                        Dim skipName1
+                        skipName1 = ""
+                        On Error Resume Next
+                        skipName1 = childProd.Name
+                        On Error GoTo 0
+                        If skipName1 = "" Then skipName1 = "(未知节点 #" & i & ")"
+                        skippedNodes = skippedNodes & "  · " & skipName1 & vbCrLf
                     End If
+                Else
+                    ' ReferenceProduct 访问失败：节点未加载（unresolved）
+                    Dim skipName2
+                    skipName2 = ""
+                    On Error Resume Next
+                    skipName2 = childProd.Name
+                    On Error GoTo 0
+                    If skipName2 = "" Then skipName2 = "(未知节点 #" & i & ")"
+                    skippedNodes = skippedNodes & "  · " & skipName2 & vbCrLf
                 End If
 
+            Else
+                ' childProd 为 Nothing：Products.Item(i) 访问失败
+                skippedNodes = skippedNodes & "  · (无法读取节点 #" & i & ")" & vbCrLf
             End If
+        Else
+            ' Products.Item(i) 返回非对象
+            skippedNodes = skippedNodes & "  · (无法读取节点 #" & i & ")" & vbCrLf
         End If
 
     Next
