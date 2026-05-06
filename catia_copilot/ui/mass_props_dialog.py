@@ -1825,6 +1825,20 @@ class MassPropsDialog(QDialog):
         excluded=True：浅灰紫背景 + 灰色斜体前景，并覆盖 tooltip。
         excluded=False：重置背景/前景/字体为系统默认，清空排除 tooltip。
         """
+        # Qt 的 setBackground/setForeground/setFont/setToolTip 均会触发
+        # itemChanged 信号；设置 _is_updating=True 防止 _on_item_changed
+        # 把格式化后的显示字符串当作用户编辑写回，导致密度/重量被污染。
+        self._is_updating = True
+        try:
+            self._apply_excluded_style_impl(indices, excluded)
+        finally:
+            self._is_updating = False
+
+    def _apply_excluded_style_impl(
+        self,
+        indices: set[int],
+        excluded: bool,
+    ) -> None:
         excl_bg   = _EXCL_BG_COLOR
         excl_fg   = _EXCL_FG_COLOR
         excl_font = _EXCL_FONT
