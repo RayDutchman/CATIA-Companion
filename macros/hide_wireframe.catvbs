@@ -134,8 +134,14 @@ End Sub
 ' ============================================================
 ' RecurseProduct — 递归遍历产品树，对每份唯一的 PartDocument 调用 HideWireframeInPart
 '
-' 调试版本：每个关键步骤均写入 oLog（TextStream），
-' 包括 childProd / refProd / .Part / partDoc / docKey 的获取结果。
+' 判断叶级零件 vs 子装配体的方法（修正版）：
+'   使用 refProd.Products.Count 判断——
+'     = 0 → 叶级零件（CATPart）：通过 refProd.Parent 获取 PartDocument
+'     > 0 → 子装配体（CATProduct）：递归向下处理
+'
+'   注意：refProd.Part（CATIA V5 Part 对象）在所有通过 ReferenceProduct
+'   取得的 Product COM 对象上均返回 Err=438（DISP_E_MEMBERNOTFOUND），
+'   无论该节点是叶级零件还是子装配体，因此不能用 .Part 来区分两者。
 '
 ' 参数：
 '   oProduct      — 当前层级的 Product 对象
@@ -210,35 +216,31 @@ Private Sub RecurseProduct(oProduct, ByRef processedDocs, oLog)
                 oLog.WriteLine "    refProd.Name = '" & refName & "'"
 
                 ' ── 判断是叶级零件还是子装配体 ──────────────────────
-                ' 访问 .Part：CATPart 成功，CATProduct 报错
-                Dim oPart
-                Set oPart = Nothing
-                Dim partErr
-                partErr = 0
+                ' 取 refProd 的子产品数量（而非 .Part，后者在 CATIA V5 中对所有
+                ' 通过 ReferenceProduct 取得的对象均返回 Err=438）
+                Dim refChildCount
+                refChildCount = 0
                 On Error Resume Next
                 Err.Clear
-                Set oPart = refProd.Part
-                partErr = Err.Number
+                refChildCount = refProd.Products.Count
                 On Error GoTo 0
 
-                oLog.WriteLine "    refProd.Part  Err=" & partErr & _
-                               "  IsObject=" & IsObject(oPart) & _
-                               "  IsNothing=" & (oPart Is Nothing)
+                oLog.WriteLine "    refProd.Products.Count = " & refChildCount
 
-                If partErr = 0 And IsObject(oPart) And Not (oPart Is Nothing) Then
+                If refChildCount = 0 Then
 
-                    ' ── 叶级零件：通过 Part.Parent 获取 PartDocument ──
+                    ' ── 叶级零件：通过 refProd.Parent 获取 PartDocument ──
                     Dim partDoc
                     Set partDoc = Nothing
                     Dim pdErr
                     pdErr = 0
                     On Error Resume Next
                     Err.Clear
-                    Set partDoc = oPart.Parent
+                    Set partDoc = refProd.Parent
                     pdErr = Err.Number
                     On Error GoTo 0
 
-                    oLog.WriteLine "    oPart.Parent  Err=" & pdErr & _
+                    oLog.WriteLine "    refProd.Parent  Err=" & pdErr & _
                                    "  TypeName=" & TypeName(partDoc) & _
                                    "  IsObject=" & IsObject(partDoc)
 
