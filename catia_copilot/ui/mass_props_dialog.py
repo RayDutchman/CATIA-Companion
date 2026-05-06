@@ -885,10 +885,16 @@ class MassPropsDialog(QDialog):
 
         self._apply_loaded_rows(rows)
 
-    def _apply_loaded_rows(self, rows: list[dict]) -> None:
+    def _apply_loaded_rows(self, rows: list[dict], new_rows: list[dict] | None = None) -> None:
         """将已就绪的行列表应用到对话框：重建表格、调整列宽、启用按钮并计算。
 
-        由 :meth:`_load_data` 和 :meth:`_load_data_from_json` 共用。
+        由 :meth:`_load_data`、:meth:`_load_data_from_json`、
+        :meth:`_append_data_from_file`、:meth:`_append_from_active` 共用。
+
+        参数：
+            rows:      要设置为 ``self._rows`` 的完整行列表。
+            new_rows:  本次操作新增的行（用于"部分零件测量失败"提示）。
+                       ``None`` 表示整个 *rows* 均为新增（全量载入场景）。
         """
         # 重新填充前保存列宽
         if self._loaded:
@@ -921,7 +927,10 @@ class MassPropsDialog(QDialog):
         self._append_data_btn.setEnabled(True)
         self._append_active_btn.setEnabled(True)
 
-        failed_count = sum(1 for r in rows if r.get("_meas_failed") and r.get("Type") == "零件")
+        failed_count = sum(
+            1 for r in (new_rows if new_rows is not None else rows)
+            if r.get("_meas_failed") and r.get("Type") == "零件"
+        )
         if failed_count:
             _read_mode_desc = {
                 "first": "「惯量包络体.1」",
@@ -1013,7 +1022,7 @@ class MassPropsDialog(QDialog):
 
         combined = list(self._rows)
         errors: list[str] = []
-        appended = 0
+        appended_rows: list[dict] = []
         for src in srcs:
             if not Path(src).exists():
                 errors.append(f"文件不存在：{src}")
@@ -1021,7 +1030,7 @@ class MassPropsDialog(QDialog):
             try:
                 extra = load_rows(src)
                 combined = merge_rows(combined, extra)
-                appended += len(extra)
+                appended_rows.extend(extra)
                 self._last_browse_dir = str(Path(src).parent)
                 self._settings.setValue("last_browse_dir", self._last_browse_dir)
             except Exception as e:
@@ -1034,8 +1043,8 @@ class MassPropsDialog(QDialog):
                 "以下文件追加时出错：\n\n" + "\n".join(errors),
             )
 
-        if appended > 0:
-            self._apply_loaded_rows(combined)
+        if appended_rows:
+            self._apply_loaded_rows(combined, new_rows=appended_rows)
 
     def _append_from_active(self) -> None:
         """将 CATIA 当前活动文档（分总成）的质量特性追加到现有数据中。
@@ -1089,7 +1098,7 @@ class MassPropsDialog(QDialog):
             return
 
         combined = merge_rows(self._rows, extra)
-        self._apply_loaded_rows(combined)
+        self._apply_loaded_rows(combined, new_rows=extra)
 
     # ── 构建显示行 ─────────────────────────────────────────────────────────
 
@@ -1904,18 +1913,11 @@ class MassPropsDialog(QDialog):
     def _delete_rows(self, row_idx: int) -> None:
         """删除 row_idx 行及其全部子孙行，并立即重新计算汇总结果。
 
-        根节点（Level=0 且为产品）不允许删除，以防止清空整个数据集。
         删除完成后调用 _rebuild_columns_and_table() 整体重建表格，
         再调用 _calculate() 刷新底部汇总数值。
+        当合并了多个分总成时，根节点（Level=0）同样可被删除，以便移除某个
+        不需要的分总成；若删除后列表为空则直接清空表格。
         """
-        row_data = self._rows[row_idx]
-        if int(row_data.get("Level", 0)) == 0 and row_data.get("Type") in ("产品", "部件"):
-            QMessageBox.warning(
-                self, "不可删除",
-                "根节点不允许删除，请删除其子节点。",
-            )
-            return
-
         indices = set(self._get_subtree_indices(row_idx))
         self._rows = [r for i, r in enumerate(self._rows) if i not in indices]
 
