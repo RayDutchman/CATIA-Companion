@@ -527,7 +527,10 @@ class MassPropsDialog(QDialog):
         self._sort_col_combo = QComboBox()
         self._sort_col_combo.addItem("（不排序）", "")
         for col in _SUMMARY_SORT_COLUMNS:
-            self._sort_col_combo.addItem(MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col, col), col)
+            # 排序列下拉框只显示列名，不含单位后缀（单位随用户设置变化，与排序无关）
+            display = MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col, col)
+            display = display.split(" (")[0]  # 去掉 " (单位)" 后缀
+            self._sort_col_combo.addItem(display, col)
         saved_sort_idx = self._sort_col_combo.findData(self._summary_sort_column)
         if saved_sort_idx >= 0:
             self._sort_col_combo.setCurrentIndex(saved_sort_idx)
