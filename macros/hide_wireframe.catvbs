@@ -58,8 +58,6 @@ Sub CATMain()
             Dim processedDocs
             processedDocs = "|"
             RecurseProduct oDoc.Product, processedDocs
-            ' 所有子零件处理完毕后，将装配体文档重新激活为活动文档
-            oDoc.Activate
             MsgBox "已隐藏装配体及所有子孙零件中的点、线、曲线、草图、轴系、平面。", vbInformation, "hide_wireframe"
 
         Case Else
@@ -113,6 +111,15 @@ End Sub
 ' 通过 ByRef 传递 processedDocs 字符串实现跨层去重：
 ' 同一份零件被多个实例引用时，仅在首次遇到时执行隐藏操作。
 '
+' 判断叶级零件 vs 子装配体的方法：
+'   尝试访问 refProd.Part（CATIA V5 Part 对象）——
+'     成功 → 该节点是 CATPart（叶级零件），通过 Part.Parent 获取 PartDocument
+'     失败 → 该节点是 CATProduct（子装配体），递归向下处理
+'   不使用 TypeName(refProd.Parent) 判断文档类型，原因：
+'     Product.Parent 属性在 CATIA 类型库中声明返回 AnyObject，
+'     TypeName() 只能看到接口声明类型，因此始终返回 "AnyObject" 或
+'     "Document"，永远不会等于 "PartDocument"，导致叶级零件分支永远不被执行。
+'
 ' 参数：
 '   oProduct      — 当前层级的 Product 对象
 '   processedDocs — ByRef 字符串，记录已处理文档路径，格式："|path1|path2|"
@@ -142,51 +149,56 @@ Private Sub RecurseProduct(oProduct, ByRef processedDocs)
                 If IsObject(refProd) Then
                     If Not (refProd Is Nothing) Then
 
-                        ' ── 取参考产品所在文档 ──────────────────────────────
-                        Dim parentDoc
-                        Set parentDoc = Nothing
+                        ' ── 判断是叶级零件还是子装配体 ──────────────────────
+                        ' 访问 .Part：CATPart 成功，CATProduct 报错
+                        Dim oPart
+                        Set oPart = Nothing
                         On Error Resume Next
-                        Set parentDoc = refProd.Parent
+                        Set oPart = refProd.Part
                         On Error GoTo 0
 
-                        If IsObject(parentDoc) Then
-                            If Not (parentDoc Is Nothing) Then
+                        If IsObject(oPart) Then
+                            If Not (oPart Is Nothing) Then
 
-                                ' ── 按文档类型分支处理 ──────────────────────
-                                Dim childDocType
-                                childDocType = TypeName(parentDoc)
+                                ' ── 叶级零件：通过 Part.Parent 获取 PartDocument ──
+                                ' Part.Parent 可靠地返回 PartDocument，
+                                ' 而 Product.Parent 在 CATIA COM 中返回 AnyObject，
+                                ' TypeName() 无法识别其真实类型。
+                                Dim partDoc
+                                Set partDoc = Nothing
+                                On Error Resume Next
+                                Set partDoc = oPart.Parent
+                                On Error GoTo 0
 
-                                If childDocType = "PartDocument" Then
+                                If IsObject(partDoc) Then
+                                    If Not (partDoc Is Nothing) Then
 
-                                    ' 取文档唯一标识（FullName 不可用时回退到 Name）
-                                    Dim docKey
-                                    docKey = ""
-                                    On Error Resume Next
-                                    docKey = parentDoc.FullName
-                                    If docKey = "" Then docKey = parentDoc.Name
-                                    Err.Clear
-                                    On Error GoTo 0
+                                        ' 取文档唯一标识（FullName 不可用时回退到 Name）
+                                        Dim docKey
+                                        docKey = ""
+                                        On Error Resume Next
+                                        docKey = partDoc.FullName
+                                        If Len(docKey) = 0 Then docKey = partDoc.Name
+                                        Err.Clear
+                                        On Error GoTo 0
 
-                                    ' 仅在尚未处理时执行隐藏（去重）
-                                    If docKey <> "" Then
-                                        If InStr(processedDocs, "|" & docKey & "|") = 0 Then
-                                            processedDocs = processedDocs & docKey & "|"
-                                            ' 必须先将目标零件激活为活动文档，
-                                            ' 否则 Selection.Search 只在活动文档上下文执行，
-                                            ' 对非活动的子零件文档搜索结果始终为空。
-                                            parentDoc.Activate
-                                            HideWireframeInPart parentDoc
+                                        ' 仅在尚未处理时执行隐藏（去重）
+                                        If Len(docKey) > 0 Then
+                                            If InStr(processedDocs, "|" & docKey & "|") = 0 Then
+                                                processedDocs = processedDocs & docKey & "|"
+                                                HideWireframeInPart partDoc
+                                            End If
                                         End If
+
                                     End If
-
-                                ElseIf childDocType = "ProductDocument" Then
-
-                                    ' 子节点为子装配体：递归向下处理
-                                    RecurseProduct refProd, processedDocs
-
                                 End If
 
                             End If
+                        Else
+
+                            ' ── 子装配体：递归向下处理 ──────────────────────
+                            RecurseProduct refProd, processedDocs
+
                         End If
 
                     End If
