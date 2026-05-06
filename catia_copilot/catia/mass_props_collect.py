@@ -26,7 +26,7 @@
 质量特性读取
 -----------
 依次读取 CATIA SPA "测量惯量 + 保持测量" 写入的 "惯量包络体.1" 至
-"惯量包络体.{MAX_INERTIA_INDEX}" Keep 参数，在零件级按平行轴定理汇总后存储：
+"惯量包络体.{MAX_INERTIA_INDEX}" 保持测量参数，在零件级按平行轴定理汇总后存储：
   惯量包络体.N\\质量    → 质量，CATIA 原始单位 kg（已为 SI，直接存储）
   惯量包络体.N\\Gx/Gy/Gz → 重心坐标，CATIA 原始单位 mm（÷1000 换算为 m 后存储）
   惯量包络体.N\\IoxG/IoyG/IozG/IxyG/IxzG/IyzG → 转动惯量分量，CATIA 原始单位 kg·m²（已为 SI，直接存储）
@@ -192,7 +192,7 @@ def _read_keep_inertia_params(
     label: str = "",
     read_mode: str = "all",
 ) -> dict | None:
-    """读取 CATIA SPA Keep 测量写入的"惯量包络体.1"至"惯量包络体.MAX_INERTIA_INDEX"参数，
+    """读取 CATIA 惯量测量 + 保持测量 写入的"惯量包络体.1"至"惯量包络体.MAX_INERTIA_INDEX"参数，
     并在零件级按平行轴定理汇总为单一质量特性。
 
     先决条件：零件已在 SPA（惯量分析）中执行"测量惯量"并勾选"保持测量"，
@@ -210,7 +210,7 @@ def _read_keep_inertia_params(
       "last"  — 扫描所有编号，仅返回编号最大的有效测量结果。
       "all"   — 读取全部有效编号并按平行轴定理汇总（默认行为）。
 
-    CATIA Keep 参数的原始单位（注意坐标为 mm，非 m）：
+    CATIA 保持测量参数的原始单位（注意坐标为 mm，非 m）：
       质量                            CATIA 原始: kg   → 内部存储: kg  （无需换算）
       Gx / Gy / Gz                    CATIA 原始: mm   → 内部存储: m   （÷ 1 000）
       IoxG / IoyG / IozG              CATIA 原始: kg·m² → 内部存储: kg·m²（无需换算）
@@ -221,7 +221,7 @@ def _read_keep_inertia_params(
       2. 计算总重心：r_c = Σ(m_i · r_i) / M。
       3. 平行轴定理从原点移回总重心，得汇总惯量张量。
 
-    CATIA Keep 参数中亦可选读取密度字段：
+    CATIA 保持测量参数中亦可选读取密度字段：
       密度                            CATIA 原始: kg/m³ → 内部存储: kg/m³（无需换算）
       当单个测量内材料不统一时 CATIA 返回 -1；跨多个惯量包络体密度不一致时同样返回 -1。
 
@@ -386,7 +386,7 @@ def _measure_part_mass_props(
 
     先决条件：
       零件已在 SPA 中执行"测量惯量"并勾选"保持测量"，
-      从而在参数树中生成 "惯量包络体.N\\质量" 等 Keep 参数（N ≥ 1）。
+      从而在参数树中生成 "惯量包络体.N\\质量" 等保持测量参数（N ≥ 1）。
       **必须单独打开零件文件再建立测量**——在产品环境下建立的测量使用产品坐标系，
       将导致结果不正确。
 
@@ -403,7 +403,7 @@ def _measure_part_mass_props(
                     [Iyx,Iyy,Iyz],
                     [Izx,Izy,Izz]], # 重心处转动惯量（零件局部坐标轴），kg·m²
       }
-    若所有惯量包络体参数均不存在（零件未执行 Keep 测量）则返回 None。
+    若所有惯量包络体参数均不存在（零件未执行保持测量）则返回 None。
     """
     return _read_keep_inertia_params(part_com, part_number, read_mode=read_mode)
 
@@ -626,6 +626,8 @@ def recompute_product_rows(rows: list[dict]) -> None:
             desc = rows[j]
             if int(desc.get("Level", 0)) <= level:
                 break
+            if desc.get("_excluded"):
+                continue
             rmp = desc.get("_root_mp")
             if rmp and float(rmp.get("weight", 0.0)) > 0.0:
                 child_parts.append(rmp)
@@ -750,15 +752,15 @@ def remeasure_part_mass_props(
     part_number: str = "",
     read_mode: str = "all",
 ) -> dict | None:
-    """通过 CATIA COM 接口重新读取指定零件的质量特性（惯量包络体 Keep 测量）。
+    """通过 CATIA COM 接口重新读取指定零件的质量特性（惯量包络体保持测量）。
 
     在 CATIA 当前已打开的文档中查找与 *filepath* 匹配的零件文档，再调用
-    :func:`_measure_part_mass_props` 读取 Keep 测量参数。适用于用户在 CATIA 中
+    :func:`_measure_part_mass_props` 读取保持测量参数。适用于用户在 CATIA 中
     补充或更改惯量包络体后，无需重新遍历整棵产品树即可刷新单个零件的质量特性。
 
     参数：
         filepath:    零件文档的磁盘完整路径（若文档尚未在 CATIA 中打开则返回 None）。
-        part_number: 零件编号（PartNumber），用于构造 Keep 参数前缀。
+        part_number: 零件编号（PartNumber），用于构造保持测量参数前缀。
         read_mode:   控制读取哪些惯量包络体（"first"/"last"/"all"）。
 
     返回：
@@ -993,7 +995,7 @@ def collect_mass_props_rows(
                 revision     = _get_prop(product, "Revision")
 
         # ── 质量特性测量（仅对叶子零件节点）────────────────────────────────────
-        # 依次读取"惯量包络体.1"至"惯量包络体.MAX_INERTIA_INDEX"的 Keep 测量参数，
+        # 依次读取"惯量包络体.1"至"惯量包络体.MAX_INERTIA_INDEX"的保持测量参数，
         # 在零件级汇总后存储（零件须已执行 SPA 保持测量）。
         mass_props: dict | None = None
         meas_failed = False

@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QRadioButton, QButtonGroup, QWidget, QComboBox,
     QStyledItemDelegate, QMenu,
 )
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QBrush, QColor, QFont
 from PySide6.QtCore import Qt, QSettings
 
 from catia_copilot.constants import (
@@ -54,6 +54,8 @@ _ROW_IDX_ROLE = Qt.ItemDataRole.UserRole
 _ITEM_LOCKED_ROLE = Qt.ItemDataRole.UserRole + 1
 # UserRole+2：密度锁定（密度值为 -1 或 None，不允许编辑密度列）
 _DENSITY_LOCKED_ROLE = Qt.ItemDataRole.UserRole + 2
+# UserRole+3：该行已被用户排除（不参与计算）
+_EXCLUDED_ROLE = Qt.ItemDataRole.UserRole + 3
 
 # 惯量列名 → (行索引, 列索引)，对应 3×3 张量位置
 _INERTIA_IDX: dict[str, tuple[int, int]] = {
@@ -72,6 +74,12 @@ _SUMMARY_SORT_COLUMNS: list[str] = [
 
 # 数值格式化：判断"接近整数"的绝对容差（用于 _fmt / _fmt_scaled）
 _INTEGER_ABS_TOL: float = 1e-9
+
+# 排除行视觉样式（背景色 / 前景色 / 斜体字体）
+_EXCL_BG_COLOR: QColor = QColor(216, 216, 232)   # 浅灰紫，区别于红/橙/黄等异常色
+_EXCL_FG_COLOR: QColor = QColor(130, 130, 150)
+_EXCL_FONT: QFont = QFont()
+_EXCL_FONT.setItalic(True)
 
 
 class _MassPropsDelegate(QStyledItemDelegate):
@@ -519,7 +527,10 @@ class MassPropsDialog(QDialog):
         self._sort_col_combo = QComboBox()
         self._sort_col_combo.addItem("（不排序）", "")
         for col in _SUMMARY_SORT_COLUMNS:
-            self._sort_col_combo.addItem(MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col, col), col)
+            # 排序列下拉框只显示列名，不含单位后缀（单位随用户设置变化，与排序无关）
+            display = MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col, col)
+            display = display.split(" (")[0]  # 去掉 " (单位)" 后缀
+            self._sort_col_combo.addItem(display, col)
         saved_sort_idx = self._sort_col_combo.findData(self._summary_sort_column)
         if saved_sort_idx >= 0:
             self._sort_col_combo.setCurrentIndex(saved_sort_idx)
@@ -780,22 +791,24 @@ class MassPropsDialog(QDialog):
 
         self._is_updating = True
         display_rows = self._get_display_rows()
-        for di, row_data in enumerate(display_rows):
-            if di >= len(self._item_by_row):
-                break
-            item = self._item_by_row[di]
-            if not any(row_data.get(c) is not None for c in _UNIT_SENSITIVE_COLUMNS):
-                continue
-            for col_name, col_idx in mass_col_indices:
-                raw = row_data.get(col_name)
-                if raw is not None:
-                    if col_name == "Weight":
-                        item.setText(col_idx, self._fmt_mass_val(raw))
-                    elif col_name in _INERTIA_IDX:
-                        item.setText(col_idx, self._fmt_inertia_val(raw))
-                    else:
-                        item.setText(col_idx, self._fmt_cog_val(raw))
-        self._is_updating = False
+        try:
+            for di, row_data in enumerate(display_rows):
+                if di >= len(self._item_by_row):
+                    break
+                item = self._item_by_row[di]
+                if not any(row_data.get(c) is not None for c in _UNIT_SENSITIVE_COLUMNS):
+                    continue
+                for col_name, col_idx in mass_col_indices:
+                    raw = row_data.get(col_name)
+                    if raw is not None:
+                        if col_name == "Weight":
+                            item.setText(col_idx, self._fmt_mass_val(raw))
+                        elif col_name in _INERTIA_IDX:
+                            item.setText(col_idx, self._fmt_inertia_val(raw))
+                        else:
+                            item.setText(col_idx, self._fmt_cog_val(raw))
+        finally:
+            self._is_updating = False
 
         # 若已有汇总结果，更新底部汇总标签
         if self._rollup_result:
@@ -995,14 +1008,23 @@ class MassPropsDialog(QDialog):
     def _build_summary_rows(self) -> list[dict]:
         """汇总模式：将相同零件编号的行合并，增加 Quantity 字段。
 
-        每个唯一 PN 保留第一次出现的行数据（含 _rows 中的索引），
-        Quantity = 该 PN 在 _rows 中出现的实例数量。
+        每个唯一 PN 保留第一次出现的未排除行数据（含 _rows 中的索引），
+        Quantity = 该 PN 在 _rows 中未被排除的实例数量。
+        被排除（_excluded=True）的实例不计入数量，
+        若某 PN 的全部实例均被排除，则该 PN 不出现在汇总BOM中。
         """
-        seen_pn: dict[str, dict] = {}    # pn → 首次出现的规范行副本
+        seen_pn: dict[str, dict] = {}    # pn → 首次出现的未排除规范行副本
         qty: dict[str, int] = {}
         order: list[str] = []
 
         for i, row in enumerate(self._rows):
+            if row.get("_excluded"):
+                continue
+            # 汇总BOM仅统计零件行；产品/部件不计入数量，也不占用 PN 的 seen_pn 位置，
+            # 否则产品行会成为该 PN 的"规范行"，随后被类型过滤器删除，导致该 PN 的
+            # 零件实例在汇总BOM中完全消失，且数量也会被错误地计入产品实例。
+            if row.get("Type") != "零件":
+                continue
             pn = str(row.get("Part Number", ""))
             if not pn:
                 pn = str(row.get("Filename", "")) or "(未分组)"
@@ -1021,7 +1043,7 @@ class MassPropsDialog(QDialog):
             r["Quantity"] = qty[pn]
             result.append(r)
 
-        # 仅保留零件行（汇总BOM不显示产品和部件）
+        # 类型过滤作为保险：上方循环已只处理零件行，此处过滤冗余但保留以防万一
         result = [r for r in result if r.get("Type") == "零件"]
 
         # 按排序列排序
@@ -1159,6 +1181,17 @@ class MassPropsDialog(QDialog):
             bg = QColor(240, 242, 245)
             for ci in range(len(self._columns)):
                 item.setBackground(ci, bg)
+
+        # 排除状态：覆盖背景色、设置斜体灰色前景
+        is_excluded = bool(row_data.get("_excluded", False))
+        item.setData(0, _EXCLUDED_ROLE, is_excluded)
+        if is_excluded:
+            excl_tip = "该行已被排除，不参与计算。"
+            for ci in range(len(self._columns)):
+                item.setBackground(ci, _EXCL_BG_COLOR)
+                item.setForeground(ci, _EXCL_FG_COLOR)
+                item.setFont(ci, _EXCL_FONT)
+                item.setToolTip(ci, excl_tip)
 
         self._item_by_row.append(item)
         return item
@@ -1361,38 +1394,38 @@ class MassPropsDialog(QDialog):
         self._is_updating = True
         w_idx = self._columns.index("Weight") if "Weight" in self._columns else -1
         d_idx = self._columns.index("Density") if "Density" in self._columns else -1
-
-        for vis_item in self._pn_to_items.get(pn, []):
-            vis_row_idx = vis_item.data(0, _ROW_IDX_ROLE)
-            if vis_row_idx is None:
-                continue
-            vis_row = self._rows[vis_row_idx]
-            if vis_row.get("Type") != "零件":
-                continue
-            if w_idx >= 0:
-                vis_item.setText(w_idx, self._fmt_mass_val(vis_row.get("Weight")))
-            if d_idx >= 0:
-                d_val = vis_row.get("Density")
-                if d_val is not None and d_val >= 0:
-                    vis_item.setText(d_idx, _fmt(d_val))
-            for ic_name, (ir, ic) in _INERTIA_IDX.items():
-                if ic_name in self._columns:
-                    ic_idx = self._columns.index(ic_name)
-                    if self._summarize:
-                        # 汇总BOM：显示零件自身坐标系值
-                        raw_i = vis_row.get(ic_name)
-                    else:
-                        # 层级BOM：显示根产品坐标系值
-                        rmp = vis_row.get("_root_mp")
-                        raw_i = (
-                            rmp["inertia"][ir][ic]
-                            if rmp and rmp.get("inertia")
-                            else vis_row.get(ic_name)
-                        )
-                    if raw_i is not None:
-                        vis_item.setText(ic_idx, self._fmt_inertia_val(raw_i))
-
-        self._is_updating = False
+        try:
+            for vis_item in self._pn_to_items.get(pn, []):
+                vis_row_idx = vis_item.data(0, _ROW_IDX_ROLE)
+                if vis_row_idx is None:
+                    continue
+                vis_row = self._rows[vis_row_idx]
+                if vis_row.get("Type") != "零件":
+                    continue
+                if w_idx >= 0:
+                    vis_item.setText(w_idx, self._fmt_mass_val(vis_row.get("Weight")))
+                if d_idx >= 0:
+                    d_val = vis_row.get("Density")
+                    if d_val is not None and d_val >= 0:
+                        vis_item.setText(d_idx, _fmt(d_val))
+                for ic_name, (ir, ic) in _INERTIA_IDX.items():
+                    if ic_name in self._columns:
+                        ic_idx = self._columns.index(ic_name)
+                        if self._summarize:
+                            # 汇总BOM：显示零件自身坐标系值
+                            raw_i = vis_row.get(ic_name)
+                        else:
+                            # 层级BOM：显示根产品坐标系值
+                            rmp = vis_row.get("_root_mp")
+                            raw_i = (
+                                rmp["inertia"][ir][ic]
+                                if rmp and rmp.get("inertia")
+                                else vis_row.get(ic_name)
+                            )
+                        if raw_i is not None:
+                            vis_item.setText(ic_idx, self._fmt_inertia_val(raw_i))
+        finally:
+            self._is_updating = False
         # 编辑密度/重量后立即重新计算汇总结果（无需手动点击"计算"）
         self._calculate()
 
@@ -1514,13 +1547,28 @@ class MassPropsDialog(QDialog):
             logger.error(f"导出失败: {e}")
             QMessageBox.critical(self, "导出失败", f"导出时出错：\n{e}")
 
+    @staticmethod
+    def _row_status(row_data: dict) -> str:
+        """Return a pipe-separated status string for a row.
+
+        Possible tokens: excluded / no_file / not_found / unreadable / meas_failed.
+        Empty string means the row has no special state.
+        """
+        tokens = []
+        if row_data.get("_excluded"):    tokens.append("excluded")
+        if row_data.get("_no_file"):     tokens.append("no_file")
+        if row_data.get("_not_found"):   tokens.append("not_found")
+        if row_data.get("_unreadable"):  tokens.append("unreadable")
+        if row_data.get("_meas_failed"): tokens.append("meas_failed")
+        return " | ".join(tokens)
+
     def _do_export(self, dest: str) -> None:
         import openpyxl
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
         from catia_copilot.utils import estimate_column_width
 
-        # 导出列（排除内部序号列 "#"）
-        export_cols = [c for c in self._columns if c != "#"]
+        # 导出列（排除内部序号列 "#"），末尾追加 Status 列
+        export_cols = [c for c in self._columns if c != "#"] + ["Status"]
 
         wb  = openpyxl.Workbook()
         ws  = wb.active
@@ -1533,6 +1581,11 @@ class MassPropsDialog(QDialog):
             left=thin_side, right=thin_side, top=thin_side, bottom=thin_side,
         )
 
+        # 特殊行背景色
+        excl_fill     = PatternFill(fill_type="solid", fgColor="D8D8E8")  # 排除：灰紫
+        error_fill    = PatternFill(fill_type="solid", fgColor="FFB3B3")  # not_found/unreadable：红
+        warning_fill  = PatternFill(fill_type="solid", fgColor="FFF2CC")  # no_file/meas_failed：黄
+
         # 写入表头
         for ci, col_name in enumerate(export_cols, start=1):
             cell = ws.cell(row=1, column=ci, value=self._column_header(col_name))
@@ -1540,42 +1593,59 @@ class MassPropsDialog(QDialog):
             cell.fill   = header_fill
             cell.border = thin_border
 
-        # 写入数据行
+        # 写入数据行（含所有特殊状态行）
         display_rows = self._get_display_rows()
         for ri, row_data in enumerate(display_rows, start=2):
+            status_val = self._row_status(row_data)
+
+            # 确定行背景色
+            if row_data.get("_excluded"):
+                row_fill = excl_fill
+            elif row_data.get("_not_found") or row_data.get("_unreadable"):
+                row_fill = error_fill
+            elif row_data.get("_no_file") or row_data.get("_meas_failed"):
+                row_fill = warning_fill
+            else:
+                row_fill = None
+
             for ci, col_name in enumerate(export_cols, start=1):
-                raw = row_data.get(col_name)
-                if raw is None:
-                    value = ""
-                elif col_name == "Density":
-                    if raw < 0:
-                        value = "不统一"
-                    else:
+                if col_name == "Status":
+                    value = status_val
+                else:
+                    raw = row_data.get(col_name)
+                    if raw is None:
+                        value = ""
+                    elif col_name == "Density":
+                        if raw < 0:
+                            value = "不统一"
+                        else:
+                            try:
+                                value = float(raw)
+                            except (TypeError, ValueError):
+                                value = ""
+                    elif col_name == "Weight":
                         try:
-                            value = float(raw)
+                            value = float(raw) * self._unit_factor
                         except (TypeError, ValueError):
                             value = ""
-                elif col_name == "Weight":
-                    try:
-                        value = float(raw) * self._unit_factor
-                    except (TypeError, ValueError):
-                        value = ""
-                elif col_name in _INERTIA_IDX:
-                    try:
-                        value = float(raw) * self._inertia_unit_factor
-                    except (TypeError, ValueError):
-                        value = ""
-                elif col_name in ("CogX", "CogY", "CogZ"):
-                    try:
-                        value = float(raw) * self._cog_unit_factor
-                    except (TypeError, ValueError):
-                        value = ""
-                else:
-                    value = raw
+                    elif col_name in _INERTIA_IDX:
+                        try:
+                            value = float(raw) * self._inertia_unit_factor
+                        except (TypeError, ValueError):
+                            value = ""
+                    elif col_name in ("CogX", "CogY", "CogZ"):
+                        try:
+                            value = float(raw) * self._cog_unit_factor
+                        except (TypeError, ValueError):
+                            value = ""
+                    else:
+                        value = raw
                 cell = ws.cell(row=ri, column=ci, value=value)
                 cell.border = thin_border
                 if col_name == "Level":
                     cell.alignment = center
+                if row_fill is not None:
+                    cell.fill = row_fill
 
         # 汇总行（若已计算）
         if self._rollup_result:
@@ -1623,10 +1693,14 @@ class MassPropsDialog(QDialog):
         """将当前表格数据（含汇总行）写入 UTF-8 with BOM 的 CSV 文件。"""
         import csv
 
-        export_cols = [c for c in self._columns if c != "#"]
+        # 导出列（排除内部序号列 "#"），末尾追加 Status 列
+        export_cols = [c for c in self._columns if c != "#"] + ["Status"]
         display_rows = self._get_display_rows()
 
-        def _cell_value(col_name: str, raw) -> str:
+        def _cell_value(col_name: str, row_data: dict) -> str:
+            if col_name == "Status":
+                return self._row_status(row_data)
+            raw = row_data.get(col_name)
             if raw is None:
                 return ""
             if col_name == "Density":
@@ -1657,9 +1731,7 @@ class MassPropsDialog(QDialog):
             writer = csv.writer(f)
             writer.writerow([self._column_header(c) for c in export_cols])
             for row_data in display_rows:
-                writer.writerow([
-                    _cell_value(c, row_data.get(c)) for c in export_cols
-                ])
+                writer.writerow([_cell_value(c, row_data) for c in export_cols])
             if self._rollup_result:
                 cog = self._rollup_result.get("cog", [0.0, 0.0, 0.0])
                 I   = self._rollup_result.get("inertia", [[0.0] * 3 for _ in range(3)])
@@ -1692,6 +1764,148 @@ class MassPropsDialog(QDialog):
     def _on_section_resized(self, logical_index: int, _old: int, new_size: int) -> None:
         if logical_index < len(self._columns):
             self._col_widths[self._columns[logical_index]] = new_size
+
+    # ── 行操作辅助（删除 / 排除） ──────────────────────────────────────────
+
+    def _get_subtree_indices(self, row_idx: int) -> list[int]:
+        """返回 self._rows 中以 row_idx 为根的子树行索引列表（含 row_idx 自身）。
+
+        通过比较相邻行的 Level 字段确定子树范围：子孙行的 Level 严格大于根行的
+        Level，遇到 Level ≤ 根行时停止。
+        """
+        level = int(self._rows[row_idx].get("Level", 0))
+        indices = [row_idx]
+        for j in range(row_idx + 1, len(self._rows)):
+            if int(self._rows[j].get("Level", 0)) > level:
+                indices.append(j)
+            else:
+                break
+        return indices
+
+    def _delete_rows(self, row_idx: int) -> None:
+        """删除 row_idx 行及其全部子孙行，并立即重新计算汇总结果。
+
+        根节点（Level=0 且为产品）不允许删除，以防止清空整个数据集。
+        删除完成后调用 _rebuild_columns_and_table() 整体重建表格，
+        再调用 _calculate() 刷新底部汇总数值。
+        """
+        row_data = self._rows[row_idx]
+        if int(row_data.get("Level", 0)) == 0 and row_data.get("Type") in ("产品", "部件"):
+            QMessageBox.warning(
+                self, "不可删除",
+                "根节点不允许删除，请删除其子节点。",
+            )
+            return
+
+        indices = set(self._get_subtree_indices(row_idx))
+        self._rows = [r for i, r in enumerate(self._rows) if i not in indices]
+
+        if not self._rows:
+            self._table.clear()
+            self._item_by_row = []
+            self._pn_to_items.clear()
+            self._rollup_result = None
+            self._clear_summary_labels()
+            return
+
+        self._rebuild_columns_and_table()
+        self._calculate()
+
+    def _toggle_excluded(self, row_idx: int) -> None:
+        """切换 row_idx 行（及其子孙行）的"参与计算"状态。
+
+        若当前行被排除则恢复参与；若当前行参与则标记为排除。
+        产品/部件行同步其子树内全部行，以保证子树整体进入/退出计算。
+        切换完成后局部更新 QTreeWidgetItem 的视觉样式，并立即重新计算。
+        """
+        indices = self._get_subtree_indices(row_idx)
+        new_val = not bool(self._rows[row_idx].get("_excluded", False))
+        for i in indices:
+            self._rows[i]["_excluded"] = new_val
+        self._apply_excluded_style_for_indices(set(indices), new_val)
+        self._calculate()
+
+    def _apply_excluded_style_for_indices(
+        self,
+        indices: set[int],
+        excluded: bool,
+    ) -> None:
+        """更新指定行索引集合对应 QTreeWidgetItem 的排除/恢复样式。
+
+        excluded=True：浅灰紫背景 + 灰色斜体前景，并覆盖 tooltip。
+        excluded=False：重置背景/前景/字体为系统默认，清空排除 tooltip。
+        """
+        # Qt 的 setBackground/setForeground/setFont/setToolTip 均会触发
+        # itemChanged 信号；设置 _is_updating=True 防止 _on_item_changed
+        # 把格式化后的显示字符串当作用户编辑写回，导致密度/重量被污染。
+        self._is_updating = True
+        try:
+            self._apply_excluded_style_impl(indices, excluded)
+        finally:
+            self._is_updating = False
+
+    def _apply_excluded_style_impl(
+        self,
+        indices: set[int],
+        excluded: bool,
+    ) -> None:
+        excl_bg   = _EXCL_BG_COLOR
+        excl_fg   = _EXCL_FG_COLOR
+        excl_font = _EXCL_FONT
+        default_brush = QBrush()
+        default_font  = QFont()
+
+        for item in self._item_by_row:
+            r_idx = item.data(0, _ROW_IDX_ROLE)
+            if r_idx not in indices:
+                continue
+            item.setData(0, _EXCLUDED_ROLE, excluded)
+            for ci in range(len(self._columns)):
+                if excluded:
+                    item.setBackground(ci, excl_bg)
+                    item.setForeground(ci, excl_fg)
+                    item.setFont(ci, excl_font)
+                    item.setToolTip(ci, "该行已被排除，不参与计算。")
+                else:
+                    item.setBackground(ci, default_brush)
+                    item.setForeground(ci, default_brush)
+                    item.setFont(ci, default_font)
+                    item.setToolTip(ci, "")
+
+            # 恢复时重新应用该行原有的背景（异常/产品/正常等状态）
+            if not excluded:
+                r_data = self._rows[r_idx]
+                not_found   = bool(r_data.get("_not_found"))
+                meas_failed = bool(r_data.get("_meas_failed"))
+                unreadable  = bool(r_data.get("_unreadable"))
+                no_file     = bool(r_data.get("_no_file"))
+                node_type   = str(r_data.get("Type", ""))
+                row_locked  = unreadable or not_found or meas_failed
+                if row_locked:
+                    grey = QColor(160, 160, 160)
+                    if not_found:
+                        bg  = QColor(255, 205, 205)
+                        tip = "该零件/装配体的文件未被CATIA检索到，行内容不可编辑。"
+                    elif meas_failed:
+                        bg  = QColor(255, 210, 160)
+                        tip = "该零件的质量特性测量失败，行内容不可编辑。"
+                    else:
+                        bg  = QColor(245, 245, 245)
+                        tip = "该零件/装配体处于轻量化模式，无法读取属性。"
+                    for ci in range(len(self._columns)):
+                        item.setForeground(ci, grey)
+                        item.setBackground(ci, bg)
+                        item.setToolTip(ci, tip)
+                elif no_file:
+                    bg_unsaved = QColor(255, 245, 180)
+                    no_file_tip = "该零件尚未保存到磁盘，质量特性数据可能不完整。"
+                    for ci in range(len(self._columns)):
+                        item.setBackground(ci, bg_unsaved)
+                        item.setToolTip(ci, no_file_tip)
+                elif node_type in ("产品", "部件"):
+                    bg = QColor(240, 242, 245)
+                    for ci in range(len(self._columns)):
+                        item.setBackground(ci, bg)
 
     # ── 右键上下文菜单 ─────────────────────────────────────────────────────
 
@@ -1751,9 +1965,20 @@ class MassPropsDialog(QDialog):
         if reread_available:
             pn = str(row_data.get("Part Number", ""))
             act_reread.setToolTip(
-                f"重新从 CATIA 读取零件「{pn}」的惯量包络体 Keep 测量参数，"
+                f"重新从 CATIA 读取零件「{pn}」的惯量包络体保持测量参数，"
                 "并同步更新所有相同零件编号的节点。"
             )
+
+        # ── 层级BOM专属：排除 / 删除 ─────────────────────────────────────
+        # act_toggle / act_delete 预置 None，以便在条件块外统一分发 action
+        act_toggle = None
+        act_delete = None
+        if not self._summarize:
+            menu.addSeparator()
+            is_excluded = bool(row_data.get("_excluded", False))
+            toggle_label = "参与计算：×" if is_excluded else "参与计算：√"
+            act_toggle = menu.addAction(toggle_label)
+            act_delete = menu.addAction("删除本行")
 
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
 
@@ -1765,6 +1990,10 @@ class MassPropsDialog(QDialog):
             self._open_in_catia(fp)
         elif action == act_reread:
             self._reread_mass_props_for_row(row_idx)
+        elif act_toggle is not None and action == act_toggle:
+            self._toggle_excluded(row_idx)
+        elif act_delete is not None and action == act_delete:
+            self._delete_rows(row_idx)
 
     def _open_path(self, fp: str) -> None:
         """在 Windows 资源管理器中打开包含 *fp* 的文件夹，并高亮选中该文件。"""

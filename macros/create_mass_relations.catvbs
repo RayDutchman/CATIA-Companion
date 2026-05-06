@@ -5,7 +5,7 @@ Option Explicit
 '
 ' 功能概述：
 '   在 CATIA V5 零件文档中创建"质量特性参数绑定"。
-'   脚本把零件的 "惯量包络体.1" Keep 测量结果（体积、密度、质量、重心、
+'   脚本把零件的 "惯量包络体.1" 保持测量结果（体积、密度、质量、重心、
 '   转动惯量等）通过公式绑定到以 MP_* 开头的用户参数中，
 '   供外部程序（如 Python 端 _try_mp_params()）直接读取，
 '   而无需每次重新运行 SPA 测量。
@@ -21,7 +21,7 @@ Option Explicit
 '
 ' 先决条件：
 '   零件必须已在 CATIA SPA（惯量分析）中执行"测量惯量"并勾选"保持测量"，
-'   从而在参数树中生成 "惯量包络体.1\质量" 等 Keep 参数。
+'   从而在参数树中生成 "惯量包络体.1\质量" 等保持测量参数。
 '   若该参数不存在，脚本静默退出（不弹对话框），以便外部批量调用。
 '
 ' iParameters 用法（由 SystemService.ExecuteScript 传入）：
@@ -31,7 +31,7 @@ Option Explicit
 '     · 若为空或省略：弹出提示后对 CATIA 当前活动文档执行绑定。
 '
 ' 前缀说明（两用途使用不同前缀）：
-'   paramPrefix  — 用于 Parameters.Item() 查找 Keep 参数，
+'   paramPrefix  — 用于 Parameters.Item() 查找保持测量参数，
 '                  当通过零件编号定位文档时需加 "PartNumber\" 命名空间前缀：
 '                    有 targetPN：  "<PN>\惯量包络体.1\"
 '                    无 targetPN：  "惯量包络体.1\"
@@ -107,7 +107,7 @@ Sub CATMain(iParameters)
 
     ' ── 构造两种前缀 ─────────────────────────────────────────────────────────
     '
-    ' paramPrefix（用于 Parameters.Item() 查找 Keep 测量参数）：
+    ' paramPrefix（用于 Parameters.Item() 查找保持测量参数）：
     '   CATIA 在 Part.Parameters 集合中，以零件编号作为顶层命名空间：
     '     有 targetPN  →  "<PN>\惯量包络体.1\"
     '     无 targetPN  →  "惯量包络体.1\"
@@ -124,7 +124,7 @@ Sub CATMain(iParameters)
     Dim formulaPrefix
     formulaPrefix = "惯量包络体.1\"
 
-    ' ── 先决条件校验：检查 Keep 测量参数 "质量" 是否存在 ──────────────────
+    ' ── 先决条件校验：检查保持测量参数 "质量" 是否存在 ──────────────────
     ' 若不存在则静默退出，说明零件尚未执行"测量惯量"+"保持测量"。
     If Not ParameterExists(params, paramPrefix & "质量") Then Exit Sub
 
@@ -178,7 +178,7 @@ End Sub
 '
 ' 参数：
 '   prefix    — 参数路径前缀（公式中统一使用 formulaPrefix，即不含零件编号）
-'   fieldName — CATIA Keep 参数的字段名（如 "质量"、"Gx" 等）
+'   fieldName — CATIA 保持测量参数的字段名（如 "质量"、"Gx" 等）
 '   unitConst — 单位除数常量字符串，用于将 CATIA 有量纲值转换为无量纲实数
 ' ============================================================
 Private Function StdExpr(prefix, fieldName, unitConst)
