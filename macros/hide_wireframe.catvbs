@@ -7,7 +7,7 @@ Option Explicit
 '   一键隐藏 CATIA V5 活动文档中的所有点、线、三维曲线、草图、轴系、平面（不含曲面）。
 '   · 若活动文档为零件（CATPart）：直接处理该零件文档。
 '   · 若活动文档为装配体（CATProduct）：递归处理所有子孙零件文档，
-'     同一份零件文档被多次实例化时只处理一次（零件号去重）。
+'     同一份零件文档被多次实例化时只处理一次（路径级去重）。
 '
 ' 隐藏的几何类型：
 '   · 点（Point）
@@ -19,12 +19,9 @@ Option Explicit
 '   不包含曲面（Surface）。
 '
 ' 实现方式：
-'   · 零件文档：直接对其 Selection 搜索并隐藏。
-'   · 装配体文档：保持顶层产品文档为活动文档，通过
-'     Product.InWorkObject = <子零件 ReferenceProduct> 将编辑上下文切换到目标零件，
-'     再用顶层文档的 Selection 搜索当前工作对象内的几何并隐藏。
-'     处理完毕后将 InWorkObject 恢复为顶层产品自身。
-'   SetShow(catVisPropertyNoShowAttr) 表示"不显示/隐藏"。
+'   对目标 PartDocument 的 Selection 依次按几何类型搜索（Search），
+'   再调用 VisProperties.SetShow(catVisPropertyNoShowAttr) 将选中元素设置为隐藏状态。
+'   catVisPropertyNoShowAttr 为 CATIA V5 枚举值，表示"不显示/隐藏"。
 '
 ' 用法：
 '   在 CATIA 中打开零件或装配体并激活对应文档后，运行本脚本。
@@ -57,35 +54,11 @@ Sub CATMain()
             MsgBox "已隐藏零件中的点、线、曲线、草图、轴系、平面。", vbInformation, "hide_wireframe"
 
         Case "ProductDocument"
-            ' processedDocs："|partnum1|partnum2|..." 形式的已处理零件号列表，用于跨递归层去重
-            ' skippedNodes：换行分隔的未能访问的节点名列表，用于最终警告提示
-            ' processedList：换行分隔的已处理零件号列表，用于完成提示
+            ' processedDocs："|fullpath1|fullpath2|..." 形式的已处理路径列表，用于跨递归层去重
             Dim processedDocs
             processedDocs = "|"
-            Dim skippedNodes
-            skippedNodes = ""
-            Dim processedList
-            processedList = ""
-            RecurseProduct oDoc, oDoc.Product, processedDocs, skippedNodes, processedList
-            ' 恢复 InWorkObject 为顶层产品本身
-            On Error Resume Next
-            oDoc.Product.InWorkObject = oDoc.Product
-            On Error GoTo 0
-            Dim processedMsg
-            If processedList = "" Then
-                processedMsg = "（无零件被处理）"
-            Else
-                processedMsg = processedList
-            End If
-
-            If skippedNodes = "" Then
-                MsgBox "已隐藏以下零件中的点、线、曲线、草图、轴系、平面：" & vbCrLf & vbCrLf & processedMsg, _
-                       vbInformation, "hide_wireframe"
-            Else
-                MsgBox "已隐藏以下零件中的线框几何：" & vbCrLf & vbCrLf & processedMsg & vbCrLf & _
-                       "以下节点未能加载（已跳过）：" & vbCrLf & skippedNodes, _
-                       vbExclamation, "hide_wireframe"
-            End If
+            RecurseProduct oDoc.Product, processedDocs
+            MsgBox "已隐藏装配体及所有子孙零件中的点、线、曲线、草图、轴系、平面。", vbInformation, "hide_wireframe"
 
         Case Else
             MsgBox "当前活动文档不是零件（CATPart）或装配体（CATProduct），无法执行。", _
@@ -96,10 +69,11 @@ Sub CATMain()
 End Sub
 
 ' ============================================================
-' HideWireframeInPart — 隐藏指定 PartDocument（零件为活动文档时使用）
+' HideWireframeInPart — 隐藏指定 PartDocument 中的点、线、三维曲线、草图、轴系、平面
 '
-' 直接对 oPartDoc 的 Selection 按六种几何类型搜索并设为隐藏状态。
-' 仅在活动文档本身就是 CATPart 时调用（无需 InWorkObject）。
+' 对 oPartDoc 的 Selection 依次按 Point / Line / Curve / Sketch / AxisSystem / Plane
+' 六种类型搜索并调用 VisProperties.SetShow 设置为隐藏状态。
+' 搜索范围 "All" 覆盖零件内所有几何体（GeometricSet、OrderedGeometricSet 等）。
 '
 ' 参数：
 '   oPartDoc — 目标 PartDocument 对象
@@ -132,70 +106,16 @@ Private Sub HideWireframeInPart(oPartDoc)
 End Sub
 
 ' ============================================================
-' HideWireframeViaInWorkObject — 在装配体上下文中隐藏子零件的线框几何
-'
-' 保持顶层产品文档（oTopProdDoc）为活动文档，通过
-'   oTopProdDoc.Product.InWorkObject = oRefProd
-' 将编辑上下文切换到目标零件，再用顶层文档的 Selection 在工作对象范围内
-' 搜索并隐藏六种几何类型。
-' 搜索范围使用 "In"（限定在当前工作对象内部），避免将装配体中其他零件的
-' 实例（occurrence）误纳入搜索结果而被隐藏。
-' 调用方负责在所有零件处理完毕后恢复 InWorkObject（= 顶层产品本身）。
-'
-' 参数：
-'   oTopProdDoc — 顶层 ProductDocument 对象（始终为活动文档）
-'   oRefProd    — 目标叶级零件的 ReferenceProduct 对象
-' ============================================================
-Private Sub HideWireframeViaInWorkObject(oTopProdDoc, oRefProd)
-
-    ' 将工作对象切换到目标零件
-    On Error Resume Next
-    oTopProdDoc.Product.InWorkObject = oRefProd
-    On Error GoTo 0
-
-    Dim oSel
-    Set oSel = oTopProdDoc.Selection
-    oSel.Clear
-
-    Dim geomTypes
-    geomTypes = Array("Point", "Line", "Curve", "Sketch", "AxisSystem", "Plane")
-
-    Dim i
-    For i = 0 To UBound(geomTypes)
-        On Error Resume Next
-        Err.Clear
-        ' 使用 "In" 范围：仅在当前 InWorkObject（目标零件）内搜索，
-        ' 不搜索装配体层级上的其他零件实例，避免误隐藏实例节点。
-        oSel.Search "Type=" & geomTypes(i) & ", In"
-        Dim searchErr2: searchErr2 = Err.Number
-        Err.Clear
-        On Error GoTo 0
-
-        If searchErr2 = 0 And oSel.Count > 0 Then
-            oSel.VisProperties.SetShow catVisPropertyNoShowAttr
-        End If
-
-        oSel.Clear
-    Next
-
-End Sub
-
-' ============================================================
-' RecurseProduct — 递归遍历产品树，对每份唯一的 PartDocument 调用 HideWireframeViaInWorkObject
+' RecurseProduct — 递归遍历产品树，对每份唯一的 PartDocument 调用 HideWireframeInPart
 '
 ' 通过 ByRef 传递 processedDocs 字符串实现跨层去重：
 ' 同一份零件被多个实例引用时，仅在首次遇到时执行隐藏操作。
-' 无法加载的节点（unresolved / ReferenceProduct 为 Nothing）记录进 skippedNodes。
-' 已处理的零件号依次追加进 processedList（换行分隔）。
 '
 ' 参数：
-'   oTopProdDoc   — 顶层 ProductDocument（始终保持为活动文档）
 '   oProduct      — 当前层级的 Product 对象
-'   processedDocs — ByRef 字符串，记录已处理零件号，格式："|partnum1|partnum2|"
-'   skippedNodes  — ByRef 字符串，记录跳过节点的显示名，换行分隔
-'   processedList — ByRef 字符串，记录已处理的零件号，换行分隔
+'   processedDocs — ByRef 字符串，记录已处理文档路径，格式："|path1|path2|"
 ' ============================================================
-Private Sub RecurseProduct(oTopProdDoc, oProduct, ByRef processedDocs, ByRef skippedNodes, ByRef processedList)
+Private Sub RecurseProduct(oProduct, ByRef processedDocs)
 
     Dim i
     For i = 1 To oProduct.Products.Count
@@ -220,62 +140,53 @@ Private Sub RecurseProduct(oTopProdDoc, oProduct, ByRef processedDocs, ByRef ski
                 If IsObject(refProd) Then
                     If Not (refProd Is Nothing) Then
 
-                        ' ── 按 Products.Count 判断叶级零件 vs 子装配体 ──────────
-                        If refProd.Products.Count = 0 Then
+                        ' ── 取参考产品所在文档 ──────────────────────────────
+                        Dim parentDoc
+                        Set parentDoc = Nothing
+                        On Error Resume Next
+                        Set parentDoc = refProd.Parent
+                        On Error GoTo 0
 
-                            ' 叶级零件：通过 InWorkObject 在顶层文档上下文中处理
-                            Dim partNum
-                            partNum = ""
-                            On Error Resume Next
-                            partNum = refProd.PartNumber
-                            Err.Clear
-                            On Error GoTo 0
+                        If IsObject(parentDoc) Then
+                            If Not (parentDoc Is Nothing) Then
 
-                            If partNum <> "" Then
-                                If InStr(processedDocs, "|" & partNum & "|") = 0 Then
-                                    processedDocs = processedDocs & partNum & "|"
-                                    processedList = processedList & "  · " & partNum & vbCrLf
+                                ' ── 按文档类型分支处理 ──────────────────────
+                                Dim childDocType
+                                childDocType = TypeName(parentDoc)
 
-                                    HideWireframeViaInWorkObject oTopProdDoc, refProd
+                                If childDocType = "PartDocument" Then
+
+                                    ' 取文档唯一标识（FullName 不可用时回退到 Name）
+                                    Dim docKey
+                                    docKey = ""
+                                    On Error Resume Next
+                                    docKey = parentDoc.FullName
+                                    If docKey = "" Then docKey = parentDoc.Name
+                                    Err.Clear
+                                    On Error GoTo 0
+
+                                    ' 仅在尚未处理时执行隐藏（去重）
+                                    If docKey <> "" Then
+                                        If InStr(processedDocs, "|" & docKey & "|") = 0 Then
+                                            processedDocs = processedDocs & docKey & "|"
+                                            HideWireframeInPart parentDoc
+                                        End If
+                                    End If
+
+                                ElseIf childDocType = "ProductDocument" Then
+
+                                    ' 子节点为子装配体：递归向下处理
+                                    RecurseProduct refProd, processedDocs
 
                                 End If
+
                             End If
-
-                        Else
-
-                            ' 子装配体：递归向下处理
-                            RecurseProduct oTopProdDoc, refProd, processedDocs, skippedNodes, processedList
-
                         End If
 
-                    Else
-                        ' ReferenceProduct 为 Nothing：节点未加载（unresolved）
-                        Dim skipName1
-                        skipName1 = ""
-                        On Error Resume Next
-                        skipName1 = childProd.Name
-                        On Error GoTo 0
-                        If skipName1 = "" Then skipName1 = "(未知节点 #" & i & ")"
-                        skippedNodes = skippedNodes & "  · " & skipName1 & vbCrLf
                     End If
-                Else
-                    ' ReferenceProduct 访问失败：节点未加载（unresolved）
-                    Dim skipName2
-                    skipName2 = ""
-                    On Error Resume Next
-                    skipName2 = childProd.Name
-                    On Error GoTo 0
-                    If skipName2 = "" Then skipName2 = "(未知节点 #" & i & ")"
-                    skippedNodes = skippedNodes & "  · " & skipName2 & vbCrLf
                 End If
 
-            Else
-                ' childProd 为 Nothing：Products.Item(i) 访问失败
-                skippedNodes = skippedNodes & "  · (无法读取节点 #" & i & ")" & vbCrLf
             End If
-        Else
-            ' Products.Item(i) 返回非对象
-            skippedNodes = skippedNodes & "  · (无法读取节点 #" & i & ")" & vbCrLf
         End If
 
     Next
