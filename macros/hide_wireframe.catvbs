@@ -130,6 +130,8 @@ End Sub
 '   oTopProdDoc.Product.InWorkObject = oRefProd
 ' 将编辑上下文切换到目标零件，再用顶层文档的 Selection 在工作对象范围内
 ' 搜索并隐藏六种几何类型。
+' 搜索范围使用 "In"（限定在当前工作对象内部），避免将装配体中其他零件的
+' 实例（occurrence）误纳入搜索结果而被隐藏。
 ' 调用方负责在所有零件处理完毕后恢复 InWorkObject（= 顶层产品本身）。
 '
 ' 参数：
@@ -154,7 +156,9 @@ Private Sub HideWireframeViaInWorkObject(oTopProdDoc, oRefProd)
     For i = 0 To UBound(geomTypes)
         On Error Resume Next
         Err.Clear
-        oSel.Search "Type=" & geomTypes(i) & ", All"
+        ' 使用 "In" 范围：仅在当前 InWorkObject（目标零件）内搜索，
+        ' 不搜索装配体层级上的其他零件实例，避免误隐藏实例节点。
+        oSel.Search "Type=" & geomTypes(i) & ", In"
         Dim searchErr2: searchErr2 = Err.Number
         Err.Clear
         On Error GoTo 0
