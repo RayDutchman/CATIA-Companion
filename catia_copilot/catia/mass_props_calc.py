@@ -53,6 +53,8 @@ def rollup_mass_properties(rows: list[dict]) -> dict:
     for row in rows:
         if row.get("Type") != "零件":
             continue
+        if row.get("_excluded"):
+            continue
         mp = row.get("_mass_props")
         if not mp:
             continue

@@ -626,6 +626,8 @@ def recompute_product_rows(rows: list[dict]) -> None:
             desc = rows[j]
             if int(desc.get("Level", 0)) <= level:
                 break
+            if desc.get("_excluded"):
+                continue
             rmp = desc.get("_root_mp")
             if rmp and float(rmp.get("weight", 0.0)) > 0.0:
                 child_parts.append(rmp)

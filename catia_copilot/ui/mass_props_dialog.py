@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QRadioButton, QButtonGroup, QWidget, QComboBox,
     QStyledItemDelegate, QMenu,
 )
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QBrush, QColor, QFont
 from PySide6.QtCore import Qt, QSettings
 
 from catia_copilot.constants import (
@@ -54,6 +54,8 @@ _ROW_IDX_ROLE = Qt.ItemDataRole.UserRole
 _ITEM_LOCKED_ROLE = Qt.ItemDataRole.UserRole + 1
 # UserRole+2：密度锁定（密度值为 -1 或 None，不允许编辑密度列）
 _DENSITY_LOCKED_ROLE = Qt.ItemDataRole.UserRole + 2
+# UserRole+3：该行已被用户排除（不参与计算）
+_EXCLUDED_ROLE = Qt.ItemDataRole.UserRole + 3
 
 # 惯量列名 → (行索引, 列索引)，对应 3×3 张量位置
 _INERTIA_IDX: dict[str, tuple[int, int]] = {
@@ -72,6 +74,12 @@ _SUMMARY_SORT_COLUMNS: list[str] = [
 
 # 数值格式化：判断"接近整数"的绝对容差（用于 _fmt / _fmt_scaled）
 _INTEGER_ABS_TOL: float = 1e-9
+
+# 排除行视觉样式（背景色 / 前景色 / 斜体字体）
+_EXCL_BG_COLOR: QColor = QColor(216, 216, 232)   # 浅灰紫，区别于红/橙/黄等异常色
+_EXCL_FG_COLOR: QColor = QColor(130, 130, 150)
+_EXCL_FONT: QFont = QFont()
+_EXCL_FONT.setItalic(True)
 
 
 class _MassPropsDelegate(QStyledItemDelegate):
@@ -995,14 +1003,18 @@ class MassPropsDialog(QDialog):
     def _build_summary_rows(self) -> list[dict]:
         """汇总模式：将相同零件编号的行合并，增加 Quantity 字段。
 
-        每个唯一 PN 保留第一次出现的行数据（含 _rows 中的索引），
-        Quantity = 该 PN 在 _rows 中出现的实例数量。
+        每个唯一 PN 保留第一次出现的未排除行数据（含 _rows 中的索引），
+        Quantity = 该 PN 在 _rows 中未被排除的实例数量。
+        被排除（_excluded=True）的实例不计入数量，
+        若某 PN 的全部实例均被排除，则该 PN 不出现在汇总BOM中。
         """
-        seen_pn: dict[str, dict] = {}    # pn → 首次出现的规范行副本
+        seen_pn: dict[str, dict] = {}    # pn → 首次出现的未排除规范行副本
         qty: dict[str, int] = {}
         order: list[str] = []
 
         for i, row in enumerate(self._rows):
+            if row.get("_excluded"):
+                continue
             pn = str(row.get("Part Number", ""))
             if not pn:
                 pn = str(row.get("Filename", "")) or "(未分组)"
@@ -1159,6 +1171,17 @@ class MassPropsDialog(QDialog):
             bg = QColor(240, 242, 245)
             for ci in range(len(self._columns)):
                 item.setBackground(ci, bg)
+
+        # 排除状态：覆盖背景色、设置斜体灰色前景
+        is_excluded = bool(row_data.get("_excluded", False))
+        item.setData(0, _EXCLUDED_ROLE, is_excluded)
+        if is_excluded:
+            excl_tip = "该行已被排除，不参与计算。"
+            for ci in range(len(self._columns)):
+                item.setBackground(ci, _EXCL_BG_COLOR)
+                item.setForeground(ci, _EXCL_FG_COLOR)
+                item.setFont(ci, _EXCL_FONT)
+                item.setToolTip(ci, excl_tip)
 
         self._item_by_row.append(item)
         return item
@@ -1693,6 +1716,134 @@ class MassPropsDialog(QDialog):
         if logical_index < len(self._columns):
             self._col_widths[self._columns[logical_index]] = new_size
 
+    # ── 行操作辅助（删除 / 排除） ──────────────────────────────────────────
+
+    def _get_subtree_indices(self, row_idx: int) -> list[int]:
+        """返回 self._rows 中以 row_idx 为根的子树行索引列表（含 row_idx 自身）。
+
+        通过比较相邻行的 Level 字段确定子树范围：子孙行的 Level 严格大于根行的
+        Level，遇到 Level ≤ 根行时停止。
+        """
+        level = int(self._rows[row_idx].get("Level", 0))
+        indices = [row_idx]
+        for j in range(row_idx + 1, len(self._rows)):
+            if int(self._rows[j].get("Level", 0)) > level:
+                indices.append(j)
+            else:
+                break
+        return indices
+
+    def _delete_rows(self, row_idx: int) -> None:
+        """删除 row_idx 行及其全部子孙行，并立即重新计算汇总结果。
+
+        根节点（Level=0 且为产品）不允许删除，以防止清空整个数据集。
+        删除完成后调用 _rebuild_columns_and_table() 整体重建表格，
+        再调用 _calculate() 刷新底部汇总数值。
+        """
+        row_data = self._rows[row_idx]
+        if int(row_data.get("Level", 0)) == 0 and row_data.get("Type") in ("产品", "部件"):
+            QMessageBox.warning(
+                self, "不可删除",
+                "根节点不允许删除，请删除其子节点。",
+            )
+            return
+
+        indices = set(self._get_subtree_indices(row_idx))
+        self._rows = [r for i, r in enumerate(self._rows) if i not in indices]
+
+        if not self._rows:
+            self._table.clear()
+            self._item_by_row = []
+            self._pn_to_items.clear()
+            self._rollup_result = None
+            self._clear_summary_labels()
+            return
+
+        self._rebuild_columns_and_table()
+        self._calculate()
+
+    def _toggle_excluded(self, row_idx: int) -> None:
+        """切换 row_idx 行（及其子孙行）的"参与计算"状态。
+
+        若当前行被排除则恢复参与；若当前行参与则标记为排除。
+        产品/部件行同步其子树内全部行，以保证子树整体进入/退出计算。
+        切换完成后局部更新 QTreeWidgetItem 的视觉样式，并立即重新计算。
+        """
+        indices = self._get_subtree_indices(row_idx)
+        new_val = not bool(self._rows[row_idx].get("_excluded", False))
+        for i in indices:
+            self._rows[i]["_excluded"] = new_val
+        self._apply_excluded_style_for_indices(set(indices), new_val)
+        self._calculate()
+
+    def _apply_excluded_style_for_indices(
+        self,
+        indices: set[int],
+        excluded: bool,
+    ) -> None:
+        """更新指定行索引集合对应 QTreeWidgetItem 的排除/恢复样式。
+
+        excluded=True：浅灰紫背景 + 灰色斜体前景，并覆盖 tooltip。
+        excluded=False：重置背景/前景/字体为系统默认，清空排除 tooltip。
+        """
+        excl_bg   = _EXCL_BG_COLOR
+        excl_fg   = _EXCL_FG_COLOR
+        excl_font = _EXCL_FONT
+        default_brush = QBrush()
+        default_font  = QFont()
+
+        for item in self._item_by_row:
+            r_idx = item.data(0, _ROW_IDX_ROLE)
+            if r_idx not in indices:
+                continue
+            item.setData(0, _EXCLUDED_ROLE, excluded)
+            for ci in range(len(self._columns)):
+                if excluded:
+                    item.setBackground(ci, excl_bg)
+                    item.setForeground(ci, excl_fg)
+                    item.setFont(ci, excl_font)
+                    item.setToolTip(ci, "该行已被排除，不参与计算。")
+                else:
+                    item.setBackground(ci, default_brush)
+                    item.setForeground(ci, default_brush)
+                    item.setFont(ci, default_font)
+                    item.setToolTip(ci, "")
+
+            # 恢复时重新应用该行原有的背景（异常/产品/正常等状态）
+            if not excluded:
+                r_data = self._rows[r_idx]
+                not_found   = bool(r_data.get("_not_found"))
+                meas_failed = bool(r_data.get("_meas_failed"))
+                unreadable  = bool(r_data.get("_unreadable"))
+                no_file     = bool(r_data.get("_no_file"))
+                node_type   = str(r_data.get("Type", ""))
+                row_locked  = unreadable or not_found or meas_failed
+                if row_locked:
+                    grey = QColor(160, 160, 160)
+                    if not_found:
+                        bg  = QColor(255, 205, 205)
+                        tip = "该零件/装配体的文件未被CATIA检索到，行内容不可编辑。"
+                    elif meas_failed:
+                        bg  = QColor(255, 210, 160)
+                        tip = "该零件的质量特性测量失败，行内容不可编辑。"
+                    else:
+                        bg  = QColor(245, 245, 245)
+                        tip = "该零件/装配体处于轻量化模式，无法读取属性。"
+                    for ci in range(len(self._columns)):
+                        item.setForeground(ci, grey)
+                        item.setBackground(ci, bg)
+                        item.setToolTip(ci, tip)
+                elif no_file:
+                    bg_unsaved = QColor(255, 245, 180)
+                    no_file_tip = "该零件尚未保存到磁盘，质量特性数据可能不完整。"
+                    for ci in range(len(self._columns)):
+                        item.setBackground(ci, bg_unsaved)
+                        item.setToolTip(ci, no_file_tip)
+                elif node_type in ("产品", "部件"):
+                    bg = QColor(240, 242, 245)
+                    for ci in range(len(self._columns)):
+                        item.setBackground(ci, bg)
+
     # ── 右键上下文菜单 ─────────────────────────────────────────────────────
 
     def _on_tree_context_menu(self, pos) -> None:
@@ -1755,6 +1906,17 @@ class MassPropsDialog(QDialog):
                 "并同步更新所有相同零件编号的节点。"
             )
 
+        # ── 层级BOM专属：排除 / 删除 ─────────────────────────────────────
+        # act_toggle / act_delete 预置 None，以便在条件块外统一分发 action
+        act_toggle = None
+        act_delete = None
+        if not self._summarize:
+            menu.addSeparator()
+            is_excluded = bool(row_data.get("_excluded", False))
+            toggle_label = "参与计算：× → 切换为 √（恢复）" if is_excluded else "参与计算：√ → 切换为 ×（排除）"
+            act_toggle = menu.addAction(toggle_label)
+            act_delete = menu.addAction("删除本行")
+
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
 
         if action == act_open_path:
@@ -1765,6 +1927,10 @@ class MassPropsDialog(QDialog):
             self._open_in_catia(fp)
         elif action == act_reread:
             self._reread_mass_props_for_row(row_idx)
+        elif act_toggle is not None and action == act_toggle:
+            self._toggle_excluded(row_idx)
+        elif act_delete is not None and action == act_delete:
+            self._delete_rows(row_idx)
 
     def _open_path(self, fp: str) -> None:
         """在 Windows 资源管理器中打开包含 *fp* 的文件夹，并高亮选中该文件。"""
