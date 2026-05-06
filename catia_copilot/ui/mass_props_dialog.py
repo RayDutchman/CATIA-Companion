@@ -1915,7 +1915,7 @@ class MassPropsDialog(QDialog):
         if not self._summarize:
             menu.addSeparator()
             is_excluded = bool(row_data.get("_excluded", False))
-            toggle_label = "参与计算：× → 切换为 √（恢复）" if is_excluded else "参与计算：√ → 切换为 ×（排除）"
+            toggle_label = "参与计算：×" if is_excluded else "参与计算：√"
             act_toggle = menu.addAction(toggle_label)
             act_delete = menu.addAction("删除本行")
 
