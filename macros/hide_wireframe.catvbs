@@ -71,10 +71,18 @@ Sub CATMain()
             On Error Resume Next
             oDoc.Product.InWorkObject = oDoc.Product
             On Error GoTo 0
-            If skippedNodes = "" Then
-                MsgBox "已隐藏装配体及所有子孙零件中的点、线、曲线、草图、轴系、平面。", vbInformation, "hide_wireframe"
+            Dim processedMsg
+            If processedList = "" Then
+                processedMsg = "（无零件被处理）"
             Else
-                MsgBox "已隐藏可访问零件中的线框几何。" & vbCrLf & vbCrLf & _
+                processedMsg = processedList
+            End If
+
+            If skippedNodes = "" Then
+                MsgBox "已隐藏以下零件中的点、线、曲线、草图、轴系、平面：" & vbCrLf & vbCrLf & processedMsg, _
+                       vbInformation, "hide_wireframe"
+            Else
+                MsgBox "已隐藏以下零件中的线框几何：" & vbCrLf & vbCrLf & processedMsg & vbCrLf & _
                        "以下节点未能加载（已跳过）：" & vbCrLf & skippedNodes, _
                        vbExclamation, "hide_wireframe"
             End If
