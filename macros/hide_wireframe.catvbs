@@ -54,13 +54,20 @@ Sub CATMain()
             MsgBox "已隐藏零件中的点、线、曲线、草图、轴系、平面。", vbInformation, "hide_wireframe"
 
         Case "ProductDocument"
-            ' processedDocs："|fullpath1|fullpath2|..." 形式的已处理路径列表，用于跨递归层去重
+            ' processedDocs："|partnum1|partnum2|..." 形式的已处理零件号列表，用于跨递归层去重
             ' skippedNodes：换行分隔的未能访问的节点名列表，用于最终警告提示
+            ' processedList：换行分隔的即将处理的零件号列表，用于预览 MsgBox
             Dim processedDocs
             processedDocs = "|"
             Dim skippedNodes
             skippedNodes = ""
-            RecurseProduct oDoc.Product, processedDocs, skippedNodes
+            Dim processedList
+            processedList = ""
+            RecurseProduct oDoc.Product, processedDocs, skippedNodes, processedList
+            If processedList <> "" Then
+                MsgBox "即将对以下零件执行隐藏线框操作：" & vbCrLf & vbCrLf & processedList, _
+                       vbInformation, "hide_wireframe"
+            End If
             If skippedNodes = "" Then
                 MsgBox "已隐藏装配体及所有子孙零件中的点、线、曲线、草图、轴系、平面。", vbInformation, "hide_wireframe"
             Else
@@ -120,13 +127,15 @@ End Sub
 ' 通过 ByRef 传递 processedDocs 字符串实现跨层去重：
 ' 同一份零件被多个实例引用时，仅在首次遇到时执行隐藏操作。
 ' 无法加载的节点（unresolved / ReferenceProduct 为 Nothing）记录进 skippedNodes。
+' 即将处理的零件号依次追加进 processedList（换行分隔）。
 '
 ' 参数：
 '   oProduct      — 当前层级的 Product 对象
-'   processedDocs — ByRef 字符串，记录已处理文档路径，格式："|path1|path2|"
+'   processedDocs — ByRef 字符串，记录已处理零件号，格式："|partnum1|partnum2|"
 '   skippedNodes  — ByRef 字符串，记录跳过节点的显示名，换行分隔
+'   processedList — ByRef 字符串，记录即将处理的零件号，换行分隔
 ' ============================================================
-Private Sub RecurseProduct(oProduct, ByRef processedDocs, ByRef skippedNodes)
+Private Sub RecurseProduct(oProduct, ByRef processedDocs, ByRef skippedNodes, ByRef processedList)
 
     Dim i
     For i = 1 To oProduct.Products.Count
@@ -172,6 +181,7 @@ Private Sub RecurseProduct(oProduct, ByRef processedDocs, ByRef skippedNodes)
                             If partNum <> "" Then
                                 If InStr(processedDocs, "|" & partNum & "|") = 0 Then
                                     processedDocs = processedDocs & partNum & "|"
+                                    processedList = processedList & "  · " & partNum & vbCrLf
 
                                     If IsObject(parentDoc) Then
                                         If Not (parentDoc Is Nothing) Then
@@ -185,7 +195,7 @@ Private Sub RecurseProduct(oProduct, ByRef processedDocs, ByRef skippedNodes)
                         Else
 
                             ' 子装配体：递归向下处理
-                            RecurseProduct refProd, processedDocs, skippedNodes
+                            RecurseProduct refProd, processedDocs, skippedNodes, processedList
 
                         End If
 
