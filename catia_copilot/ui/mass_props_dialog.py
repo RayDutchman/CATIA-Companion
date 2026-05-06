@@ -1965,7 +1965,7 @@ class MassPropsDialog(QDialog):
         if reread_available:
             pn = str(row_data.get("Part Number", ""))
             act_reread.setToolTip(
-                f"重新从 CATIA 读取零件「{pn}」的惯量包络体 Keep 测量参数，"
+                f"重新从 CATIA 读取零件「{pn}」的惯量包络体保持测量参数，"
                 "并同步更新所有相同零件编号的节点。"
             )
 
