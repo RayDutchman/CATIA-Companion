@@ -96,6 +96,11 @@ End Sub
 ' ============================================================
 Private Sub HideWireframeInPart(oPartDoc)
 
+    ' Selection.Search 只作用于 ActiveDocument，必须先激活目标零件文档
+    On Error Resume Next
+    oPartDoc.Activate
+    On Error GoTo 0
+
     Dim oSel
     Set oSel = oPartDoc.Selection
     oSel.Clear
