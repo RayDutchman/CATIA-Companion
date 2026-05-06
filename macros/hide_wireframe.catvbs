@@ -58,6 +58,8 @@ Sub CATMain()
             Dim processedDocs
             processedDocs = "|"
             RecurseProduct oDoc.Product, processedDocs
+            ' 所有子零件处理完毕后，将装配体文档重新激活为活动文档
+            oDoc.Activate
             MsgBox "已隐藏装配体及所有子孙零件中的点、线、曲线、草图、轴系、平面。", vbInformation, "hide_wireframe"
 
         Case Else
@@ -169,6 +171,10 @@ Private Sub RecurseProduct(oProduct, ByRef processedDocs)
                                     If docKey <> "" Then
                                         If InStr(processedDocs, "|" & docKey & "|") = 0 Then
                                             processedDocs = processedDocs & docKey & "|"
+                                            ' 必须先将目标零件激活为活动文档，
+                                            ' 否则 Selection.Search 只在活动文档上下文执行，
+                                            ' 对非活动的子零件文档搜索结果始终为空。
+                                            parentDoc.Activate
                                             HideWireframeInPart parentDoc
                                         End If
                                     End If
