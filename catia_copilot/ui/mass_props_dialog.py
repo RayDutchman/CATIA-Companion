@@ -1537,13 +1537,28 @@ class MassPropsDialog(QDialog):
             logger.error(f"导出失败: {e}")
             QMessageBox.critical(self, "导出失败", f"导出时出错：\n{e}")
 
+    @staticmethod
+    def _row_status(row_data: dict) -> str:
+        """Return a pipe-separated status string for a row.
+
+        Possible tokens: excluded / no_file / not_found / unreadable / meas_failed.
+        Empty string means the row has no special state.
+        """
+        tokens = []
+        if row_data.get("_excluded"):    tokens.append("excluded")
+        if row_data.get("_no_file"):     tokens.append("no_file")
+        if row_data.get("_not_found"):   tokens.append("not_found")
+        if row_data.get("_unreadable"):  tokens.append("unreadable")
+        if row_data.get("_meas_failed"): tokens.append("meas_failed")
+        return " | ".join(tokens)
+
     def _do_export(self, dest: str) -> None:
         import openpyxl
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
         from catia_copilot.utils import estimate_column_width
 
-        # 导出列（排除内部序号列 "#"）
-        export_cols = [c for c in self._columns if c != "#"]
+        # 导出列（排除内部序号列 "#"），末尾追加 Status 列
+        export_cols = [c for c in self._columns if c != "#"] + ["Status"]
 
         wb  = openpyxl.Workbook()
         ws  = wb.active
@@ -1556,6 +1571,11 @@ class MassPropsDialog(QDialog):
             left=thin_side, right=thin_side, top=thin_side, bottom=thin_side,
         )
 
+        # 特殊行背景色
+        excl_fill     = PatternFill(fill_type="solid", fgColor="D8D8E8")  # 排除：灰紫
+        error_fill    = PatternFill(fill_type="solid", fgColor="FFB3B3")  # not_found/unreadable：红
+        warning_fill  = PatternFill(fill_type="solid", fgColor="FFF2CC")  # no_file/meas_failed：黄
+
         # 写入表头
         for ci, col_name in enumerate(export_cols, start=1):
             cell = ws.cell(row=1, column=ci, value=self._column_header(col_name))
@@ -1563,43 +1583,59 @@ class MassPropsDialog(QDialog):
             cell.fill   = header_fill
             cell.border = thin_border
 
-        # 写入数据行
+        # 写入数据行（含所有特殊状态行）
         display_rows = self._get_display_rows()
-        display_rows = [r for r in display_rows if not r.get("_excluded")]
         for ri, row_data in enumerate(display_rows, start=2):
+            status_val = self._row_status(row_data)
+
+            # 确定行背景色
+            if row_data.get("_excluded"):
+                row_fill = excl_fill
+            elif row_data.get("_not_found") or row_data.get("_unreadable"):
+                row_fill = error_fill
+            elif row_data.get("_no_file") or row_data.get("_meas_failed"):
+                row_fill = warning_fill
+            else:
+                row_fill = None
+
             for ci, col_name in enumerate(export_cols, start=1):
-                raw = row_data.get(col_name)
-                if raw is None:
-                    value = ""
-                elif col_name == "Density":
-                    if raw < 0:
-                        value = "不统一"
-                    else:
+                if col_name == "Status":
+                    value = status_val
+                else:
+                    raw = row_data.get(col_name)
+                    if raw is None:
+                        value = ""
+                    elif col_name == "Density":
+                        if raw < 0:
+                            value = "不统一"
+                        else:
+                            try:
+                                value = float(raw)
+                            except (TypeError, ValueError):
+                                value = ""
+                    elif col_name == "Weight":
                         try:
-                            value = float(raw)
+                            value = float(raw) * self._unit_factor
                         except (TypeError, ValueError):
                             value = ""
-                elif col_name == "Weight":
-                    try:
-                        value = float(raw) * self._unit_factor
-                    except (TypeError, ValueError):
-                        value = ""
-                elif col_name in _INERTIA_IDX:
-                    try:
-                        value = float(raw) * self._inertia_unit_factor
-                    except (TypeError, ValueError):
-                        value = ""
-                elif col_name in ("CogX", "CogY", "CogZ"):
-                    try:
-                        value = float(raw) * self._cog_unit_factor
-                    except (TypeError, ValueError):
-                        value = ""
-                else:
-                    value = raw
+                    elif col_name in _INERTIA_IDX:
+                        try:
+                            value = float(raw) * self._inertia_unit_factor
+                        except (TypeError, ValueError):
+                            value = ""
+                    elif col_name in ("CogX", "CogY", "CogZ"):
+                        try:
+                            value = float(raw) * self._cog_unit_factor
+                        except (TypeError, ValueError):
+                            value = ""
+                    else:
+                        value = raw
                 cell = ws.cell(row=ri, column=ci, value=value)
                 cell.border = thin_border
                 if col_name == "Level":
                     cell.alignment = center
+                if row_fill is not None:
+                    cell.fill = row_fill
 
         # 汇总行（若已计算）
         if self._rollup_result:
@@ -1647,11 +1683,14 @@ class MassPropsDialog(QDialog):
         """将当前表格数据（含汇总行）写入 UTF-8 with BOM 的 CSV 文件。"""
         import csv
 
-        export_cols = [c for c in self._columns if c != "#"]
+        # 导出列（排除内部序号列 "#"），末尾追加 Status 列
+        export_cols = [c for c in self._columns if c != "#"] + ["Status"]
         display_rows = self._get_display_rows()
-        display_rows = [r for r in display_rows if not r.get("_excluded")]
 
-        def _cell_value(col_name: str, raw) -> str:
+        def _cell_value(col_name: str, row_data: dict) -> str:
+            if col_name == "Status":
+                return self._row_status(row_data)
+            raw = row_data.get(col_name)
             if raw is None:
                 return ""
             if col_name == "Density":
@@ -1682,9 +1721,7 @@ class MassPropsDialog(QDialog):
             writer = csv.writer(f)
             writer.writerow([self._column_header(c) for c in export_cols])
             for row_data in display_rows:
-                writer.writerow([
-                    _cell_value(c, row_data.get(c)) for c in export_cols
-                ])
+                writer.writerow([_cell_value(c, row_data) for c in export_cols])
             if self._rollup_result:
                 cog = self._rollup_result.get("cog", [0.0, 0.0, 0.0])
                 I   = self._rollup_result.get("inertia", [[0.0] * 3 for _ in range(3)])

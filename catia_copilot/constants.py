@@ -195,6 +195,7 @@ MASS_PROPS_COLUMN_DISPLAY_NAMES: dict[str, str] = {
     "Nomenclature": "术语（中文名称）",
     "Revision":     "版本",
     "Quantity":     "数量",
+    "Status":       "状态",
     "Density":      "密度 (kg/m³)",
     "Weight":       "重量 (kg)",
     "CogX":         "重心 X (mm)",
