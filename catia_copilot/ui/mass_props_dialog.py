@@ -788,22 +788,24 @@ class MassPropsDialog(QDialog):
 
         self._is_updating = True
         display_rows = self._get_display_rows()
-        for di, row_data in enumerate(display_rows):
-            if di >= len(self._item_by_row):
-                break
-            item = self._item_by_row[di]
-            if not any(row_data.get(c) is not None for c in _UNIT_SENSITIVE_COLUMNS):
-                continue
-            for col_name, col_idx in mass_col_indices:
-                raw = row_data.get(col_name)
-                if raw is not None:
-                    if col_name == "Weight":
-                        item.setText(col_idx, self._fmt_mass_val(raw))
-                    elif col_name in _INERTIA_IDX:
-                        item.setText(col_idx, self._fmt_inertia_val(raw))
-                    else:
-                        item.setText(col_idx, self._fmt_cog_val(raw))
-        self._is_updating = False
+        try:
+            for di, row_data in enumerate(display_rows):
+                if di >= len(self._item_by_row):
+                    break
+                item = self._item_by_row[di]
+                if not any(row_data.get(c) is not None for c in _UNIT_SENSITIVE_COLUMNS):
+                    continue
+                for col_name, col_idx in mass_col_indices:
+                    raw = row_data.get(col_name)
+                    if raw is not None:
+                        if col_name == "Weight":
+                            item.setText(col_idx, self._fmt_mass_val(raw))
+                        elif col_name in _INERTIA_IDX:
+                            item.setText(col_idx, self._fmt_inertia_val(raw))
+                        else:
+                            item.setText(col_idx, self._fmt_cog_val(raw))
+        finally:
+            self._is_updating = False
 
         # 若已有汇总结果，更新底部汇总标签
         if self._rollup_result:
@@ -1015,6 +1017,11 @@ class MassPropsDialog(QDialog):
         for i, row in enumerate(self._rows):
             if row.get("_excluded"):
                 continue
+            # 汇总BOM仅统计零件行；产品/部件不计入数量，也不占用 PN 的 seen_pn 位置，
+            # 否则产品行会成为该 PN 的"规范行"，随后被类型过滤器删除，导致该 PN 的
+            # 零件实例在汇总BOM中完全消失，且数量也会被错误地计入产品实例。
+            if row.get("Type") != "零件":
+                continue
             pn = str(row.get("Part Number", ""))
             if not pn:
                 pn = str(row.get("Filename", "")) or "(未分组)"
@@ -1033,7 +1040,7 @@ class MassPropsDialog(QDialog):
             r["Quantity"] = qty[pn]
             result.append(r)
 
-        # 仅保留零件行（汇总BOM不显示产品和部件）
+        # 类型过滤作为保险：上方循环已只处理零件行，此处过滤冗余但保留以防万一
         result = [r for r in result if r.get("Type") == "零件"]
 
         # 按排序列排序
@@ -1384,38 +1391,38 @@ class MassPropsDialog(QDialog):
         self._is_updating = True
         w_idx = self._columns.index("Weight") if "Weight" in self._columns else -1
         d_idx = self._columns.index("Density") if "Density" in self._columns else -1
-
-        for vis_item in self._pn_to_items.get(pn, []):
-            vis_row_idx = vis_item.data(0, _ROW_IDX_ROLE)
-            if vis_row_idx is None:
-                continue
-            vis_row = self._rows[vis_row_idx]
-            if vis_row.get("Type") != "零件":
-                continue
-            if w_idx >= 0:
-                vis_item.setText(w_idx, self._fmt_mass_val(vis_row.get("Weight")))
-            if d_idx >= 0:
-                d_val = vis_row.get("Density")
-                if d_val is not None and d_val >= 0:
-                    vis_item.setText(d_idx, _fmt(d_val))
-            for ic_name, (ir, ic) in _INERTIA_IDX.items():
-                if ic_name in self._columns:
-                    ic_idx = self._columns.index(ic_name)
-                    if self._summarize:
-                        # 汇总BOM：显示零件自身坐标系值
-                        raw_i = vis_row.get(ic_name)
-                    else:
-                        # 层级BOM：显示根产品坐标系值
-                        rmp = vis_row.get("_root_mp")
-                        raw_i = (
-                            rmp["inertia"][ir][ic]
-                            if rmp and rmp.get("inertia")
-                            else vis_row.get(ic_name)
-                        )
-                    if raw_i is not None:
-                        vis_item.setText(ic_idx, self._fmt_inertia_val(raw_i))
-
-        self._is_updating = False
+        try:
+            for vis_item in self._pn_to_items.get(pn, []):
+                vis_row_idx = vis_item.data(0, _ROW_IDX_ROLE)
+                if vis_row_idx is None:
+                    continue
+                vis_row = self._rows[vis_row_idx]
+                if vis_row.get("Type") != "零件":
+                    continue
+                if w_idx >= 0:
+                    vis_item.setText(w_idx, self._fmt_mass_val(vis_row.get("Weight")))
+                if d_idx >= 0:
+                    d_val = vis_row.get("Density")
+                    if d_val is not None and d_val >= 0:
+                        vis_item.setText(d_idx, _fmt(d_val))
+                for ic_name, (ir, ic) in _INERTIA_IDX.items():
+                    if ic_name in self._columns:
+                        ic_idx = self._columns.index(ic_name)
+                        if self._summarize:
+                            # 汇总BOM：显示零件自身坐标系值
+                            raw_i = vis_row.get(ic_name)
+                        else:
+                            # 层级BOM：显示根产品坐标系值
+                            rmp = vis_row.get("_root_mp")
+                            raw_i = (
+                                rmp["inertia"][ir][ic]
+                                if rmp and rmp.get("inertia")
+                                else vis_row.get(ic_name)
+                            )
+                        if raw_i is not None:
+                            vis_item.setText(ic_idx, self._fmt_inertia_val(raw_i))
+        finally:
+            self._is_updating = False
         # 编辑密度/重量后立即重新计算汇总结果（无需手动点击"计算"）
         self._calculate()
 
