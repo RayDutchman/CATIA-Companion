@@ -40,7 +40,7 @@ from catia_copilot.constants import (
 )
 from catia_copilot.catia.mass_props_collect import (
     collect_mass_props_rows, _row_inertia_to_root, recompute_product_rows,
-    save_rows, load_rows, MAX_INERTIA_INDEX, remeasure_part_mass_props,
+    save_rows, load_rows, merge_rows, MAX_INERTIA_INDEX, remeasure_part_mass_props,
     _compute_root_mp_from_placement,
 )
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
@@ -205,6 +205,10 @@ class MassPropsDialog(QDialog):
         self._loaded: bool = False
         self._col_widths: dict[str, int] = {}
 
+        # 按钮引用（_build_ui 中赋值，此处声明以供类型提示）
+        self._append_data_btn: QPushButton
+        self._append_active_btn: QPushButton
+
         # 列名列表在可见性或模式改变时重建
         self._columns: list[str] = self._build_columns()
 
@@ -364,10 +368,26 @@ class MassPropsDialog(QDialog):
         self._load_json_btn = QPushButton("载入已保存数据…")
         self._load_json_btn.setToolTip("从之前保存的数据文件中载入质量特性（无需打开CATIA）")
         self._load_json_btn.clicked.connect(self._load_data_from_json)
+        self._append_data_btn = QPushButton("追加数据…")
+        self._append_data_btn.setToolTip(
+            "从已保存的数据文件（.mpd）追加分总成数据并合并汇总\n"
+            "（适用于主产品过大、分批读取各分总成的场景；各分总成坐标系须与主产品一致）"
+        )
+        self._append_data_btn.setEnabled(False)
+        self._append_data_btn.clicked.connect(self._append_data_from_file)
+        self._append_active_btn = QPushButton("追加活动文档…")
+        self._append_active_btn.setToolTip(
+            "将 CATIA 当前活动文档（分总成）的质量特性追加到现有数据中\n"
+            "（各分总成坐标系须与主产品一致）"
+        )
+        self._append_active_btn.setEnabled(False)
+        self._append_active_btn.clicked.connect(self._append_from_active)
         file_row.addWidget(self._file_edit)
         file_row.addWidget(self._file_browse_btn)
         file_row.addWidget(self._load_btn)
         file_row.addWidget(self._load_json_btn)
+        file_row.addWidget(self._append_data_btn)
+        file_row.addWidget(self._append_active_btn)
         layout.addLayout(file_row)
 
         # ── 选项面板（2 行）────────────────────────────────────────────────
@@ -898,6 +918,8 @@ class MassPropsDialog(QDialog):
 
         self._export_btn.setEnabled(True)
         self._save_json_btn.setEnabled(True)
+        self._append_data_btn.setEnabled(True)
+        self._append_active_btn.setEnabled(True)
 
         failed_count = sum(1 for r in rows if r.get("_meas_failed") and r.get("Type") == "零件")
         if failed_count:
@@ -971,6 +993,103 @@ class MassPropsDialog(QDialog):
             QMessageBox.critical(self, "载入失败", f"载入数据时出错：\n{e}")
             return
         self._apply_loaded_rows(rows)
+
+    def _append_data_from_file(self) -> None:
+        """从一个或多个已保存的数据文件（.mpd）追加分总成数据并合并。
+
+        支持多选文件，每个文件的行数据依次追加到 ``self._rows`` 中。
+        适用于主产品过大、分批读取各分总成并在此汇总的工作流。
+        前提：各分总成坐标系须与主产品（及彼此）一致，无须额外坐标变换。
+        """
+        if not self._rows:
+            QMessageBox.warning(self, "无基础数据", "请先加载基础产品数据，再追加分总成数据。")
+            return
+        srcs, _ = QFileDialog.getOpenFileNames(
+            self, "追加质量特性数据", self._last_browse_dir,
+            "质量特性数据文件 (*.mpd)"
+        )
+        if not srcs:
+            return
+
+        combined = list(self._rows)
+        errors: list[str] = []
+        appended = 0
+        for src in srcs:
+            if not Path(src).exists():
+                errors.append(f"文件不存在：{src}")
+                continue
+            try:
+                extra = load_rows(src)
+                combined = merge_rows(combined, extra)
+                appended += len(extra)
+                self._last_browse_dir = str(Path(src).parent)
+                self._settings.setValue("last_browse_dir", self._last_browse_dir)
+            except Exception as e:
+                logger.error(f"追加质量特性数据失败 ({src}): {e}")
+                errors.append(f"{Path(src).name}：{e}")
+
+        if errors:
+            QMessageBox.warning(
+                self, "部分文件追加失败",
+                "以下文件追加时出错：\n\n" + "\n".join(errors),
+            )
+
+        if appended > 0:
+            self._apply_loaded_rows(combined)
+
+    def _append_from_active(self) -> None:
+        """将 CATIA 当前活动文档（分总成）的质量特性追加到现有数据中。
+
+        调用 :func:`collect_mass_props_rows` 读取当前 CATIA 活动文档（需已在
+        CATIA 中打开对应的 CATProduct），然后用 :func:`merge_rows` 追加到
+        ``self._rows`` 并刷新显示与汇总。
+        前提：活动文档坐标系须与已加载数据的坐标系一致。
+        """
+        if not self._rows:
+            QMessageBox.warning(self, "无基础数据", "请先加载基础产品数据，再追加分总成数据。")
+            return
+
+        self._append_active_btn.setEnabled(False)
+        self._append_active_btn.setText("读取中…")
+        QApplication.processEvents()
+
+        progress = QProgressDialog("正在读取当前活动文档，请稍候…", None, 0, 0, self)
+        progress.setWindowTitle("追加质量特性")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(300)
+        progress.setValue(0)
+
+        def _on_row_collected(count: int) -> None:
+            progress.setLabelText(f"正在读取当前活动文档，请稍候… 已读取 {count} 个节点")
+            progress.repaint()
+            QApplication.processEvents()
+
+        extra: list[dict] = []
+        try:
+            extra = collect_mass_props_rows(
+                None,
+                progress_callback=_on_row_collected,
+                read_mode=self._read_mode,
+                skip_hidden=self._skip_hidden,
+            )
+        except Exception as e:
+            logger.error(f"追加活动文档质量特性失败: {e}")
+            QMessageBox.critical(
+                self, "读取失败",
+                f"读取当前活动文档时出错：\n{e}\n\n请确保CATIA已启动且已打开目标产品。",
+            )
+            return
+        finally:
+            progress.close()
+            self._append_active_btn.setEnabled(True)
+            self._append_active_btn.setText("追加活动文档…")
+
+        if not extra:
+            QMessageBox.information(self, "无数据", "当前活动文档未读取到任何节点，未进行追加。")
+            return
+
+        combined = merge_rows(self._rows, extra)
+        self._apply_loaded_rows(combined)
 
     # ── 构建显示行 ─────────────────────────────────────────────────────────
 
