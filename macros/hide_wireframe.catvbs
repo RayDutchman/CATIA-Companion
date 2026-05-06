@@ -150,22 +150,20 @@ Private Sub RecurseProduct(oProduct, ByRef processedDocs)
                             Set parentDoc = refProd.Parent
                             On Error GoTo 0
 
-                            If IsObject(parentDoc) Then
-                                If Not (parentDoc Is Nothing) Then
+                            ' 取零件号作为唯一标识（去重）
+                            Dim partNum
+                            partNum = ""
+                            On Error Resume Next
+                            partNum = refProd.PartNumber
+                            Err.Clear
+                            On Error GoTo 0
 
-                                    ' 取文档唯一标识（FullName 不可用时回退到 Name）
-                                    Dim docKey
-                                    docKey = ""
-                                    On Error Resume Next
-                                    docKey = parentDoc.FullName
-                                    If docKey = "" Then docKey = parentDoc.Name
-                                    Err.Clear
-                                    On Error GoTo 0
+                            If partNum <> "" Then
+                                If InStr(processedDocs, "|" & partNum & "|") = 0 Then
+                                    processedDocs = processedDocs & partNum & "|"
 
-                                    ' 仅在尚未处理时执行隐藏（去重）
-                                    If docKey <> "" Then
-                                        If InStr(processedDocs, "|" & docKey & "|") = 0 Then
-                                            processedDocs = processedDocs & docKey & "|"
+                                    If IsObject(parentDoc) Then
+                                        If Not (parentDoc Is Nothing) Then
                                             HideWireframeInPart parentDoc
                                         End If
                                     End If
