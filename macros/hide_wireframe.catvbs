@@ -47,46 +47,20 @@ Sub CATMain()
     Dim docType
     docType = TypeName(oDoc)
 
-    ' ── 初始化调试日志 ──────────────────────────────────────────────────────
-    ' 日志文件路径：%TEMP%\hide_wireframe_debug.txt
-    ' 运行完成后请在 Windows 资源管理器或记事本中打开该文件查看调试信息。
-    Dim oFSO, oLog, sLogPath
-    Set oFSO = CreateObject("Scripting.FileSystemObject")
-    sLogPath = oFSO.GetSpecialFolder(2) & "\hide_wireframe_debug.txt"
-    Set oLog = oFSO.CreateTextFile(sLogPath, True, True)   ' 覆盖写入，UTF-16
-    oLog.WriteLine "=== hide_wireframe debug log ==="
-    oLog.WriteLine "Time       : " & Now()
-    oLog.WriteLine "ActiveDoc  : " & oDoc.Name
-    oLog.WriteLine "TypeName   : " & docType
-    oLog.WriteLine ""
-
     Select Case docType
 
         Case "PartDocument"
             HideWireframeInPart oDoc
-            oLog.WriteLine "[CATMain] PartDocument -> HideWireframeInPart called."
-            oLog.Close
-            MsgBox "已隐藏零件中的点、线、曲线、草图、轴系、平面。" & vbCrLf & _
-                   "(调试日志：" & sLogPath & ")", vbInformation, "hide_wireframe"
+            MsgBox "已隐藏零件中的点、线、曲线、草图、轴系、平面。", vbInformation, "hide_wireframe"
 
         Case "ProductDocument"
             ' processedDocs："|fullpath1|fullpath2|..." 形式的已处理路径列表，用于跨递归层去重
             Dim processedDocs
             processedDocs = "|"
-            oLog.WriteLine "[CATMain] ProductDocument -> start RecurseProduct"
-            oLog.WriteLine "  oDoc.Product.Name = " & oDoc.Product.Name
-            oLog.WriteLine "  Products.Count    = " & oDoc.Product.Products.Count
-            oLog.WriteLine ""
-            RecurseProduct oCATIA, oDoc.Product, processedDocs, oLog
-            oLog.WriteLine ""
-            oLog.WriteLine "[CATMain] RecurseProduct finished."
-            oLog.Close
-            MsgBox "已隐藏装配体及所有子孙零件中的点、线、曲线、草图、轴系、平面。" & vbCrLf & _
-                   "(调试日志：" & sLogPath & ")", vbInformation, "hide_wireframe"
+            RecurseProduct oDoc.Product, processedDocs
+            MsgBox "已隐藏装配体及所有子孙零件中的点、线、曲线、草图、轴系、平面。", vbInformation, "hide_wireframe"
 
         Case Else
-            oLog.WriteLine "[CATMain] Unsupported document type: " & docType
-            oLog.Close
             MsgBox "当前活动文档不是零件（CATPart）或装配体（CATProduct），无法执行。", _
                    vbExclamation, "hide_wireframe"
 
@@ -134,216 +108,84 @@ End Sub
 ' ============================================================
 ' RecurseProduct — 递归遍历产品树，对每份唯一的 PartDocument 调用 HideWireframeInPart
 '
-' 判断叶级零件 vs 子装配体的方法（修正版）：
-'   使用 refProd.Products.Count 判断——
-'     = 0 → 叶级零件（CATPart）：通过 refProd.Parent 获取 PartDocument，
-'             并验证返回文档的 Product.Name 与 refProd.Name 一致；
-'             若不一致则 fallback：遍历 oCATIA.Documents 查找匹配的 PartDocument。
-'     > 0 → 子装配体（CATProduct）：递归向下处理
-'
-'   注意：refProd.Parent 在某些 CATIA V5 配置下会返回错误的文档
-'   （例如返回父装配体文档或另一个 PartDocument），
-'   故必须以 Product.Name 对比加以验证，不匹配时遍历 Documents 兜底。
+' 通过 ByRef 传递 processedDocs 字符串实现跨层去重：
+' 同一份零件被多个实例引用时，仅在首次遇到时执行隐藏操作。
 '
 ' 参数：
-'   oCATIA        — CATIA 应用对象，用于 fallback 时遍历 Documents
 '   oProduct      — 当前层级的 Product 对象
 '   processedDocs — ByRef 字符串，记录已处理文档路径，格式："|path1|path2|"
-'   oLog          — Scripting.FileSystemObject TextStream，用于输出调试日志
 ' ============================================================
-Private Sub RecurseProduct(oCATIA, oProduct, ByRef processedDocs, oLog)
-
-    Dim productName
-    On Error Resume Next
-    productName = oProduct.Name
-    On Error GoTo 0
-
-    Dim productCount
-    On Error Resume Next
-    productCount = oProduct.Products.Count
-    On Error GoTo 0
-
-    oLog.WriteLine "[RecurseProduct] Enter  product='" & productName & "'  children=" & productCount
+Private Sub RecurseProduct(oProduct, ByRef processedDocs)
 
     Dim i
-    For i = 1 To productCount
-
-        oLog.WriteLine "  [child " & i & "/" & productCount & "]"
+    For i = 1 To oProduct.Products.Count
 
         ' ── 取子实例 ────────────────────────────────────────────────────────
         Dim childProd
         Set childProd = Nothing
-        Dim childErr
-        childErr = 0
         On Error Resume Next
-        Err.Clear
         Set childProd = oProduct.Products.Item(i)
-        childErr = Err.Number
         On Error GoTo 0
 
-        If childErr <> 0 Then
-            oLog.WriteLine "    Products.Item(" & i & ") FAILED  Err=" & childErr
-        ElseIf Not IsObject(childProd) Then
-            oLog.WriteLine "    Products.Item(" & i & ") returned non-object"
-        ElseIf childProd Is Nothing Then
-            oLog.WriteLine "    Products.Item(" & i & ") returned Nothing"
-        Else
-            Dim childName
-            On Error Resume Next
-            childName = childProd.Name
-            On Error GoTo 0
-            oLog.WriteLine "    childProd.Name = '" & childName & "'"
+        If IsObject(childProd) Then
+            If Not (childProd Is Nothing) Then
 
-            ' ── 取子实例的参考产品 ──────────────────────────────────────
-            Dim refProd
-            Set refProd = Nothing
-            Dim refErr
-            refErr = 0
-            On Error Resume Next
-            Err.Clear
-            Set refProd = childProd.ReferenceProduct
-            refErr = Err.Number
-            On Error GoTo 0
-
-            If refErr <> 0 Then
-                oLog.WriteLine "    .ReferenceProduct FAILED  Err=" & refErr
-            ElseIf Not IsObject(refProd) Then
-                oLog.WriteLine "    .ReferenceProduct returned non-object"
-            ElseIf refProd Is Nothing Then
-                oLog.WriteLine "    .ReferenceProduct returned Nothing"
-            Else
-                Dim refName
+                ' ── 取子实例的参考产品 ──────────────────────────────────────
+                Dim refProd
+                Set refProd = Nothing
                 On Error Resume Next
-                refName = refProd.Name
-                On Error GoTo 0
-                oLog.WriteLine "    refProd.Name = '" & refName & "'"
-
-                ' ── 判断是叶级零件还是子装配体 ──────────────────────
-                ' 取 refProd 的子产品数量（而非 .Part，后者在 CATIA V5 中对所有
-                ' 通过 ReferenceProduct 取得的对象均返回 Err=438）
-                Dim refChildCount
-                refChildCount = 0
-                On Error Resume Next
-                Err.Clear
-                refChildCount = refProd.Products.Count
+                Set refProd = childProd.ReferenceProduct
                 On Error GoTo 0
 
-                oLog.WriteLine "    refProd.Products.Count = " & refChildCount
+                If IsObject(refProd) Then
+                    If Not (refProd Is Nothing) Then
 
-                If refChildCount = 0 Then
+                        ' ── 按 Products.Count 判断叶级零件 vs 子装配体 ──────────
+                        If refProd.Products.Count = 0 Then
 
-                    ' ── 叶级零件：获取 PartDocument ──────────────────
-                    ' 步骤1：尝试 refProd.Parent，并验证返回文档名与 refProd.Name 一致
-                    ' 步骤2：若不一致，遍历 oCATIA.Documents 查找名字匹配的 PartDocument
-                    ' （某些 CATIA V5 配置下 refProd.Parent 会返回错误文档）
-                    Dim partDoc
-                    Set partDoc = Nothing
-
-                    Dim pdErr
-                    pdErr = 0
-                    Dim candidateDoc
-                    Set candidateDoc = Nothing
-                    On Error Resume Next
-                    Err.Clear
-                    Set candidateDoc = refProd.Parent
-                    pdErr = Err.Number
-                    On Error GoTo 0
-
-                    oLog.WriteLine "    refProd.Parent  Err=" & pdErr & _
-                                   "  TypeName=" & TypeName(candidateDoc) & _
-                                   "  IsObject=" & IsObject(candidateDoc)
-
-                    If pdErr = 0 And IsObject(candidateDoc) And Not (candidateDoc Is Nothing) Then
-                        If TypeName(candidateDoc) = "PartDocument" Then
-                            Dim parentProdName
-                            parentProdName = ""
+                            ' 叶级零件：通过 refProd.Parent 取 PartDocument
+                            Dim parentDoc
+                            Set parentDoc = Nothing
                             On Error Resume Next
-                            parentProdName = candidateDoc.Product.Name
+                            Set parentDoc = refProd.Parent
                             On Error GoTo 0
-                            If parentProdName = refName Then
-                                Set partDoc = candidateDoc
-                                oLog.WriteLine "    refProd.Parent -> verified name='" & parentProdName & "'"
-                            Else
-                                oLog.WriteLine "    refProd.Parent name mismatch: got='" & parentProdName & "' expected='" & refName & "' -> fallback to Documents search"
-                            End If
-                        Else
-                            oLog.WriteLine "    refProd.Parent TypeName=" & TypeName(candidateDoc) & " (not PartDocument) -> fallback to Documents search"
-                        End If
-                    End If
 
-                    ' fallback：遍历 oCATIA.Documents 查找 Product.Name 匹配的 PartDocument
-                    If partDoc Is Nothing Then
-                        Dim di
-                        For di = 1 To oCATIA.Documents.Count
-                            Dim dCandidate
-                            Set dCandidate = Nothing
-                            On Error Resume Next
-                            Set dCandidate = oCATIA.Documents.Item(di)
-                            On Error GoTo 0
-                            If IsObject(dCandidate) And Not (dCandidate Is Nothing) Then
-                                If TypeName(dCandidate) = "PartDocument" Then
-                                    Dim dCandName
-                                    dCandName = ""
+                            If IsObject(parentDoc) Then
+                                If Not (parentDoc Is Nothing) Then
+
+                                    ' 取文档唯一标识（FullName 不可用时回退到 Name）
+                                    Dim docKey
+                                    docKey = ""
                                     On Error Resume Next
-                                    dCandName = dCandidate.Product.Name
+                                    docKey = parentDoc.FullName
+                                    If docKey = "" Then docKey = parentDoc.Name
+                                    Err.Clear
                                     On Error GoTo 0
-                                    If dCandName = refName Then
-                                        Set partDoc = dCandidate
-                                        oLog.WriteLine "    fallback: found via Documents.Item(" & di & ")  name='" & dCandName & "'"
-                                        Exit For
+
+                                    ' 仅在尚未处理时执行隐藏（去重）
+                                    If docKey <> "" Then
+                                        If InStr(processedDocs, "|" & docKey & "|") = 0 Then
+                                            processedDocs = processedDocs & docKey & "|"
+                                            HideWireframeInPart parentDoc
+                                        End If
                                     End If
+
                                 End If
                             End If
-                        Next
-                        If partDoc Is Nothing Then
-                            oLog.WriteLine "    fallback: no matching PartDocument found in Documents -> skip"
-                        End If
-                    End If
 
-                    If Not (partDoc Is Nothing) Then
-
-                        ' 取文档唯一标识（FullName 不可用时回退到 Name）
-                        Dim docKey
-                        docKey = ""
-                        On Error Resume Next
-                        docKey = partDoc.FullName
-                        If Len(docKey) = 0 Then
-                            docKey = partDoc.Name
-                            oLog.WriteLine "    FullName empty -> fallback to Name='" & docKey & "'"
                         Else
-                            oLog.WriteLine "    FullName='" & docKey & "'"
-                        End If
-                        Err.Clear
-                        On Error GoTo 0
 
-                        ' 仅在尚未处理时执行隐藏（去重）
-                        If Len(docKey) > 0 Then
-                            If InStr(processedDocs, "|" & docKey & "|") = 0 Then
-                                oLog.WriteLine "    --> HideWireframeInPart (first time)"
-                                processedDocs = processedDocs & docKey & "|"
-                                HideWireframeInPart partDoc
-                            Else
-                                oLog.WriteLine "    --> skip (already processed)"
-                            End If
-                        Else
-                            oLog.WriteLine "    docKey empty -> skip"
+                            ' 子装配体：递归向下处理
+                            RecurseProduct refProd, processedDocs
+
                         End If
 
                     End If
-
-                Else
-
-                    ' ── 子装配体：递归向下处理 ──────────────────────
-                    oLog.WriteLine "    -> sub-assembly, recurse"
-                    RecurseProduct oCATIA, refProd, processedDocs, oLog
-
                 End If
 
             End If
         End If
 
     Next
-
-    oLog.WriteLine "[RecurseProduct] Leave  product='" & productName & "'"
 
 End Sub
