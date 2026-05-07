@@ -209,7 +209,7 @@ class MassPropsDialog(QDialog):
         self._search_matches: list[QTreeWidgetItem] = []
         self._search_cursor: int = -1
         # id(item) → 各列原始背景笔刷列表，用于清除高亮时恢复
-        self._search_orig_bgs: dict[int, list] = {}
+        self._search_orig_bgs: dict[int, list[QBrush]] = {}
 
         # 按钮引用（_build_ui 中赋值，此处声明以供类型提示）
         self._append_data_btn: QPushButton

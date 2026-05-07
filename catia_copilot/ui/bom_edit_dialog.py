@@ -146,7 +146,7 @@ class BomEditDialog(QDialog):
         self._search_matches: list[QTreeWidgetItem] = []
         self._search_cursor: int = -1
         # id(item) → 各列原始背景笔刷列表，用于清除高亮时恢复
-        self._search_orig_bgs: dict[int, list] = {}
+        self._search_orig_bgs: dict[int, list[QBrush]] = {}
 
         # ── 界面布局 ──────────────────────────────────────────────────────────
         layout = QVBoxLayout(self)
