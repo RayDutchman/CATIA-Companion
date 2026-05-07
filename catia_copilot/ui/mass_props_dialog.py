@@ -17,6 +17,7 @@
 import logging
 import math
 import subprocess
+import uuid
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -41,7 +42,7 @@ from catia_copilot.constants import (
 from catia_copilot.catia.mass_props_collect import (
     collect_mass_props_rows, _row_inertia_to_root, recompute_product_rows,
     save_rows, load_rows, merge_rows, MAX_INERTIA_INDEX, remeasure_part_mass_props,
-    _compute_root_mp_from_placement,
+    _compute_root_mp_from_placement, _rollup_one_product,
 )
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
 from catia_copilot.ui.bom_widgets import _BomTreeWidget
@@ -62,6 +63,7 @@ _INERTIA_IDX: dict[str, tuple[int, int]] = {
     "Ixx": (0, 0), "Iyy": (1, 1), "Izz": (2, 2),
     "Ixy": (0, 1), "Ixz": (0, 2), "Iyz": (1, 2),
 }
+_COG_IDX: dict[str, int] = {"CogX": 0, "CogY": 1, "CogZ": 2}
 
 # 显示值随当前单位制变化的列名
 _UNIT_SENSITIVE_COLUMNS: tuple[str, ...] = (
@@ -80,6 +82,10 @@ _EXCL_BG_COLOR: QColor = QColor(216, 216, 232)   # 浅灰紫，区别于红/橙/
 _EXCL_FG_COLOR: QColor = QColor(130, 130, 150)
 _EXCL_FONT: QFont = QFont()
 _EXCL_FONT.setItalic(True)
+
+# 对称件（虚拟行）视觉样式
+_MIRROR_BG_COLOR: QColor = QColor(230, 240, 255)  # 浅蓝色，标识对称件虚拟行
+_MIRROR_TOOLTIP: str = "对称件（虚拟行），相对 ZX 平面与原件对称，不可直接编辑。"
 
 
 class _MassPropsDelegate(QStyledItemDelegate):
@@ -114,9 +120,10 @@ def _fmt(value) -> str:
         return "—"
     try:
         v = float(value)
-        if math.isclose(v, round(v), rel_tol=0.0, abs_tol=_INTEGER_ABS_TOL):
-            return f"{v:.0f}"
-        if abs(v) >= 1e5 or (v != 0.0 and abs(v) < 0.001):
+        rv = round(v)
+        if math.isclose(v, rv, rel_tol=0.0, abs_tol=_INTEGER_ABS_TOL):
+            return f"{rv:.0f}"
+        if abs(v) >= 1e5 or abs(v) < 0.001:
             return f"{v:.3e}"
         return f"{v:.3f}"
     except (TypeError, ValueError):
@@ -307,9 +314,10 @@ class MassPropsDialog(QDialog):
             return "—"
         try:
             v = float(value) * factor
-            if math.isclose(v, round(v), rel_tol=0.0, abs_tol=_INTEGER_ABS_TOL):
-                return f"{v:.0f}"
-            if abs(v) >= 1e5 or (v != 0.0 and abs(v) < 0.001):
+            rv = round(v)
+            if math.isclose(v, rv, rel_tol=0.0, abs_tol=_INTEGER_ABS_TOL):
+                return f"{rv:.0f}"
+            if abs(v) >= 1e5 or abs(v) < 0.001:
                 return f"{v:.3e}"
             return f"{v:.3f}"
         except (TypeError, ValueError):
@@ -1115,7 +1123,7 @@ class MassPropsDialog(QDialog):
         for i, row in enumerate(self._rows):
             r = dict(row)
             r["_rows_idx"] = i
-            if r.get("Type") == "零件":
+            if r.get("Type") in ("零件", "对称件"):
                 rmp = r.get("_root_mp")
                 if rmp:
                     cog = rmp.get("cog", [None, None, None])
@@ -1148,10 +1156,10 @@ class MassPropsDialog(QDialog):
         for i, row in enumerate(self._rows):
             if row.get("_excluded"):
                 continue
-            # 汇总BOM仅统计零件行；产品/部件不计入数量，也不占用 PN 的 seen_pn 位置，
+            # 汇总BOM仅统计零件/对称件行；产品/部件不计入数量，也不占用 PN 的 seen_pn 位置，
             # 否则产品行会成为该 PN 的"规范行"，随后被类型过滤器删除，导致该 PN 的
             # 零件实例在汇总BOM中完全消失，且数量也会被错误地计入产品实例。
-            if row.get("Type") != "零件":
+            if row.get("Type") not in ("零件", "对称件"):
                 continue
             pn = str(row.get("Part Number", ""))
             if not pn:
@@ -1171,8 +1179,8 @@ class MassPropsDialog(QDialog):
             r["Quantity"] = qty[pn]
             result.append(r)
 
-        # 类型过滤作为保险：上方循环已只处理零件行，此处过滤冗余但保留以防万一
-        result = [r for r in result if r.get("Type") == "零件"]
+        # 类型过滤作为保险：上方循环已只处理零件/对称件行，此处过滤冗余但保留以防万一
+        result = [r for r in result if r.get("Type") in ("零件", "对称件")]
 
         # 按排序列排序
         if self._summary_sort_column:
@@ -1219,7 +1227,9 @@ class MassPropsDialog(QDialog):
         unreadable  = bool(row_data.get("_unreadable"))
         meas_failed = bool(row_data.get("_meas_failed"))
         node_type   = str(row_data.get("Type", ""))
-        row_locked  = unreadable or not_found or meas_failed
+        is_mirror   = bool(row_data.get("_is_mirror"))
+        # 对称件视为锁定行（不可编辑质量/密度）
+        row_locked  = unreadable or not_found or meas_failed or is_mirror
 
         if pn:
             self._pn_to_items.setdefault(pn, []).append(item)
@@ -1248,7 +1258,7 @@ class MassPropsDialog(QDialog):
             elif col_name == "Density":
                 density = row_data.get("Density")
                 if density is None:
-                    item.setText(col_idx, "—" if node_type == "零件" else "")
+                    item.setText(col_idx, "—" if node_type in ("零件", "对称件") else "")
                 elif density < 0:
                     item.setText(col_idx, "不统一")
                 else:
@@ -1256,13 +1266,13 @@ class MassPropsDialog(QDialog):
             elif col_name == "Weight":
                 raw = row_data.get("Weight")
                 if raw is None:
-                    item.setText(col_idx, "—" if node_type == "零件" else "")
+                    item.setText(col_idx, "—" if node_type in ("零件", "对称件") else "")
                 else:
                     item.setText(col_idx, self._fmt_mass_val(raw))
             elif col_name in _INERTIA_IDX or col_name in ("CogX", "CogY", "CogZ"):
                 raw = row_data.get(col_name)
                 if raw is None:
-                    item.setText(col_idx, "—" if node_type == "零件" else "")
+                    item.setText(col_idx, "—" if node_type in ("零件", "对称件") else "")
                 else:
                     if col_name in _INERTIA_IDX:
                         item.setText(col_idx, self._fmt_inertia_val(raw))
@@ -1284,7 +1294,12 @@ class MassPropsDialog(QDialog):
         item.setData(0, _DENSITY_LOCKED_ROLE, density_locked)
 
         # 行背景色设置
-        if row_locked:
+        if is_mirror:
+            # 对称件（虚拟行）：浅蓝背景，不显示错误色
+            for ci in range(len(self._columns)):
+                item.setBackground(ci, _MIRROR_BG_COLOR)
+                item.setToolTip(ci, _MIRROR_TOOLTIP)
+        elif row_locked:
             grey = QColor(160, 160, 160)
             if not_found:
                 bg  = QColor(255, 205, 205)
@@ -1389,10 +1404,10 @@ class MassPropsDialog(QDialog):
                 item.setText(col_idx, self._fmt_mass_val(row_data.get("Weight")))
                 self._is_updating = False
                 return
-            if new_weight_stored < 0.0:
+            if new_weight_stored <= 0.0:
                 QMessageBox.warning(
                     self, "重量不合法",
-                    "重量不能为负数，请输入大于或等于 0 的值。",
+                    "重量必须为正数，请输入大于 0 的值。",
                 )
                 self._is_updating = True
                 item.setText(col_idx, self._fmt_mass_val(row_data.get("Weight")))
@@ -1412,7 +1427,7 @@ class MassPropsDialog(QDialog):
             if _od > 0.0 and _ow > 0.0:
                 new_density_stored = _od * (new_weight_stored / _ow)
             else:
-                new_density_stored = _old_density  # 无法计算，密度保持不变
+                new_density_stored = _old_density  # 无法计算（旧密度/重量无效），密度保持不变
         else:  # col_name == "Density"
             try:
                 new_density_stored = float(new_text)
@@ -1482,16 +1497,30 @@ class MassPropsDialog(QDialog):
                                         for ir in range(3)]
 
         # Step 3：遍历所有实例，更新 Weight / Density / 行级显示字段 / _root_mp。
+        # 对称件虚拟行（_is_mirror=True）不参与此处的 PN 批量更新：
+        # 其数据由 _sync_all_mirrors() 在 _calculate() 中统一重算。
         for r in self._rows:
-            if str(r.get("Part Number", "")) != pn or r.get("Type") != "零件":
+            if (str(r.get("Part Number", "")) != pn
+                    or r.get("Type") != "零件"
+                    or r.get("_is_mirror")):
                 continue
             r["Weight"] = new_weight_stored
             if new_density_stored is not None and new_density_stored >= 0:
                 r["Density"] = new_density_stored
             mp = r.get("_mass_props")
             if mp:
-                # mp["inertia"] 已在 Step 2 缩放完毕；
-                # 仅需用本实例自己的 _placement 重新旋转到根坐标系。
+                # 对于从文件载入的数据，各实例的 _mass_props 独立序列化，
+                # 与 mp_shared 不共享同一 dict 对象，需在此独立更新内部字段。
+                # 对于从 CATIA 实时读取的数据，所有实例共享同一 dict（_mass_cache），
+                # Step 2 已完成更新，此处跳过以避免重复放大惯量。
+                if mp is not mp_shared:
+                    mp["weight"] = new_weight_stored
+                    if new_density_stored is not None and new_density_stored >= 0:
+                        mp["density"] = new_density_stored
+                    if scale != 1.0:
+                        orig_i = mp.get("inertia", [[0.0] * 3 for _ in range(3)])
+                        mp["inertia"] = [[orig_i[ir][ic] * scale for ic in range(3)]
+                                         for ir in range(3)]
                 if scale != 1.0:
                     # 更新行级惯量显示字段（零件自身坐标系）
                     I_local_new = mp.get("inertia", [[0.0] * 3 for _ in range(3)])
@@ -1528,7 +1557,8 @@ class MassPropsDialog(QDialog):
                 if vis_row_idx is None:
                     continue
                 vis_row = self._rows[vis_row_idx]
-                if vis_row.get("Type") != "零件":
+                # 对称件虚拟行的显示刷新由 _sync_all_mirrors() 负责
+                if vis_row.get("Type") != "零件" or vis_row.get("_is_mirror"):
                     continue
                 if w_idx >= 0:
                     vis_item.setText(w_idx, self._fmt_mass_val(vis_row.get("Weight")))
@@ -1555,6 +1585,7 @@ class MassPropsDialog(QDialog):
         finally:
             self._is_updating = False
         # 编辑密度/重量后立即重新计算汇总结果（无需手动点击"计算"）
+        # 对称件同步在 _calculate() 内部进行（_sync_all_mirrors），支持任意 Type 原件
         self._calculate()
 
     # ── 计算 ───────────────────────────────────────────────────────────────
@@ -1562,7 +1593,11 @@ class MassPropsDialog(QDialog):
     def _calculate(self) -> None:
         if not self._rows:
             return
-        # 先重新计算产品/部件行（使用更新后的 _root_mp），刷新表格
+        # 自底向上联合汇总并同步对称件（详见 _sync_all_mirrors 文档）：
+        # 深层产品/部件先内联重算后同步其对称件，父层再汇总时即可读到最新子层数据，
+        # 一劳永逸地解决任意嵌套深度下产品对称件 _root_mp 陈旧的问题。
+        self._sync_all_mirrors()
+        # 最终全量汇总：将所有已更新对称件的贡献纳入各产品/部件显示字段
         recompute_product_rows(self._rows)
         self._refresh_product_items()
         try:
@@ -1679,10 +1714,11 @@ class MassPropsDialog(QDialog):
     def _row_status(row_data: dict) -> str:
         """Return a pipe-separated status string for a row.
 
-        Possible tokens: excluded / no_file / not_found / unreadable / meas_failed.
+        Possible tokens: mirror / excluded / no_file / not_found / unreadable / meas_failed.
         Empty string means the row has no special state.
         """
         tokens = []
+        if row_data.get("_is_mirror"):   tokens.append("mirror")
         if row_data.get("_excluded"):    tokens.append("excluded")
         if row_data.get("_no_file"):     tokens.append("no_file")
         if row_data.get("_not_found"):   tokens.append("not_found")
@@ -1753,17 +1789,17 @@ class MassPropsDialog(QDialog):
                                 value = ""
                     elif col_name == "Weight":
                         try:
-                            value = float(raw) * self._unit_factor
+                            value = float(raw) * self._unit_factor + 0.0
                         except (TypeError, ValueError):
                             value = ""
                     elif col_name in _INERTIA_IDX:
                         try:
-                            value = float(raw) * self._inertia_unit_factor
+                            value = float(raw) * self._inertia_unit_factor + 0.0
                         except (TypeError, ValueError):
                             value = ""
                     elif col_name in ("CogX", "CogY", "CogZ"):
                         try:
-                            value = float(raw) * self._cog_unit_factor
+                            value = float(raw) * self._cog_unit_factor + 0.0
                         except (TypeError, ValueError):
                             value = ""
                     else:
@@ -1840,17 +1876,20 @@ class MassPropsDialog(QDialog):
                     return ""
             if col_name == "Weight":
                 try:
-                    return str(float(raw) * self._unit_factor)
+                    val = float(raw) * self._unit_factor
+                    return str(val + 0.0)  # normalize IEEE 754 -0.0 → +0.0
                 except (TypeError, ValueError):
                     return ""
             if col_name in _INERTIA_IDX:
                 try:
-                    return str(float(raw) * self._inertia_unit_factor)
+                    val = float(raw) * self._inertia_unit_factor
+                    return str(val + 0.0)
                 except (TypeError, ValueError):
                     return ""
             if col_name in ("CogX", "CogY", "CogZ"):
                 try:
-                    return str(float(raw) * self._cog_unit_factor)
+                    val = float(raw) * self._cog_unit_factor
+                    return str(val + 0.0)
                 except (TypeError, ValueError):
                     return ""
             return str(raw)
@@ -1917,8 +1956,27 @@ class MassPropsDialog(QDialog):
         再调用 _calculate() 刷新底部汇总数值。
         当合并了多个分总成时，根节点（Level=0）同样可被删除，以便移除某个
         不需要的分总成；若删除后列表为空则直接清空表格。
+
+        级联删除：若被删除的行拥有关联对称件（_mirror_child_id），
+        同时删除对应的对称件行（_is_mirror=True，_mirror_id 匹配）。
         """
         indices = set(self._get_subtree_indices(row_idx))
+
+        # 级联删除：收集被删除行的 _mirror_child_id，找出关联的对称件行
+        mirror_child_ids: set[str] = {
+            self._rows[i]["_mirror_child_id"]
+            for i in indices
+            if self._rows[i].get("_mirror_child_id")
+        }
+        if mirror_child_ids:
+            for i, row in enumerate(self._rows):
+                if (
+                    i not in indices
+                    and row.get("_is_mirror")
+                    and row.get("_mirror_id") in mirror_child_ids
+                ):
+                    indices.add(i)
+
         self._rows = [r for i, r in enumerate(self._rows) if i not in indices]
 
         if not self._rows:
@@ -1945,6 +2003,258 @@ class MassPropsDialog(QDialog):
             self._rows[i]["_excluded"] = new_val
         self._apply_excluded_style_for_indices(set(indices), new_val)
         self._calculate()
+
+    # ── 对称件 ────────────────────────────────────────────────────────────
+
+    def _make_mirror_row(self, row_idx: int) -> dict:
+        """根据 row_idx 对应的源行，生成相对 ZX 平面对称的虚拟行字典。
+
+        对称规则（ZX 平面对称 → Y 轴分量取反）：
+        - 重心：CogX/Z 不变，CogY → -CogY（根坐标系）
+        - 转动惯量：Ixx/Iyy/Izz/Ixz 不变，Ixy → -Ixy，Iyz → -Iyz（根坐标系）
+
+        对称件行的 _placement 设为单位矩阵、_mass_props.cog 设为根坐标系下的
+        镜像重心，使 rollup_mass_properties() 可直接累加其贡献。
+        """
+        source_row = self._rows[row_idx]
+        node_type  = str(source_row.get("Type", "零件"))
+
+        # ── 获取根坐标系质量特性 ─────────────────────────────────────────
+        if node_type == "零件":
+            rmp = source_row.get("_root_mp")
+            mp  = source_row.get("_mass_props")
+            if rmp:
+                weight    = float(rmp.get("weight", 0.0))
+                cog_root  = list(rmp.get("cog", [0.0, 0.0, 0.0]))
+                I_root    = [list(r) for r in rmp.get("inertia", [[0.0] * 3 for _ in range(3)])]
+            elif mp:
+                weight    = float(mp.get("weight", 0.0))
+                cog_root  = list(mp.get("cog", [0.0, 0.0, 0.0]))
+                I_root    = [list(r) for r in mp.get("inertia", [[0.0] * 3 for _ in range(3)])]
+            else:
+                weight    = float(source_row.get("Weight") or 0.0)
+                cog_root  = [0.0, 0.0, 0.0]
+                I_root    = [[0.0] * 3 for _ in range(3)]
+            density = mp.get("density") if mp else None
+        else:
+            # 产品/部件：使用已汇总的根坐标系显示字段
+            weight   = float(source_row.get("Weight") or 0.0)
+            cog_root = [
+                float(source_row.get("CogX") or 0.0),
+                float(source_row.get("CogY") or 0.0),
+                float(source_row.get("CogZ") or 0.0),
+            ]
+            I_root = [
+                [float(source_row.get("Ixx") or 0.0),
+                 float(source_row.get("Ixy") or 0.0),
+                 float(source_row.get("Ixz") or 0.0)],
+                [float(source_row.get("Ixy") or 0.0),
+                 float(source_row.get("Iyy") or 0.0),
+                 float(source_row.get("Iyz") or 0.0)],
+                [float(source_row.get("Ixz") or 0.0),
+                 float(source_row.get("Iyz") or 0.0),
+                 float(source_row.get("Izz") or 0.0)],
+            ]
+            density = None
+
+        # ── ZX 平面对称变换：Y 分量取反 ──────────────────────────────────
+        # 使用 (0.0 - x) 代替 (-x)，避免对 0.0 取负产生 IEEE 754 负零（-0.0），
+        # 防止负零进入导出文件（CSV/xlsx）或引发下游比较歧义。
+        cog_mirror = [cog_root[0], 0.0 - cog_root[1], cog_root[2]]
+        I_mirror = [
+            [ I_root[0][0], 0.0 - I_root[0][1],  I_root[0][2]],
+            [0.0 - I_root[1][0],  I_root[1][1], 0.0 - I_root[1][2]],
+            [ I_root[2][0], 0.0 - I_root[2][1],  I_root[2][2]],
+        ]
+
+        # 单位矩阵 placement：对称件的"局部坐标系"等于根坐标系
+        identity_placement = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+        mirror_mp = {
+            "weight":  weight,
+            "cog":     cog_mirror,
+            "inertia": I_mirror,
+            "density": density,
+        }
+
+        source_pn = str(source_row.get("Part Number", ""))
+        return {
+            "Level":        source_row.get("Level", 0),
+            "Type":         "对称件",    # 虚拟叶节点：对称件以独立类型标识，
+                                        # 直接贡献质量特性汇总（不参与层级汇总）
+            "Part Number":  source_pn + " (对称件)",
+            "Filename":     "(虚拟)",
+            "Nomenclature": source_row.get("Nomenclature", ""),
+            "Revision":     source_row.get("Revision", ""),
+            "Density":      density,
+            "Weight":       weight if weight > 0.0 else None,
+            "CogX":         cog_mirror[0],
+            "CogY":         cog_mirror[1],
+            "CogZ":         cog_mirror[2],
+            "Ixx":          I_mirror[0][0],
+            "Iyy":          I_mirror[1][1],
+            "Izz":          I_mirror[2][2],
+            "Ixy":          I_mirror[0][1],
+            "Ixz":          I_mirror[0][2],
+            "Iyz":          I_mirror[1][2],
+            "_filepath":    "",
+            "_placement":   identity_placement,
+            "_not_found":   False,
+            "_no_file":     False,
+            "_unreadable":  False,
+            "_meas_failed": False,
+            "_mass_props":  mirror_mp,
+            "_root_mp": {
+                "weight":  weight,
+                "cog":     cog_mirror,
+                "inertia": I_mirror,
+            },
+            "_is_mirror":        True,
+            "_mirror_source_pn": source_pn,
+        }
+
+    def _add_mirror_row(self, row_idx: int) -> None:
+        """在 row_idx 行的上方插入其 ZX 平面对称件虚拟行。
+
+        使用 UUID 建立原件↔对称件双向关联，以便原件被删除时自动级联删除对称件。
+        插入后重建表格并重新计算汇总。
+        """
+        mirror_id = uuid.uuid4().hex
+        # 在源行上标记其对称件 ID（供 _delete_rows 级联删除用）
+        self._rows[row_idx]["_mirror_child_id"] = mirror_id
+
+        mirror_row = self._make_mirror_row(row_idx)
+        mirror_row["_mirror_id"] = mirror_id   # 对称件侧的匹配键
+
+        # 插入到索引 row_idx，原件下移至 row_idx + 1，
+        # 视觉上对称件显示在原件上方一行。
+        self._rows.insert(row_idx, mirror_row)
+
+        self._rebuild_columns_and_table()
+        self._calculate()
+
+    def _sync_all_mirrors(self) -> None:
+        """自底向上联合重算产品/部件行并同步所有对称件虚拟行。
+
+        **与旧版（自上而下）的区别**：
+        旧版先执行全量 recompute_product_rows()，再从头到尾遍历源行同步对称件。
+        当存在嵌套产品对称件时（例如 Sub-A 有对称件、Root 也有对称件），
+        Root 的对称件会在 Sub-A 的对称件刷新之前就被计算，导致 Root 对称件
+        的 _root_mp 滞后一轮，rollup_mass_properties() 读到陈旧值。
+
+        **新版算法（自底向上）**：
+        1. 一次 O(n) 扫描建立 mirror_id → 行索引映射。
+        2. 收集所有带 _mirror_child_id 的源行，按 Level 降序排列（深层先处理）。
+        3. 对每个源行：
+           a. 若为产品/部件：先内联重算其子树汇总值（此时更深层的对称件已在
+              前面的迭代中刷新，_root_mp 均为最新），再调用 _make_mirror_row()。
+           b. 若为零件：_root_mp 由 _on_item_changed 负责维护，直接同步即可。
+        4. 原地合并镜像数据，保留标识字段；刷新对应 QTreeWidgetItem。
+
+        由此保证：无论对称件嵌套多少层，每个对称件都从完全最新的原件数据
+        生成，rollup_mass_properties() 结果始终正确。
+        """
+        rows = self._rows
+        n    = len(rows)
+
+        # Step 1：建立 mirror_id → 行索引 的快速查找表
+        mirror_idx_by_id: dict[str, int] = {
+            r["_mirror_id"]: i
+            for i, r in enumerate(rows)
+            if r.get("_is_mirror") and r.get("_mirror_id")
+        }
+        if not mirror_idx_by_id:
+            return
+
+        # Step 2：收集所有源行，按 Level 降序（深层先）
+        src_indices = sorted(
+            [
+                i for i, r in enumerate(rows)
+                if r.get("_mirror_child_id") and not r.get("_is_mirror")
+            ],
+            key=lambda i: -int(rows[i].get("Level", 0)),
+        )
+
+        self._is_updating = True
+        try:
+            for src_idx in src_indices:
+                src_row  = rows[src_idx]
+                child_id = src_row.get("_mirror_child_id")
+                if not child_id or child_id not in mirror_idx_by_id:
+                    continue
+
+                # Step 3a：若原件为产品/部件，先内联重算其子树汇总值
+                # （此时更深层对称件的 _root_mp 已在前面迭代中刷新）
+                if src_row.get("Type") in ("产品", "部件"):
+                    level = int(src_row.get("Level", 0))
+                    child_parts: list[dict] = []
+                    for j in range(src_idx + 1, n):
+                        desc = rows[j]
+                        if int(desc.get("Level", 0)) <= level:
+                            break
+                        if desc.get("_excluded"):
+                            continue
+                        rmp = desc.get("_root_mp")
+                        if rmp and float(rmp.get("weight", 0.0)) > 0.0:
+                            child_parts.append(rmp)
+                    if child_parts:
+                        result = _rollup_one_product(child_parts)
+                        if result:
+                            src_row["Weight"] = result["weight"]
+                            src_row["CogX"]   = result["cog"][0]
+                            src_row["CogY"]   = result["cog"][1]
+                            src_row["CogZ"]   = result["cog"][2]
+                            src_row["Ixx"]    = result["inertia"][0][0]
+                            src_row["Iyy"]    = result["inertia"][1][1]
+                            src_row["Izz"]    = result["inertia"][2][2]
+                            src_row["Ixy"]    = result["inertia"][0][1]
+                            src_row["Ixz"]    = result["inertia"][0][2]
+                            src_row["Iyz"]    = result["inertia"][1][2]
+
+                # Step 3b：重新计算镜像数据并原地合并
+                mi         = mirror_idx_by_id[child_id]
+                mirror_row = rows[mi]
+
+                new_data = self._make_mirror_row(src_idx)
+                new_data["_is_mirror"]        = True
+                new_data["_mirror_id"]        = mirror_row["_mirror_id"]
+                new_data["_mirror_source_pn"] = mirror_row.get("_mirror_source_pn")
+                if mirror_row.get("_excluded"):
+                    new_data["_excluded"] = True
+
+                mirror_row.update(new_data)
+
+                # Step 4：刷新该对称件的 QTreeWidgetItem
+                for vis_item in self._item_by_row:
+                    if vis_item.data(0, _ROW_IDX_ROLE) != mi:
+                        continue
+                    rmp = mirror_row.get("_root_mp")
+                    for ci, col in enumerate(self._columns):
+                        if col == "Weight":
+                            vis_item.setText(ci, self._fmt_mass_val(mirror_row.get("Weight")))
+                        elif col == "Density":
+                            d_val = mirror_row.get("Density")
+                            vis_item.setText(ci, _fmt(d_val) if d_val is not None and d_val >= 0 else "—")
+                        elif col in _COG_IDX:
+                            cog_i = _COG_IDX[col]
+                            raw = rmp["cog"][cog_i] if rmp else mirror_row.get(col)
+                            vis_item.setText(ci, self._fmt_cog_val(raw) if raw is not None else "—")
+                        elif col in _INERTIA_IDX:
+                            ir, ic = _INERTIA_IDX[col]
+                            raw = (
+                                rmp["inertia"][ir][ic]
+                                if rmp and rmp.get("inertia")
+                                else mirror_row.get(col)
+                            )
+                            vis_item.setText(ci, self._fmt_inertia_val(raw) if raw is not None else "—")
+                    break
+        finally:
+            self._is_updating = False
+
 
     def _apply_excluded_style_for_indices(
         self,
@@ -2001,8 +2311,13 @@ class MassPropsDialog(QDialog):
                 unreadable  = bool(r_data.get("_unreadable"))
                 no_file     = bool(r_data.get("_no_file"))
                 node_type   = str(r_data.get("Type", ""))
-                row_locked  = unreadable or not_found or meas_failed
-                if row_locked:
+                is_mirror   = bool(r_data.get("_is_mirror"))
+                row_locked  = unreadable or not_found or meas_failed or is_mirror
+                if is_mirror:
+                    for ci in range(len(self._columns)):
+                        item.setBackground(ci, _MIRROR_BG_COLOR)
+                        item.setToolTip(ci, _MIRROR_TOOLTIP)
+                elif row_locked:
                     grey = QColor(160, 160, 160)
                     if not_found:
                         bg  = QColor(255, 205, 205)
@@ -2044,9 +2359,11 @@ class MassPropsDialog(QDialog):
         fp_path      = Path(fp) if fp else None
         is_component = row_data.get("Type") == "部件"
         is_part      = row_data.get("Type") == "零件"
+        is_product   = row_data.get("Type") == "产品"
         not_found    = bool(row_data.get("_not_found"))
         no_file      = bool(row_data.get("_no_file"))
         unreadable   = bool(row_data.get("_unreadable"))
+        is_mirror    = bool(row_data.get("_is_mirror"))
 
         if not item.isSelected():
             self._table.clearSelection()
@@ -2057,19 +2374,21 @@ class MassPropsDialog(QDialog):
         # ── 打开路径 ──────────────────────────────────────────────────────
         act_open_path = menu.addAction("打开路径")
         path_available = (
-            bool(fp) and not no_file and fp_path is not None
+            not is_mirror
+            and bool(fp) and not no_file and fp_path is not None
             and (fp_path.exists() or fp_path.parent.exists())
         )
         act_open_path.setEnabled(path_available)
 
         # ── 复制路径 ──────────────────────────────────────────────────────
         act_copy_path = menu.addAction("复制路径")
-        act_copy_path.setEnabled(bool(fp) and not no_file)
+        act_copy_path.setEnabled(not is_mirror and bool(fp) and not no_file)
 
         # ── 在CATIA中打开 ─────────────────────────────────────────────────
         act_open_catia = menu.addAction("在CATIA中打开")
         catia_available = (
-            not is_component and not not_found and not unreadable
+            not is_mirror
+            and not is_component and not not_found and not unreadable
             and fp_path is not None and fp_path.exists()
         )
         act_open_catia.setEnabled(catia_available)
@@ -2079,7 +2398,8 @@ class MassPropsDialog(QDialog):
         # ── 重新读取质量特性 ───────────────────────────────────────────────
         act_reread = menu.addAction("重新读取质量特性")
         reread_available = (
-            is_part and not not_found
+            not is_mirror
+            and is_part and not not_found
             and fp_path is not None and fp_path.exists()
         )
         act_reread.setEnabled(reread_available)
@@ -2090,16 +2410,23 @@ class MassPropsDialog(QDialog):
                 "并同步更新所有相同零件编号的节点。"
             )
 
-        # ── 层级BOM专属：排除 / 删除 ─────────────────────────────────────
-        # act_toggle / act_delete 预置 None，以便在条件块外统一分发 action
-        act_toggle = None
-        act_delete = None
+        # ── 层级BOM专属：增加对称件 / 排除 / 删除 ─────────────────────────
+        # act_toggle / act_delete / act_add_mirror 预置 None，以便在条件块外统一分发 action
+        act_toggle    = None
+        act_delete    = None
+        act_add_mirror = None
         if not self._summarize:
             menu.addSeparator()
             is_excluded = bool(row_data.get("_excluded", False))
             toggle_label = "参与计算：×" if is_excluded else "参与计算：√"
             act_toggle = menu.addAction(toggle_label)
             act_delete = menu.addAction("删除本行")
+
+            menu.addSeparator()
+            act_add_mirror = menu.addAction("增加对称件")
+            # 仅对非对称件的零件/产品/部件行有效；对称件自身不可再次对称
+            mirror_eligible = (is_part or is_product or is_component) and not is_mirror
+            act_add_mirror.setEnabled(mirror_eligible)
 
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
 
@@ -2114,7 +2441,18 @@ class MassPropsDialog(QDialog):
         elif act_toggle is not None and action == act_toggle:
             self._toggle_excluded(row_idx)
         elif act_delete is not None and action == act_delete:
-            self._delete_rows(row_idx)
+            pn_label = str(row_data.get("Part Number", "") or row_data.get("Filename", ""))
+            confirm = QMessageBox.question(
+                self,
+                "确认删除",
+                f"确定要删除「{pn_label}」及其子节点吗？\n此操作不可撤销。",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if confirm == QMessageBox.StandardButton.Yes:
+                self._delete_rows(row_idx)
+        elif act_add_mirror is not None and action == act_add_mirror:
+            self._add_mirror_row(row_idx)
 
     def _open_path(self, fp: str) -> None:
         """在 Windows 资源管理器中打开包含 *fp* 的文件夹，并高亮选中该文件。"""

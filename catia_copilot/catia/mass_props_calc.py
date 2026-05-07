@@ -40,7 +40,9 @@ def rollup_mass_properties(rows: list[dict]) -> dict:
     参数：
         rows:
             ``collect_mass_props_rows()`` 返回的行列表。
-            仅处理 ``Type == "零件"`` 且 ``_mass_props`` 不为 ``None`` 的行。
+            处理 ``Type`` 为 ``"零件"`` 或 ``"对称件"`` 且 ``_mass_props`` 不为
+            ``None`` 的行；对称件行的 ``_placement`` 为单位矩阵，``_mass_props.cog``
+            已是根坐标系下的镜像重心，可直接参与累加。
 
     返回：
         字典 ``{"total_weight": float, "cog": [x, y, z], "inertia": [[3×3]]}``，
@@ -51,7 +53,7 @@ def rollup_mass_properties(rows: list[dict]) -> dict:
     I_at_origin  = [[0.0] * 3 for _ in range(3)]  # Σ I_i 转换到根原点
 
     for row in rows:
-        if row.get("Type") != "零件":
+        if row.get("Type") not in ("零件", "对称件"):
             continue
         if row.get("_excluded"):
             continue

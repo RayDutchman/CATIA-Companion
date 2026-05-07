@@ -506,7 +506,7 @@ def _post_process_rows(rows: list[dict]) -> None:
     #   I_local 是在零件重心处、沿零件局部坐标轴方向的惯量；
     #   I_root  是在零件重心处、沿根产品坐标轴方向的惯量。
     for row in rows:
-        if row.get("Type") != "零件":
+        if row.get("Type") not in ("零件", "对称件"):
             continue
         mp = row.get("_mass_props")
         if not mp:
