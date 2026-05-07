@@ -2154,6 +2154,9 @@ class MassPropsDialog(QDialog):
                 mirror_row.update(new_data)
 
                 # 刷新该对称件的 QTreeWidgetItem
+                # _item_by_row 按显示行顺序排列，与 _rows 索引不直接对应，
+                # 故须线性扫描 _ROW_IDX_ROLE 来找到正确的 item。
+                _COG_IDX = {"CogX": 0, "CogY": 1, "CogZ": 2}
                 for vis_item in self._item_by_row:
                     if vis_item.data(0, _ROW_IDX_ROLE) != mi:
                         continue
@@ -2161,9 +2164,9 @@ class MassPropsDialog(QDialog):
                     for ci, col in enumerate(self._columns):
                         if col == "Weight":
                             vis_item.setText(ci, self._fmt_mass_val(mirror_row.get("Weight")))
-                        elif col in ("CogX", "CogY", "CogZ"):
-                            cog_idx = ("CogX", "CogY", "CogZ").index(col)
-                            raw = rmp["cog"][cog_idx] if rmp else mirror_row.get(col)
+                        elif col in _COG_IDX:
+                            cog_i = _COG_IDX[col]
+                            raw = rmp["cog"][cog_i] if rmp else mirror_row.get(col)
                             vis_item.setText(ci, self._fmt_cog_val(raw) if raw is not None else "—")
                         elif col in _INERTIA_IDX:
                             ir, ic = _INERTIA_IDX[col]
