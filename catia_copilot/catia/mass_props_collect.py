@@ -706,6 +706,33 @@ def load_rows(file_path: str) -> list[dict]:
     return rows
 
 
+def merge_rows(base_rows: list[dict], extra_rows: list[dict]) -> list[dict]:
+    """将两组行数据合并为一个统一列表，适用于同坐标系分总成拼接。
+
+    当主产品过大、只能分批打开各分总成读取时，可将多次读取结果逐一追加合并。
+    前提条件：各分总成的坐标系与主产品一致，即各行的 ``_placement`` 和
+    ``_root_mp`` 均已在同一根坐标系下计算，无须额外变换，可直接拼接。
+
+    合并逻辑：
+      1. 直接拼接 ``base_rows + extra_rows``（保持各自的内部顺序）。
+      2. 调用 :func:`recompute_product_rows` 刷新合并后列表中每个产品/部件行的
+         汇总字段（Weight / CogX/Y/Z / Ixx–Iyz），使其反映当前完整子树的结果。
+         零件行的 ``_root_mp`` 无需重算，因为它们在各自分总成加载时已正确建立。
+
+    参数：
+        base_rows:  已有的行列表（可以为空列表）。
+        extra_rows: 要追加的行列表（来自另一个分总成的 :func:`load_rows` 或
+                    :func:`collect_mass_props_rows` 结果）。
+
+    返回：
+        合并并刷新后的行列表（对 ``base_rows`` 和 ``extra_rows`` 的原始内容
+        不做修改，返回新列表）。
+    """
+    combined = list(base_rows) + list(extra_rows)
+    recompute_product_rows(combined)
+    return combined
+
+
 # ---------------------------------------------------------------------------
 # 主收集函数
 # ---------------------------------------------------------------------------
