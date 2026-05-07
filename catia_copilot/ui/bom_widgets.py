@@ -1,10 +1,20 @@
 """BOM 树控件：自定义委托与带连接线的 QTreeWidget。"""
 
-from PySide6.QtWidgets import QTreeWidget, QStyledItemDelegate
+from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem, QStyledItemDelegate
 from PySide6.QtGui import QColor, QPen, QPainter
 from PySide6.QtCore import Qt
 
 from catia_copilot.constants import BOM_READONLY_COLUMNS
+
+
+def scroll_to_item(tree: QTreeWidget, item: QTreeWidgetItem) -> None:
+    """展开 item 的所有祖先节点，然后滚动到并选中该行。"""
+    parent = item.parent()
+    while parent is not None:
+        parent.setExpanded(True)
+        parent = parent.parent()
+    tree.scrollToItem(item)
+    tree.setCurrentItem(item)
 
 # 自定义 UserRole 用于 QTreeWidgetItem：标记行为锁定（不可读/未找到）
 _ITEM_LOCKED_ROLE: int = Qt.ItemDataRole.UserRole + 1

@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QRadioButton, QButtonGroup, QWidget, QComboBox,
     QStyledItemDelegate, QMenu,
 )
-from PySide6.QtGui import QBrush, QColor, QFont
+from PySide6.QtGui import QBrush, QColor, QFont, QKeyEvent
 from PySide6.QtCore import Qt, QSettings
 
 from catia_copilot.constants import (
@@ -44,7 +44,7 @@ from catia_copilot.catia.mass_props_collect import (
     _compute_root_mp_from_placement,
 )
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
-from catia_copilot.ui.bom_widgets import _BomTreeWidget
+from catia_copilot.ui.bom_widgets import _BomTreeWidget, scroll_to_item
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +204,12 @@ class MassPropsDialog(QDialog):
         self._rollup_result: dict | None = None
         self._loaded: bool = False
         self._col_widths: dict[str, int] = {}
+
+        # ── 查找栏状态 ────────────────────────────────────────────────────────
+        self._search_matches: list[QTreeWidgetItem] = []
+        self._search_cursor: int = -1
+        # id(item) → 各列原始背景笔刷列表，用于清除高亮时恢复
+        self._search_orig_bgs: dict[int, list] = {}
 
         # 按钮引用（_build_ui 中赋值，此处声明以供类型提示）
         self._append_data_btn: QPushButton
@@ -573,6 +579,35 @@ class MassPropsDialog(QDialog):
             " border-radius: 4px; padding: 4px 8px; color: #2B4C7E; font-size: 11px; }"
         )
         layout.addWidget(self._bom_desc_lbl)
+
+        # ── 查找栏 ────────────────────────────────────────────────────────────
+        search_row = QHBoxLayout()
+        search_row.addWidget(QLabel("查找:"))
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText("输入零件编号、文件名、术语...")
+        self._search_edit.setMaximumWidth(280)
+        self._search_edit.textChanged.connect(self._on_search_changed)
+        self._search_edit.returnPressed.connect(self._find_next)
+        search_row.addWidget(self._search_edit)
+        _prev_btn = QPushButton("▲")
+        _prev_btn.setToolTip("上一个匹配项")
+        _prev_btn.setFixedWidth(28)
+        _prev_btn.clicked.connect(self._find_prev)
+        search_row.addWidget(_prev_btn)
+        _next_btn = QPushButton("▼")
+        _next_btn.setToolTip("下一个匹配项")
+        _next_btn.setFixedWidth(28)
+        _next_btn.clicked.connect(self._find_next)
+        search_row.addWidget(_next_btn)
+        self._search_count_lbl = QLabel("")
+        self._search_count_lbl.setMinimumWidth(65)
+        search_row.addWidget(self._search_count_lbl)
+        _clear_btn = QPushButton("清除")
+        _clear_btn.setFixedWidth(50)
+        _clear_btn.clicked.connect(lambda: self._search_edit.clear())
+        search_row.addWidget(_clear_btn)
+        search_row.addStretch()
+        layout.addLayout(search_row)
 
         # ── 树形表格 ────────────────────────────────────────────────────────
         self._table = _BomTreeWidget()
@@ -1205,7 +1240,9 @@ class MassPropsDialog(QDialog):
         self._table.blockSignals(False)
         self._is_updating = False
 
-    def _make_item(self, row_idx: int, row_data: dict) -> QTreeWidgetItem:
+        # 若查找框中有文本，重新执行搜索以匹配新数据
+        if hasattr(self, "_search_edit") and self._search_edit.text():
+            self._on_search_changed(self._search_edit.text())
         """构建并填充一行的 QTreeWidgetItem。
 
         row_idx: 对应的 self._rows 索引（汇总模式用 _rows_idx 字段）。
@@ -1353,7 +1390,91 @@ class MassPropsDialog(QDialog):
 
             parent_stack.append((level, item))
 
-    # ── 单元格编辑 ─────────────────────────────────────────────────────────
+    # ── 查找功能 ─────────────────────────────────────────────────────────────
+
+    # 参与搜索的列名（按优先顺序）
+    _SEARCH_COLS = ("Part Number", "Filename", "Nomenclature")
+    # 搜索结果高亮背景色
+    _SEARCH_HL_COLOR = QColor("#FFFF99")
+
+    def _on_search_changed(self, text: str) -> None:
+        """响应查找框文本变更：高亮所有匹配行，自动定位到第一个。"""
+        # 恢复上次高亮项的原始背景
+        col_count = len(self._columns)
+        for item in self._search_matches:
+            orig = self._search_orig_bgs.get(id(item))
+            if orig is not None:
+                for ci, brush in enumerate(orig):
+                    if ci < col_count:
+                        item.setBackground(ci, brush)
+        self._search_matches = []
+        self._search_orig_bgs.clear()
+        self._search_cursor = -1
+
+        query = text.strip().lower()
+        if not query:
+            self._search_count_lbl.setText("")
+            return
+
+        hl = QBrush(self._SEARCH_HL_COLOR)
+        search_col_indices = [
+            self._columns.index(c) for c in self._SEARCH_COLS if c in self._columns
+        ]
+
+        for item in self._item_by_row:
+            matched = any(
+                query in item.text(ci).lower()
+                for ci in search_col_indices
+            )
+            if matched:
+                # 保存原始背景
+                self._search_orig_bgs[id(item)] = [
+                    item.background(ci) for ci in range(col_count)
+                ]
+                for ci in range(col_count):
+                    item.setBackground(ci, hl)
+                self._search_matches.append(item)
+
+        total = len(self._search_matches)
+        if total == 0:
+            self._search_count_lbl.setText("无结果")
+            return
+
+        self._search_cursor = 0
+        self._search_count_lbl.setText(f"1/{total}")
+        scroll_to_item(self._table, self._search_matches[0])
+
+    def _find_next(self) -> None:
+        """跳转到下一个匹配项（循环）。"""
+        if not self._search_matches:
+            return
+        self._search_cursor = (self._search_cursor + 1) % len(self._search_matches)
+        self._search_count_lbl.setText(
+            f"{self._search_cursor + 1}/{len(self._search_matches)}"
+        )
+        scroll_to_item(self._table, self._search_matches[self._search_cursor])
+
+    def _find_prev(self) -> None:
+        """跳转到上一个匹配项（循环）。"""
+        if not self._search_matches:
+            return
+        self._search_cursor = (self._search_cursor - 1) % len(self._search_matches)
+        self._search_count_lbl.setText(
+            f"{self._search_cursor + 1}/{len(self._search_matches)}"
+        )
+        scroll_to_item(self._table, self._search_matches[self._search_cursor])
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """Ctrl+F 聚焦查找框并全选文本。"""
+        if (
+            event.key() == Qt.Key.Key_F
+            and event.modifiers() == Qt.KeyboardModifier.ControlModifier
+        ):
+            self._search_edit.setFocus()
+            self._search_edit.selectAll()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _on_item_changed(self, item: QTreeWidgetItem, col_idx: int) -> None:
         if self._is_updating:
