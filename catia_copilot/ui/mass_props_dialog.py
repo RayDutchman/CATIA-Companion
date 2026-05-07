@@ -1424,10 +1424,10 @@ class MassPropsDialog(QDialog):
                 _ow = float(_old_weight) if _old_weight is not None else 0.0
             except (ValueError, TypeError):
                 _ow = 0.0
-            if _od > 0.0 and _ow > 0.0:
+            if _od > 0.0 and _ow > 0.0 and new_weight_stored > 0.0:
                 new_density_stored = _od * (new_weight_stored / _ow)
             else:
-                new_density_stored = _old_density  # 无法计算，密度保持不变
+                new_density_stored = _old_density  # 无法计算或新重量为零，密度保持不变
         else:  # col_name == "Density"
             try:
                 new_density_stored = float(new_text)
@@ -1789,17 +1789,17 @@ class MassPropsDialog(QDialog):
                                 value = ""
                     elif col_name == "Weight":
                         try:
-                            value = float(raw) * self._unit_factor
+                            value = float(raw) * self._unit_factor + 0.0
                         except (TypeError, ValueError):
                             value = ""
                     elif col_name in _INERTIA_IDX:
                         try:
-                            value = float(raw) * self._inertia_unit_factor
+                            value = float(raw) * self._inertia_unit_factor + 0.0
                         except (TypeError, ValueError):
                             value = ""
                     elif col_name in ("CogX", "CogY", "CogZ"):
                         try:
-                            value = float(raw) * self._cog_unit_factor
+                            value = float(raw) * self._cog_unit_factor + 0.0
                         except (TypeError, ValueError):
                             value = ""
                     else:
@@ -1876,17 +1876,20 @@ class MassPropsDialog(QDialog):
                     return ""
             if col_name == "Weight":
                 try:
-                    return str(float(raw) * self._unit_factor)
+                    val = float(raw) * self._unit_factor
+                    return str(val + 0.0)  # normalize IEEE 754 -0.0 → +0.0
                 except (TypeError, ValueError):
                     return ""
             if col_name in _INERTIA_IDX:
                 try:
-                    return str(float(raw) * self._inertia_unit_factor)
+                    val = float(raw) * self._inertia_unit_factor
+                    return str(val + 0.0)
                 except (TypeError, ValueError):
                     return ""
             if col_name in ("CogX", "CogY", "CogZ"):
                 try:
-                    return str(float(raw) * self._cog_unit_factor)
+                    val = float(raw) * self._cog_unit_factor
+                    return str(val + 0.0)
                 except (TypeError, ValueError):
                     return ""
             return str(raw)
@@ -2055,11 +2058,13 @@ class MassPropsDialog(QDialog):
             density = None
 
         # ── ZX 平面对称变换：Y 分量取反 ──────────────────────────────────
-        cog_mirror = [cog_root[0], -cog_root[1], cog_root[2]]
+        # 使用 (0.0 - x) 代替 (-x)，避免对 0.0 取负产生 IEEE 754 负零（-0.0），
+        # 防止负零进入导出文件（CSV/xlsx）或引发下游比较歧义。
+        cog_mirror = [cog_root[0], 0.0 - cog_root[1], cog_root[2]]
         I_mirror = [
-            [ I_root[0][0], -I_root[0][1],  I_root[0][2]],
-            [-I_root[1][0],  I_root[1][1], -I_root[1][2]],
-            [ I_root[2][0], -I_root[2][1],  I_root[2][2]],
+            [ I_root[0][0], 0.0 - I_root[0][1],  I_root[0][2]],
+            [0.0 - I_root[1][0],  I_root[1][1], 0.0 - I_root[1][2]],
+            [ I_root[2][0], 0.0 - I_root[2][1],  I_root[2][2]],
         ]
 
         # 单位矩阵 placement：对称件的"局部坐标系"等于根坐标系
