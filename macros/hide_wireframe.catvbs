@@ -10,6 +10,12 @@ Option Explicit
 '     同一份零件被多次实例化时只处理一次（以 PartNumber 去重）。
 '     注：.CATProduct 文件本身不含点/线/平面/轴系，无需对产品文档执行隐藏操作。
 '
+' 装配体中的隐藏机制：
+'   CATIA V5 的 Selection.Search + VisProperties.SetShow 仅对处于编辑上下文
+'   （当前工作对象）的文档有效。在装配体场景下，脚本在对每个叶级零件调用
+'   HideWireframeInDoc 之前，会先将该零件实例设为其直接父产品的 InWorkObject
+'   以激活其编辑上下文，操作结束后立即还原原工作对象，对用户界面的干扰最小。
+'
 ' 隐藏的几何类型：
 '   · 点（Point）
 '   · 线（Line）
@@ -129,7 +135,11 @@ End Sub
 '
 ' 判定方式（通过 TypeName(refProd.Parent) 区分零件与子装配体）：
 '   TypeName = "PartDocument"    → 叶级零件
-'     · 以 refProd.PartNumber 去重，首次遇到时对 refProd.Parent 执行隐藏
+'     · 以 refProd.PartNumber 去重，首次遇到时：
+'       1. 保存 oProduct.InWorkObject（当前直接父产品的工作对象）
+'       2. 将 childProd 实例设为 oProduct.InWorkObject（激活编辑上下文）
+'       3. 对 refProd.Parent（PartDocument）执行 HideWireframeInDoc
+'       4. 还原 oProduct.InWorkObject
 '   TypeName = "ProductDocument" → 子装配体 → 递归向下（不对产品文档执行隐藏）
 '
 ' 参数：
@@ -187,7 +197,30 @@ Private Sub RecurseProduct(oProduct, ByRef processedParts, ByRef partList)
                                     If partNum <> "" Then
                                         If InStr(processedParts, "|" & partNum & "|") = 0 Then
                                             processedParts = processedParts & partNum & "|"
+
+                                            ' ── 激活零件实例的编辑上下文（方案 A：InWorkObject）──
+                                            ' 将 childProd 设为直接父产品的工作对象，使
+                                            ' PartDocument 的 Selection.SetShow 在装配体中生效。
+                                            Dim origInWork
+                                            Set origInWork = Nothing
+                                            On Error Resume Next
+                                            Set origInWork = oProduct.InWorkObject
+                                            Err.Clear
+                                            oProduct.InWorkObject = childProd
+                                            On Error GoTo 0
+
                                             HideWireframeInDoc parentDoc
+
+                                            ' ── 还原工作对象 ────────────────────────────────
+                                            On Error Resume Next
+                                            If IsObject(origInWork) Then
+                                                If Not (origInWork Is Nothing) Then
+                                                    oProduct.InWorkObject = origInWork
+                                                End If
+                                            End If
+                                            Err.Clear
+                                            On Error GoTo 0
+
                                             partList = partList & partNum & vbCrLf
                                         End If
                                     End If
