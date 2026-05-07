@@ -120,10 +120,10 @@ def _fmt(value) -> str:
         return "—"
     try:
         v = float(value)
-        v = 0.0 if v == 0.0 else v
-        if math.isclose(v, round(v), rel_tol=0.0, abs_tol=_INTEGER_ABS_TOL):
-            return f"{v:.0f}"
-        if abs(v) >= 1e5 or (v != 0.0 and abs(v) < 0.001):
+        rv = round(v)
+        if math.isclose(v, rv, rel_tol=0.0, abs_tol=_INTEGER_ABS_TOL):
+            return f"{rv:.0f}"
+        if abs(v) >= 1e5 or abs(v) < 0.001:
             return f"{v:.3e}"
         return f"{v:.3f}"
     except (TypeError, ValueError):
@@ -314,10 +314,10 @@ class MassPropsDialog(QDialog):
             return "—"
         try:
             v = float(value) * factor
-            v = 0.0 if v == 0.0 else v
-            if math.isclose(v, round(v), rel_tol=0.0, abs_tol=_INTEGER_ABS_TOL):
-                return f"{v:.0f}"
-            if abs(v) >= 1e5 or (v != 0.0 and abs(v) < 0.001):
+            rv = round(v)
+            if math.isclose(v, rv, rel_tol=0.0, abs_tol=_INTEGER_ABS_TOL):
+                return f"{rv:.0f}"
+            if abs(v) >= 1e5 or abs(v) < 0.001:
                 return f"{v:.3e}"
             return f"{v:.3f}"
         except (TypeError, ValueError):
