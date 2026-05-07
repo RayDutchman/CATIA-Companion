@@ -13,8 +13,9 @@ Option Explicit
 ' 装配体中的隐藏机制：
 '   CATIA V5 的 Selection.Search + VisProperties.SetShow 仅对处于编辑上下文
 '   （当前工作对象）的文档有效。在装配体场景下，脚本在对每个叶级零件调用
-'   HideWireframeInDoc 之前，会先将该零件实例设为其直接父产品的 InWorkObject
-'   以激活其编辑上下文，操作结束后立即还原原工作对象，对用户界面的干扰最小。
+'   HideWireframeInDoc 之前，会先将该零件实例设为根产品（顶层 Product）的
+'   InWorkObject 以激活其编辑上下文，操作结束后立即还原原工作对象。
+'   根 Product 引用从 CATMain 一路传递到所有递归层，确保始终操作同一根节点。
 '
 ' 隐藏的几何类型：
 '   · 点（Point）
@@ -76,7 +77,7 @@ Sub CATMain()
             Dim partList
             partList = ""
 
-            RecurseProduct oDoc.Product, processedParts, partList
+            RecurseProduct oDoc.Product, oDoc.Product, processedParts, partList
 
             If partList = "" Then
                 MsgBox "未找到任何叶级零件（CATPart）。", vbInformation, "hide_wireframe"
@@ -136,18 +137,19 @@ End Sub
 ' 判定方式（通过 TypeName(refProd.Parent) 区分零件与子装配体）：
 '   TypeName = "PartDocument"    → 叶级零件
 '     · 以 refProd.PartNumber 去重，首次遇到时：
-'       1. 保存 oProduct.InWorkObject（当前直接父产品的工作对象）
-'       2. 将 childProd 实例设为 oProduct.InWorkObject（激活编辑上下文）
+'       1. 保存 rootProduct.InWorkObject（根产品当前工作对象）
+'       2. 将 childProd 实例设为 rootProduct.InWorkObject（激活编辑上下文）
 '       3. 对 refProd.Parent（PartDocument）执行 HideWireframeInDoc
-'       4. 还原 oProduct.InWorkObject
+'       4. 还原 rootProduct.InWorkObject
 '   TypeName = "ProductDocument" → 子装配体 → 递归向下（不对产品文档执行隐藏）
 '
 ' 参数：
 '   oProduct       — 当前层级的 Product 对象
+'   rootProduct    — 顶层根 Product 对象（始终为 oDoc.Product），用于设置 InWorkObject
 '   processedParts — ByRef 字符串，格式："|PN1|PN2|"，用于跨层去重
 '   partList       — ByRef 字符串，已执行隐藏的零件号（换行分隔），用于最终汇报
 ' ============================================================
-Private Sub RecurseProduct(oProduct, ByRef processedParts, ByRef partList)
+Private Sub RecurseProduct(oProduct, rootProduct, ByRef processedParts, ByRef partList)
 
     Dim i
     For i = 1 To oProduct.Products.Count
@@ -198,15 +200,15 @@ Private Sub RecurseProduct(oProduct, ByRef processedParts, ByRef partList)
                                         If InStr(processedParts, "|" & partNum & "|") = 0 Then
                                             processedParts = processedParts & partNum & "|"
 
-                                            ' ── 激活零件实例的编辑上下文（方案 A：InWorkObject）──
-                                            ' 将 childProd 设为直接父产品的工作对象，使
-                                            ' PartDocument 的 Selection.SetShow 在装配体中生效。
+                                            ' ── 激活零件实例的编辑上下文（方案 B：根产品 InWorkObject）──
+                                            ' 将 childProd 设为根产品（顶层 Product）的工作对象，
+                                            ' 使 PartDocument 的 Selection.SetShow 在装配体中生效。
                                             Dim origInWork
                                             Set origInWork = Nothing
                                             On Error Resume Next
-                                            Set origInWork = oProduct.InWorkObject
+                                            Set origInWork = rootProduct.InWorkObject
                                             Err.Clear
-                                            oProduct.InWorkObject = childProd
+                                            rootProduct.InWorkObject = childProd
                                             On Error GoTo 0
 
                                             HideWireframeInDoc parentDoc
@@ -215,7 +217,7 @@ Private Sub RecurseProduct(oProduct, ByRef processedParts, ByRef partList)
                                             On Error Resume Next
                                             If IsObject(origInWork) Then
                                                 If Not (origInWork Is Nothing) Then
-                                                    oProduct.InWorkObject = origInWork
+                                                    rootProduct.InWorkObject = origInWork
                                                 End If
                                             End If
                                             Err.Clear
@@ -228,7 +230,7 @@ Private Sub RecurseProduct(oProduct, ByRef processedParts, ByRef partList)
                                 ElseIf childDocType = "ProductDocument" Then
 
                                     ' ── 子装配体：递归向下（不对产品文档执行隐藏）──
-                                    RecurseProduct refProd, processedParts, partList
+                                    RecurseProduct refProd, rootProduct, processedParts, partList
 
                                 End If
 
