@@ -1508,16 +1508,17 @@ class MassPropsDialog(QDialog):
             mp = r.get("_mass_props")
             if mp:
                 # 对于从文件载入的数据，各实例的 _mass_props 独立序列化，
-                # 与 mp_shared 不共享同一 dict 对象，需在此独立缩放。
+                # 与 mp_shared 不共享同一 dict 对象，需在此独立更新内部字段。
                 # 对于从 CATIA 实时读取的数据，所有实例共享同一 dict（_mass_cache），
-                # Step 2 已完成缩放，此处跳过以避免重复放大。
-                if scale != 1.0 and mp is not mp_shared:
-                    orig_i = mp.get("inertia", [[0.0] * 3 for _ in range(3)])
-                    mp["inertia"] = [[orig_i[ir][ic] * scale for ic in range(3)]
-                                     for ir in range(3)]
+                # Step 2 已完成更新，此处跳过以避免重复放大惯量。
+                if mp is not mp_shared:
                     mp["weight"] = new_weight_stored
                     if new_density_stored is not None and new_density_stored >= 0:
                         mp["density"] = new_density_stored
+                    if scale != 1.0:
+                        orig_i = mp.get("inertia", [[0.0] * 3 for _ in range(3)])
+                        mp["inertia"] = [[orig_i[ir][ic] * scale for ic in range(3)]
+                                         for ir in range(3)]
                 if scale != 1.0:
                     # 更新行级惯量显示字段（零件自身坐标系）
                     I_local_new = mp.get("inertia", [[0.0] * 3 for _ in range(3)])
