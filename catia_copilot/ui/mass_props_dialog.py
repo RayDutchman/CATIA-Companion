@@ -1507,8 +1507,17 @@ class MassPropsDialog(QDialog):
                 r["Density"] = new_density_stored
             mp = r.get("_mass_props")
             if mp:
-                # mp["inertia"] 已在 Step 2 缩放完毕；
-                # 仅需用本实例自己的 _placement 重新旋转到根坐标系。
+                # 对于从文件载入的数据，各实例的 _mass_props 独立序列化，
+                # 与 mp_shared 不共享同一 dict 对象，需在此独立缩放。
+                # 对于从 CATIA 实时读取的数据，所有实例共享同一 dict（_mass_cache），
+                # Step 2 已完成缩放，此处跳过以避免重复放大。
+                if scale != 1.0 and mp is not mp_shared:
+                    orig_i = mp.get("inertia", [[0.0] * 3 for _ in range(3)])
+                    mp["inertia"] = [[orig_i[ir][ic] * scale for ic in range(3)]
+                                     for ir in range(3)]
+                    mp["weight"] = new_weight_stored
+                    if new_density_stored is not None and new_density_stored >= 0:
+                        mp["density"] = new_density_stored
                 if scale != 1.0:
                     # 更新行级惯量显示字段（零件自身坐标系）
                     I_local_new = mp.get("inertia", [[0.0] * 3 for _ in range(3)])
@@ -2180,6 +2189,9 @@ class MassPropsDialog(QDialog):
                     for ci, col in enumerate(self._columns):
                         if col == "Weight":
                             vis_item.setText(ci, self._fmt_mass_val(mirror_row.get("Weight")))
+                        elif col == "Density":
+                            d_val = mirror_row.get("Density")
+                            vis_item.setText(ci, _fmt(d_val) if d_val is not None and d_val >= 0 else "—")
                         elif col in _COG_IDX:
                             cog_i = _COG_IDX[col]
                             raw = rmp["cog"][cog_i] if rmp else mirror_row.get(col)
