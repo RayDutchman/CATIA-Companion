@@ -2055,7 +2055,8 @@ class MassPropsDialog(QDialog):
         source_pn = str(source_row.get("Part Number", ""))
         return {
             "Level":        source_row.get("Level", 0),
-            "Type":         "零件",      # 虚拟叶节点，始终为零件类型
+            "Type":         "零件",      # 虚拟叶节点：对称件不参与层级汇总，
+                                        # 始终以零件类型直接贡献质量特性汇总
             "Part Number":  source_pn + " (对称件)",
             "Filename":     "(虚拟)",
             "Nomenclature": source_row.get("Nomenclature", ""),
@@ -2100,7 +2101,8 @@ class MassPropsDialog(QDialog):
         mirror_row = self._make_mirror_row(row_idx)
         mirror_row["_mirror_id"] = mirror_id   # 对称件侧的匹配键
 
-        # 插入到原件的上方一行（index = row_idx）
+        # 插入到索引 row_idx，原件下移至 row_idx + 1，
+        # 视觉上对称件显示在原件上方一行。
         self._rows.insert(row_idx, mirror_row)
 
         self._rebuild_columns_and_table()
