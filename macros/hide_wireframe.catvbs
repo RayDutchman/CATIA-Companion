@@ -6,10 +6,9 @@ Option Explicit
 ' 功能概述：
 '   一键隐藏 CATIA V5 活动文档中的所有点、线、三维曲线、草图、轴系、平面（不含曲面）。
 '   · 若活动文档为零件（CATPart）：直接处理该零件文档。
-'   · 若活动文档为装配体（CATProduct）：
-'     - 隐藏装配体顶层文档自身包含的点、线、曲线、草图、轴系、平面；
-'     - 递归处理所有子孙零件文档及子装配体文档，
-'       同一份文档被多次实例化时只处理一次（路径级去重）。
+'   · 若活动文档为装配体（CATProduct）：递归处理所有子孙零件（CATPart），
+'     同一份零件被多次实例化时只处理一次（以 PartNumber 去重）。
+'     注：.CATProduct 文件本身不含点/线/平面/轴系，无需对产品文档执行隐藏操作。
 '
 ' 隐藏的几何类型：
 '   · 点（Point）
@@ -20,10 +19,9 @@ Option Explicit
 '   · 平面（Plane）
 '   不包含曲面（Surface）。
 '
-' 实现方式：
-'   对目标文档（PartDocument 或 ProductDocument）的 Selection 依次按几何类型搜索（Search），
-'   再调用 VisProperties.SetShow(catVisPropertyNoShowAttr) 将选中元素设置为隐藏状态。
-'   catVisPropertyNoShowAttr 为 CATIA V5 枚举值，表示"不显示/隐藏"。
+' 判定叶级零件的方式：
+'   refProd.Products.Count = 0 → 叶级零件（CATPart），取 refProd.Parent 作为 PartDocument；
+'   refProd.Products.Count > 0 → 子装配体，继续递归。
 '
 ' 用法：
 '   在 CATIA 中打开零件或装配体并激活对应文档后，运行本脚本。
@@ -52,29 +50,34 @@ Sub CATMain()
     Select Case docType
 
         Case "PartDocument"
+            ' 直接处理当前零件文档
+            Dim singlePN
+            singlePN = ""
+            On Error Resume Next
+            singlePN = oDoc.Product.PartNumber
+            On Error GoTo 0
+            If singlePN = "" Then singlePN = oDoc.Name
+
             HideWireframeInDoc oDoc
-            MsgBox "已隐藏零件中的点、线、曲线、草图、轴系、平面。", vbInformation, "hide_wireframe"
+            MsgBox "已隐藏以下零件中的点、线、曲线、草图、轴系、平面：" & vbCrLf & vbCrLf & _
+                   singlePN, vbInformation, "hide_wireframe"
 
         Case "ProductDocument"
-            ' processedDocs："|fullpath1|fullpath2|..." 形式的已处理路径列表，用于跨递归层去重
-            Dim processedDocs
-            processedDocs = "|"
+            ' processedParts："|PartNumber1|PartNumber2|..." 形式的已处理零件号列表，用于去重
+            ' partList：已执行隐藏的零件号，换行分隔，用于最终汇报
+            Dim processedParts
+            processedParts = "|"
+            Dim partList
+            partList = ""
 
-            ' 先将根文档加入已处理列表，并隐藏根产品文档中的点、线等几何元素
-            Dim rootDocKey
-            rootDocKey = ""
-            On Error Resume Next
-            rootDocKey = oDoc.FullName
-            If rootDocKey = "" Then rootDocKey = oDoc.Name
-            Err.Clear
-            On Error GoTo 0
-            If rootDocKey <> "" Then
-                processedDocs = processedDocs & rootDocKey & "|"
+            RecurseProduct oDoc.Product, processedParts, partList
+
+            If partList = "" Then
+                MsgBox "未找到任何叶级零件（CATPart）。", vbInformation, "hide_wireframe"
+            Else
+                MsgBox "已隐藏以下零件中的点、线、曲线、草图、轴系、平面：" & vbCrLf & vbCrLf & _
+                       partList, vbInformation, "hide_wireframe"
             End If
-            HideWireframeInDoc oDoc
-
-            RecurseProduct oDoc.Product, processedDocs
-            MsgBox "已隐藏装配体及所有子孙零件、子装配体中的点、线、曲线、草图、轴系、平面。", vbInformation, "hide_wireframe"
 
         Case Else
             MsgBox "当前活动文档不是零件（CATPart）或装配体（CATProduct），无法执行。", _
@@ -85,16 +88,14 @@ Sub CATMain()
 End Sub
 
 ' ============================================================
-' HideWireframeInDoc — 隐藏指定文档（PartDocument 或 ProductDocument）中的
-'                       点、线、三维曲线、草图、轴系、平面
+' HideWireframeInDoc — 隐藏指定 PartDocument 中的点、线、三维曲线、草图、轴系、平面
 '
 ' 对 oDoc 的 Selection 依次按 Point / Line / Curve / Sketch / AxisSystem / Plane
 ' 六种类型搜索并调用 VisProperties.SetShow 设置为隐藏状态。
-' 搜索范围 "All" 覆盖文档内所有几何体（GeometricSet、OrderedGeometricSet 等）。
-' 本函数对 PartDocument 与 ProductDocument 均适用。
+' 搜索范围 "All" 覆盖零件内所有几何体（GeometricSet、OrderedGeometricSet 等）。
 '
 ' 参数：
-'   oDoc — 目标文档对象（PartDocument 或 ProductDocument）
+'   oDoc — 目标 PartDocument 对象
 ' ============================================================
 Private Sub HideWireframeInDoc(oDoc)
 
@@ -124,19 +125,19 @@ Private Sub HideWireframeInDoc(oDoc)
 End Sub
 
 ' ============================================================
-' RecurseProduct — 递归遍历产品树，对每份唯一的文档（PartDocument 或 ProductDocument）
-'                  调用 HideWireframeInDoc
+' RecurseProduct — 递归遍历产品树，对每份唯一的叶级零件调用 HideWireframeInDoc
 '
-' 通过 ByRef 传递 processedDocs 字符串实现跨层去重：
-' 同一份文档被多个实例引用时，仅在首次遇到时执行隐藏操作。
-' 对 PartDocument（零件）和 ProductDocument（子装配体/产品）均执行隐藏，
-' 与 bom_collect.py 中遍历所有节点（零件、产品、部件）的方式一致。
+' 判定方式（不依赖 TypeName / .Part）：
+'   refProd.Products.Count = 0 → 叶级零件
+'     · 以 refProd.PartNumber 去重，首次遇到时取 refProd.Parent（PartDocument）执行隐藏
+'   refProd.Products.Count > 0 → 子装配体 → 递归向下
 '
 ' 参数：
-'   oProduct      — 当前层级的 Product 对象
-'   processedDocs — ByRef 字符串，记录已处理文档路径，格式："|path1|path2|"
+'   oProduct       — 当前层级的 Product 对象
+'   processedParts — ByRef 字符串，格式："|PN1|PN2|"，用于跨层去重
+'   partList       — ByRef 字符串，已执行隐藏的零件号（换行分隔），用于最终汇报
 ' ============================================================
-Private Sub RecurseProduct(oProduct, ByRef processedDocs)
+Private Sub RecurseProduct(oProduct, ByRef processedParts, ByRef partList)
 
     Dim i
     For i = 1 To oProduct.Products.Count
@@ -151,7 +152,7 @@ Private Sub RecurseProduct(oProduct, ByRef processedDocs)
         If IsObject(childProd) Then
             If Not (childProd Is Nothing) Then
 
-                ' ── 取子实例的参考产品 ──────────────────────────────────────
+                ' ── 取参考产品（实例对应的唯一定义） ──────────────────────
                 Dim refProd
                 Set refProd = Nothing
                 On Error Resume Next
@@ -161,53 +162,48 @@ Private Sub RecurseProduct(oProduct, ByRef processedDocs)
                 If IsObject(refProd) Then
                     If Not (refProd Is Nothing) Then
 
-                        ' ── 取参考产品所在文档 ──────────────────────────────
-                        Dim parentDoc
-                        Set parentDoc = Nothing
+                        ' ── 取子节点数量以判断叶级零件或子装配体 ───────────
+                        Dim childCount
+                        childCount = -1
                         On Error Resume Next
-                        Set parentDoc = refProd.Parent
+                        childCount = refProd.Products.Count
                         On Error GoTo 0
 
-                        If IsObject(parentDoc) Then
-                            If Not (parentDoc Is Nothing) Then
+                        If childCount = 0 Then
 
-                                ' ── 按文档类型分支处理 ──────────────────────
-                                Dim childDocType
-                                childDocType = TypeName(parentDoc)
+                            ' ── 叶级零件：以 PartNumber 去重 ────────────────
+                            Dim partNum
+                            partNum = ""
+                            On Error Resume Next
+                            partNum = refProd.PartNumber
+                            On Error GoTo 0
 
-                                ' 取文档唯一标识（FullName 不可用时回退到 Name）
-                                Dim docKey
-                                docKey = ""
-                                On Error Resume Next
-                                docKey = parentDoc.FullName
-                                If docKey = "" Then docKey = parentDoc.Name
-                                Err.Clear
-                                On Error GoTo 0
+                            If partNum <> "" Then
+                                If InStr(processedParts, "|" & partNum & "|") = 0 Then
+                                    processedParts = processedParts & partNum & "|"
 
-                                If childDocType = "PartDocument" Then
+                                    ' 取 PartDocument 并执行隐藏
+                                    Dim partDoc
+                                    Set partDoc = Nothing
+                                    On Error Resume Next
+                                    Set partDoc = refProd.Parent
+                                    On Error GoTo 0
 
-                                    ' 仅在尚未处理时执行隐藏（去重）
-                                    If docKey <> "" Then
-                                        If InStr(processedDocs, "|" & docKey & "|") = 0 Then
-                                            processedDocs = processedDocs & docKey & "|"
-                                            HideWireframeInDoc parentDoc
+                                    If IsObject(partDoc) Then
+                                        If Not (partDoc Is Nothing) Then
+                                            HideWireframeInDoc partDoc
+                                            partList = partList & partNum & vbCrLf
                                         End If
                                     End If
-
-                                ElseIf childDocType = "ProductDocument" Then
-
-                                    ' 子装配体：先隐藏其文档中的几何元素，再递归向下处理
-                                    If docKey <> "" Then
-                                        If InStr(processedDocs, "|" & docKey & "|") = 0 Then
-                                            processedDocs = processedDocs & docKey & "|"
-                                            HideWireframeInDoc parentDoc
-                                        End If
-                                    End If
-                                    RecurseProduct refProd, processedDocs
 
                                 End If
-
                             End If
+
+                        ElseIf childCount > 0 Then
+
+                            ' ── 子装配体：递归向下 ───────────────────────────
+                            RecurseProduct refProd, processedParts, partList
+
                         End If
 
                     End If
