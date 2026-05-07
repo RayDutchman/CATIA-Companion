@@ -1121,7 +1121,7 @@ class MassPropsDialog(QDialog):
         for i, row in enumerate(self._rows):
             r = dict(row)
             r["_rows_idx"] = i
-            if r.get("Type") == "零件":
+            if r.get("Type") in ("零件", "对称件"):
                 rmp = r.get("_root_mp")
                 if rmp:
                     cog = rmp.get("cog", [None, None, None])
@@ -1154,10 +1154,10 @@ class MassPropsDialog(QDialog):
         for i, row in enumerate(self._rows):
             if row.get("_excluded"):
                 continue
-            # 汇总BOM仅统计零件行；产品/部件不计入数量，也不占用 PN 的 seen_pn 位置，
+            # 汇总BOM仅统计零件/对称件行；产品/部件不计入数量，也不占用 PN 的 seen_pn 位置，
             # 否则产品行会成为该 PN 的"规范行"，随后被类型过滤器删除，导致该 PN 的
             # 零件实例在汇总BOM中完全消失，且数量也会被错误地计入产品实例。
-            if row.get("Type") != "零件":
+            if row.get("Type") not in ("零件", "对称件"):
                 continue
             pn = str(row.get("Part Number", ""))
             if not pn:
@@ -1177,8 +1177,8 @@ class MassPropsDialog(QDialog):
             r["Quantity"] = qty[pn]
             result.append(r)
 
-        # 类型过滤作为保险：上方循环已只处理零件行，此处过滤冗余但保留以防万一
-        result = [r for r in result if r.get("Type") == "零件"]
+        # 类型过滤作为保险：上方循环已只处理零件/对称件行，此处过滤冗余但保留以防万一
+        result = [r for r in result if r.get("Type") in ("零件", "对称件")]
 
         # 按排序列排序
         if self._summary_sort_column:
@@ -1256,7 +1256,7 @@ class MassPropsDialog(QDialog):
             elif col_name == "Density":
                 density = row_data.get("Density")
                 if density is None:
-                    item.setText(col_idx, "—" if node_type == "零件" else "")
+                    item.setText(col_idx, "—" if node_type in ("零件", "对称件") else "")
                 elif density < 0:
                     item.setText(col_idx, "不统一")
                 else:
@@ -1264,13 +1264,13 @@ class MassPropsDialog(QDialog):
             elif col_name == "Weight":
                 raw = row_data.get("Weight")
                 if raw is None:
-                    item.setText(col_idx, "—" if node_type == "零件" else "")
+                    item.setText(col_idx, "—" if node_type in ("零件", "对称件") else "")
                 else:
                     item.setText(col_idx, self._fmt_mass_val(raw))
             elif col_name in _INERTIA_IDX or col_name in ("CogX", "CogY", "CogZ"):
                 raw = row_data.get(col_name)
                 if raw is None:
-                    item.setText(col_idx, "—" if node_type == "零件" else "")
+                    item.setText(col_idx, "—" if node_type in ("零件", "对称件") else "")
                 else:
                     if col_name in _INERTIA_IDX:
                         item.setText(col_idx, self._fmt_inertia_val(raw))
@@ -2067,8 +2067,8 @@ class MassPropsDialog(QDialog):
         source_pn = str(source_row.get("Part Number", ""))
         return {
             "Level":        source_row.get("Level", 0),
-            "Type":         "零件",      # 虚拟叶节点：对称件不参与层级汇总，
-                                        # 始终以零件类型直接贡献质量特性汇总
+            "Type":         "对称件",    # 虚拟叶节点：对称件以独立类型标识，
+                                        # 直接贡献质量特性汇总（不参与层级汇总）
             "Part Number":  source_pn + " (对称件)",
             "Filename":     "(虚拟)",
             "Nomenclature": source_row.get("Nomenclature", ""),
