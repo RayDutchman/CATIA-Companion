@@ -1702,10 +1702,11 @@ class MassPropsDialog(QDialog):
     def _row_status(row_data: dict) -> str:
         """Return a pipe-separated status string for a row.
 
-        Possible tokens: excluded / no_file / not_found / unreadable / meas_failed.
+        Possible tokens: mirror / excluded / no_file / not_found / unreadable / meas_failed.
         Empty string means the row has no special state.
         """
         tokens = []
+        if row_data.get("_is_mirror"):   tokens.append("mirror")
         if row_data.get("_excluded"):    tokens.append("excluded")
         if row_data.get("_no_file"):     tokens.append("no_file")
         if row_data.get("_not_found"):   tokens.append("not_found")
