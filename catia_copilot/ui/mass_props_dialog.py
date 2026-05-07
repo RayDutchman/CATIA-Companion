@@ -1243,6 +1243,8 @@ class MassPropsDialog(QDialog):
         # 若查找框中有文本，重新执行搜索以匹配新数据
         if hasattr(self, "_search_edit") and self._search_edit.text():
             self._on_search_changed(self._search_edit.text())
+
+    def _make_item(self, row_idx: int, row_data: dict) -> QTreeWidgetItem:
         """构建并填充一行的 QTreeWidgetItem。
 
         row_idx: 对应的 self._rows 索引（汇总模式用 _rows_idx 字段）。
