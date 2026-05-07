@@ -120,6 +120,7 @@ def _fmt(value) -> str:
         return "—"
     try:
         v = float(value)
+        v = 0.0 if v == 0.0 else v
         if math.isclose(v, round(v), rel_tol=0.0, abs_tol=_INTEGER_ABS_TOL):
             return f"{v:.0f}"
         if abs(v) >= 1e5 or (v != 0.0 and abs(v) < 0.001):
@@ -313,6 +314,7 @@ class MassPropsDialog(QDialog):
             return "—"
         try:
             v = float(value) * factor
+            v = 0.0 if v == 0.0 else v
             if math.isclose(v, round(v), rel_tol=0.0, abs_tol=_INTEGER_ABS_TOL):
                 return f"{v:.0f}"
             if abs(v) >= 1e5 or (v != 0.0 and abs(v) < 0.001):
