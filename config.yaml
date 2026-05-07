@@ -22,6 +22,7 @@ proxies:
   - {name: 15.台北 - 0.5 - SSR, server: luzhou.842698.xyz, port: 11547, type: ssr, cipher: chacha20-ietf, password: bk3W6CxUbH, protocol: auth_chain_a, obfs: plain, protocol-param: "173:dq62SkEziM", obfs-param: parts.blog.livedoor.jp}
   - {name: 16.新加坡 - 0.6 - SSR, server: xindian.annyeong.club, port: 57007, type: ssr, cipher: chacha20-ietf, password: bk3W6CxUbH, protocol: auth_chain_a, obfs: plain, protocol-param: "173:dq62SkEziM", obfs-param: parts.blog.livedoor.jp}
   - {name: 17.洛杉矶 - 0.5 - SSR, server: jiantan.annyeong.club, port: 25717, type: ssr, cipher: chacha20-ietf, password: bk3W6CxUbH, protocol: auth_chain_a, obfs: plain, protocol-param: "173:dq62SkEziM", obfs-param: parts.blog.livedoor.jp}
+  - {name: esp10-vless_reality_vision, server: esp.huhuazhi.club, port: 15310, type: vless, uuid: 5f65da69-5f4c-4532-b51b-a39bb9608b15, network: tcp, tls: true, flow: xtls-rprx-vision, servername: www.swift.com, reality-opts: {public-key: A-0dwbRqJbm6EN1-kJLxT2RdyrAp7dpte3LXtYKeyCo, short-id: 6ba85179e30d4fc2}, client-fingerprint: chrome}
 proxy-groups:
   - name: Proxies
     type: select
@@ -45,6 +46,7 @@ proxy-groups:
       - 15.台北 - 0.5 - SSR
       - 16.新加坡 - 0.6 - SSR
       - 17.洛杉矶 - 0.5 - SSR
+      - esp10-vless_reality_vision
   - name: Domestic
     type: select
     proxies:
@@ -319,6 +321,7 @@ proxy-groups:
       - 15.台北 - 0.5 - SSR
       - 16.新加坡 - 0.6 - SSR
       - 17.洛杉矶 - 0.5 - SSR
+      - esp10-vless_reality_vision
 rules:
   - DOMAIN-SUFFIX,local,DIRECT
   - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
