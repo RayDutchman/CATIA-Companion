@@ -2382,7 +2382,16 @@ class MassPropsDialog(QDialog):
         elif act_toggle is not None and action == act_toggle:
             self._toggle_excluded(row_idx)
         elif act_delete is not None and action == act_delete:
-            self._delete_rows(row_idx)
+            pn_label = str(row_data.get("Part Number", "") or row_data.get("Filename", ""))
+            confirm = QMessageBox.question(
+                self,
+                "确认删除",
+                f"确定要删除「{pn_label}」及其子节点吗？\n此操作不可撤销。",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if confirm == QMessageBox.StandardButton.Yes:
+                self._delete_rows(row_idx)
         elif act_add_mirror is not None and action == act_add_mirror:
             self._add_mirror_row(row_idx)
 
