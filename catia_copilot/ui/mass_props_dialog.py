@@ -1494,8 +1494,12 @@ class MassPropsDialog(QDialog):
                                         for ir in range(3)]
 
         # Step 3：遍历所有实例，更新 Weight / Density / 行级显示字段 / _root_mp。
+        # 对称件虚拟行（_is_mirror=True）不参与此处的 PN 批量更新：
+        # 其数据由 _sync_all_mirrors() 在 _calculate() 中统一重算。
         for r in self._rows:
-            if str(r.get("Part Number", "")) != pn or r.get("Type") != "零件":
+            if (str(r.get("Part Number", "")) != pn
+                    or r.get("Type") != "零件"
+                    or r.get("_is_mirror")):
                 continue
             r["Weight"] = new_weight_stored
             if new_density_stored is not None and new_density_stored >= 0:
@@ -1540,7 +1544,8 @@ class MassPropsDialog(QDialog):
                 if vis_row_idx is None:
                     continue
                 vis_row = self._rows[vis_row_idx]
-                if vis_row.get("Type") != "零件":
+                # 对称件虚拟行的显示刷新由 _sync_all_mirrors() 负责
+                if vis_row.get("Type") != "零件" or vis_row.get("_is_mirror"):
                     continue
                 if w_idx >= 0:
                     vis_item.setText(w_idx, self._fmt_mass_val(vis_row.get("Weight")))
@@ -1567,7 +1572,7 @@ class MassPropsDialog(QDialog):
         finally:
             self._is_updating = False
         # 编辑密度/重量后立即重新计算汇总结果（无需手动点击"计算"）
-        self._sync_mirror_rows_for_pn(pn)
+        # 对称件同步在 _calculate() 内部进行（_sync_all_mirrors），支持任意 Type 原件
         self._calculate()
 
     # ── 计算 ───────────────────────────────────────────────────────────────
@@ -1575,7 +1580,11 @@ class MassPropsDialog(QDialog):
     def _calculate(self) -> None:
         if not self._rows:
             return
-        # 先重新计算产品/部件行（使用更新后的 _root_mp），刷新表格
+        # 第一轮：重新计算产品/部件行，供"产品/部件原件"类型的对称件读取最新汇总值
+        recompute_product_rows(self._rows)
+        # 同步全部对称件（零件/产品/部件原件均支持），使用最新数据
+        self._sync_all_mirrors()
+        # 第二轮：纳入已更新的对称件贡献后再次汇总产品/部件，刷新表格
         recompute_product_rows(self._rows)
         self._refresh_product_items()
         try:
@@ -2109,14 +2118,21 @@ class MassPropsDialog(QDialog):
         self._rebuild_columns_and_table()
         self._calculate()
 
-    def _sync_mirror_rows_for_pn(self, pn: str) -> None:
-        """当 PN=pn 的零件被修改时，同步更新所有与其关联的对称件行数据和 UI 显示。
+    def _sync_all_mirrors(self) -> None:
+        """同步所有对称件虚拟行数据（零件/产品/部件原件均支持）。
+
+        通过 UUID 对（源行的 _mirror_child_id ↔ 对称件行的 _mirror_id）精确定位，
+        完全不依赖零件编号字符串，避免 PN 与"XXX (对称件)"重名时的碰撞问题。
 
         算法：
         1. 一次 O(n) 扫描建立 mirror_id → 行索引映射。
-        2. 遍历 PN 匹配的源行，找到绑定的对称件行并用 _make_mirror_row() 重算。
-        3. 原地更新对称件行字典，保留标识字段（_mirror_id / _is_mirror / _excluded 等）。
-        4. 刷新对应 QTreeWidgetItem 的数值列（Weight / CogX/Y/Z / Ixx-Iyz）。
+        2. 遍历所有带 _mirror_child_id 的源行（无论 Type 为零件/产品/部件）。
+        3. 通过 UUID 找到对应的对称件行，用 _make_mirror_row() 重算镜像数据。
+        4. 原地合并，保留标识字段（_mirror_id / _is_mirror / _excluded 等）。
+        5. 刷新对应 QTreeWidgetItem 的数值列（Weight / CogX/Y/Z / Ixx–Iyz）。
+
+        调用时机：在 _calculate() 中由 recompute_product_rows() 之后调用，
+        保证产品/部件原件的汇总值已为最新，对称件可直接读取到正确数据。
         """
         # Step 1：建立 mirror_id → 行索引 的快速查找表
         mirror_idx_by_id: dict[str, int] = {
@@ -2130,9 +2146,8 @@ class MassPropsDialog(QDialog):
         self._is_updating = True
         try:
             for src_idx, src_row in enumerate(self._rows):
-                if str(src_row.get("Part Number", "")) != pn:
-                    continue
-                if src_row.get("Type") != "零件" or src_row.get("_is_mirror"):
+                # 对称件自身不可作为原件
+                if src_row.get("_is_mirror"):
                     continue
                 child_id = src_row.get("_mirror_child_id")
                 if not child_id or child_id not in mirror_idx_by_id:
