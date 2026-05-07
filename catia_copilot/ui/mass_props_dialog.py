@@ -1567,6 +1567,7 @@ class MassPropsDialog(QDialog):
         finally:
             self._is_updating = False
         # 编辑密度/重量后立即重新计算汇总结果（无需手动点击"计算"）
+        self._sync_mirror_rows_for_pn(pn)
         self._calculate()
 
     # ── 计算 ───────────────────────────────────────────────────────────────
@@ -2107,6 +2108,75 @@ class MassPropsDialog(QDialog):
 
         self._rebuild_columns_and_table()
         self._calculate()
+
+    def _sync_mirror_rows_for_pn(self, pn: str) -> None:
+        """当 PN=pn 的零件被修改时，同步更新所有与其关联的对称件行数据和 UI 显示。
+
+        算法：
+        1. 一次 O(n) 扫描建立 mirror_id → 行索引映射。
+        2. 遍历 PN 匹配的源行，找到绑定的对称件行并用 _make_mirror_row() 重算。
+        3. 原地更新对称件行字典，保留标识字段（_mirror_id / _is_mirror / _excluded 等）。
+        4. 刷新对应 QTreeWidgetItem 的数值列（Weight / CogX/Y/Z / Ixx-Iyz）。
+        """
+        # Step 1：建立 mirror_id → 行索引 的快速查找表
+        mirror_idx_by_id: dict[str, int] = {
+            r["_mirror_id"]: i
+            for i, r in enumerate(self._rows)
+            if r.get("_is_mirror") and r.get("_mirror_id")
+        }
+        if not mirror_idx_by_id:
+            return
+
+        self._is_updating = True
+        try:
+            for src_idx, src_row in enumerate(self._rows):
+                if str(src_row.get("Part Number", "")) != pn:
+                    continue
+                if src_row.get("Type") != "零件" or src_row.get("_is_mirror"):
+                    continue
+                child_id = src_row.get("_mirror_child_id")
+                if not child_id or child_id not in mirror_idx_by_id:
+                    continue
+
+                mi = mirror_idx_by_id[child_id]
+                mirror_row = self._rows[mi]
+
+                # 重新计算镜像数据
+                new_data = self._make_mirror_row(src_idx)
+
+                # 保留标识字段，原地合并
+                new_data["_is_mirror"]        = True
+                new_data["_mirror_id"]        = mirror_row["_mirror_id"]
+                new_data["_mirror_source_pn"] = mirror_row.get("_mirror_source_pn")
+                if mirror_row.get("_excluded"):
+                    new_data["_excluded"] = True
+
+                mirror_row.update(new_data)
+
+                # 刷新该对称件的 QTreeWidgetItem
+                for vis_item in self._item_by_row:
+                    if vis_item.data(0, _ROW_IDX_ROLE) != mi:
+                        continue
+                    rmp = mirror_row.get("_root_mp")
+                    for ci, col in enumerate(self._columns):
+                        if col == "Weight":
+                            vis_item.setText(ci, self._fmt_mass_val(mirror_row.get("Weight")))
+                        elif col in ("CogX", "CogY", "CogZ"):
+                            cog_idx = ("CogX", "CogY", "CogZ").index(col)
+                            raw = rmp["cog"][cog_idx] if rmp else mirror_row.get(col)
+                            vis_item.setText(ci, self._fmt_cog_val(raw) if raw is not None else "—")
+                        elif col in _INERTIA_IDX:
+                            ir, ic = _INERTIA_IDX[col]
+                            raw = (
+                                rmp["inertia"][ir][ic]
+                                if rmp and rmp.get("inertia")
+                                else mirror_row.get(col)
+                            )
+                            vis_item.setText(ci, self._fmt_inertia_val(raw) if raw is not None else "—")
+                    break
+        finally:
+            self._is_updating = False
+
 
     def _apply_excluded_style_for_indices(
         self,
