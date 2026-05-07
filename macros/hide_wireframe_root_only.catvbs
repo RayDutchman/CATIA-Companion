@@ -1,0 +1,89 @@
+Option Explicit
+
+' ============================================================
+' hide_wireframe_root_only.catvbs   (VBScript / CATScript)
+'
+' 功能概述：
+'   诊断性宏脚本。
+'   不进入各零件的 PartDocument，而是直接对根文档（ProductDocument 或
+'   PartDocument）的 Selection 以 "All" 范围搜索并隐藏所有
+'   点、线、三维曲线、草图、轴系、平面。
+'
+'   CATIA V5 的 Selection.Search 在装配体上下文中可以跨文档搜索
+'   并返回所有子孙零件中的线框几何；若该机制在此级别生效，则所有
+'   隐藏操作均可在一次脚本调用中完成，无需逐零件切换 InWorkObject。
+'
+' 用途：
+'   用于验证"仅操作根文档 Selection"是否足以在装配体环境下批量
+'   隐藏线框几何，为最终方案选型提供依据。
+'
+' 用法：
+'   打开零件或装配体并激活对应文档后，通过 Tools > Macros 运行。
+' ============================================================
+
+Sub CATMain()
+
+    ' ── 获取 CATIA 应用对象 ─────────────────────────────────────────────────
+    Dim oCATIA
+    Set oCATIA = GetObject(, "CATIA.Application")
+
+    If oCATIA.Documents.Count = 0 Then
+        MsgBox "没有打开的文档，请先打开零件或装配体。", vbExclamation, "hide_wireframe_root_only"
+        Exit Sub
+    End If
+
+    ' ── 取当前活动文档 ──────────────────────────────────────────────────────
+    Dim oDoc
+    Set oDoc = oCATIA.ActiveDocument
+
+    Dim docType
+    docType = TypeName(oDoc)
+
+    If docType <> "PartDocument" And docType <> "ProductDocument" Then
+        MsgBox "当前活动文档不是零件（CATPart）或装配体（CATProduct），无法执行。", _
+               vbExclamation, "hide_wireframe_root_only"
+        Exit Sub
+    End If
+
+    ' ── 直接对根文档的 Selection 执行六类几何的批量搜索+隐藏 ────────────────
+    HideWireframeInDoc oDoc
+
+    MsgBox "已在根文档（" & oDoc.Name & "）的上下文中，搜索并隐藏了" & vbCrLf & _
+           "点、线、三维曲线、草图、轴系、平面。" & vbCrLf & vbCrLf & _
+           "（诊断脚本：仅操作根文档 Selection，不递归各 PartDocument）", _
+           vbInformation, "hide_wireframe_root_only"
+
+End Sub
+
+' ============================================================
+' HideWireframeInDoc — 对指定文档的 Selection 依次搜索六种几何类型并隐藏
+'
+' 参数：
+'   oDoc — 目标文档（PartDocument 或 ProductDocument）
+' ============================================================
+Private Sub HideWireframeInDoc(oDoc)
+
+    Dim oSel
+    Set oSel = oDoc.Selection
+    oSel.Clear
+
+    Dim geomTypes
+    geomTypes = Array("Point", "Line", "Curve", "Sketch", "AxisSystem", "Plane")
+
+    Dim i
+    For i = 0 To UBound(geomTypes)
+        On Error Resume Next
+        Err.Clear
+        oSel.Search "Type=" & geomTypes(i) & ", All"
+        Dim searchErr: searchErr = Err.Number
+        Err.Clear
+        On Error GoTo 0
+
+        If searchErr = 0 And oSel.Count > 0 Then
+            oSel.VisProperties.SetShow catVisPropertyNoShowAttr
+        End If
+
+        oSel.Clear
+    Next
+
+End Sub
