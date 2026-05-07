@@ -42,7 +42,7 @@ from catia_copilot.constants import (
 from catia_copilot.catia.mass_props_collect import (
     collect_mass_props_rows, _row_inertia_to_root, recompute_product_rows,
     save_rows, load_rows, merge_rows, MAX_INERTIA_INDEX, remeasure_part_mass_props,
-    _compute_root_mp_from_placement,
+    _compute_root_mp_from_placement, _rollup_one_product,
 )
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
 from catia_copilot.ui.bom_widgets import _BomTreeWidget
@@ -1591,11 +1591,11 @@ class MassPropsDialog(QDialog):
     def _calculate(self) -> None:
         if not self._rows:
             return
-        # 第一轮：重新计算产品/部件行，供"产品/部件原件"类型的对称件读取最新汇总值
-        recompute_product_rows(self._rows)
-        # 同步全部对称件（零件/产品/部件原件均支持），使用最新数据
+        # 自底向上联合汇总并同步对称件（详见 _sync_all_mirrors 文档）：
+        # 深层产品/部件先内联重算后同步其对称件，父层再汇总时即可读到最新子层数据，
+        # 一劳永逸地解决任意嵌套深度下产品对称件 _root_mp 陈旧的问题。
         self._sync_all_mirrors()
-        # 第二轮：纳入已更新的对称件贡献后再次汇总产品/部件，刷新表格
+        # 最终全量汇总：将所有已更新对称件的贡献纳入各产品/部件显示字段
         recompute_product_rows(self._rows)
         self._refresh_product_items()
         try:
@@ -2131,47 +2131,88 @@ class MassPropsDialog(QDialog):
         self._calculate()
 
     def _sync_all_mirrors(self) -> None:
-        """同步所有对称件虚拟行数据（零件/产品/部件原件均支持）。
+        """自底向上联合重算产品/部件行并同步所有对称件虚拟行。
 
-        通过 UUID 对（源行的 _mirror_child_id ↔ 对称件行的 _mirror_id）精确定位，
-        完全不依赖零件编号字符串，避免 PN 与"XXX (对称件)"重名时的碰撞问题。
+        **与旧版（自上而下）的区别**：
+        旧版先执行全量 recompute_product_rows()，再从头到尾遍历源行同步对称件。
+        当存在嵌套产品对称件时（例如 Sub-A 有对称件、Root 也有对称件），
+        Root 的对称件会在 Sub-A 的对称件刷新之前就被计算，导致 Root 对称件
+        的 _root_mp 滞后一轮，rollup_mass_properties() 读到陈旧值。
 
-        算法：
+        **新版算法（自底向上）**：
         1. 一次 O(n) 扫描建立 mirror_id → 行索引映射。
-        2. 遍历所有带 _mirror_child_id 的源行（无论 Type 为零件/产品/部件）。
-        3. 通过 UUID 找到对应的对称件行，用 _make_mirror_row() 重算镜像数据。
-        4. 原地合并，保留标识字段（_mirror_id / _is_mirror / _excluded 等）。
-        5. 刷新对应 QTreeWidgetItem 的数值列（Weight / CogX/Y/Z / Ixx–Iyz）。
+        2. 收集所有带 _mirror_child_id 的源行，按 Level 降序排列（深层先处理）。
+        3. 对每个源行：
+           a. 若为产品/部件：先内联重算其子树汇总值（此时更深层的对称件已在
+              前面的迭代中刷新，_root_mp 均为最新），再调用 _make_mirror_row()。
+           b. 若为零件：_root_mp 由 _on_item_changed 负责维护，直接同步即可。
+        4. 原地合并镜像数据，保留标识字段；刷新对应 QTreeWidgetItem。
 
-        调用时机：在 _calculate() 中由 recompute_product_rows() 之后调用，
-        保证产品/部件原件的汇总值已为最新，对称件可直接读取到正确数据。
+        由此保证：无论对称件嵌套多少层，每个对称件都从完全最新的原件数据
+        生成，rollup_mass_properties() 结果始终正确。
         """
+        rows = self._rows
+        n    = len(rows)
+
         # Step 1：建立 mirror_id → 行索引 的快速查找表
         mirror_idx_by_id: dict[str, int] = {
             r["_mirror_id"]: i
-            for i, r in enumerate(self._rows)
+            for i, r in enumerate(rows)
             if r.get("_is_mirror") and r.get("_mirror_id")
         }
         if not mirror_idx_by_id:
             return
 
+        # Step 2：收集所有源行，按 Level 降序（深层先）
+        src_indices = sorted(
+            [
+                i for i, r in enumerate(rows)
+                if r.get("_mirror_child_id") and not r.get("_is_mirror")
+            ],
+            key=lambda i: -int(rows[i].get("Level", 0)),
+        )
+
         self._is_updating = True
         try:
-            for src_idx, src_row in enumerate(self._rows):
-                # 对称件自身不可作为原件
-                if src_row.get("_is_mirror"):
-                    continue
+            for src_idx in src_indices:
+                src_row  = rows[src_idx]
                 child_id = src_row.get("_mirror_child_id")
                 if not child_id or child_id not in mirror_idx_by_id:
                     continue
 
-                mi = mirror_idx_by_id[child_id]
-                mirror_row = self._rows[mi]
+                # Step 3a：若原件为产品/部件，先内联重算其子树汇总值
+                # （此时更深层对称件的 _root_mp 已在前面迭代中刷新）
+                if src_row.get("Type") in ("产品", "部件"):
+                    level = int(src_row.get("Level", 0))
+                    child_parts: list[dict] = []
+                    for j in range(src_idx + 1, n):
+                        desc = rows[j]
+                        if int(desc.get("Level", 0)) <= level:
+                            break
+                        if desc.get("_excluded"):
+                            continue
+                        rmp = desc.get("_root_mp")
+                        if rmp and float(rmp.get("weight", 0.0)) > 0.0:
+                            child_parts.append(rmp)
+                    if child_parts:
+                        result = _rollup_one_product(child_parts)
+                        if result:
+                            src_row["Weight"] = result["weight"]
+                            src_row["CogX"]   = result["cog"][0]
+                            src_row["CogY"]   = result["cog"][1]
+                            src_row["CogZ"]   = result["cog"][2]
+                            src_row["Ixx"]    = result["inertia"][0][0]
+                            src_row["Iyy"]    = result["inertia"][1][1]
+                            src_row["Izz"]    = result["inertia"][2][2]
+                            src_row["Ixy"]    = result["inertia"][0][1]
+                            src_row["Ixz"]    = result["inertia"][0][2]
+                            src_row["Iyz"]    = result["inertia"][1][2]
 
-                # 重新计算镜像数据
+                # Step 3b：重新计算镜像数据并原地合并
+                mi         = mirror_idx_by_id[child_id]
+                mirror_row = rows[mi]
+
                 new_data = self._make_mirror_row(src_idx)
-
-                # 保留标识字段，原地合并
                 new_data["_is_mirror"]        = True
                 new_data["_mirror_id"]        = mirror_row["_mirror_id"]
                 new_data["_mirror_source_pn"] = mirror_row.get("_mirror_source_pn")
@@ -2180,9 +2221,7 @@ class MassPropsDialog(QDialog):
 
                 mirror_row.update(new_data)
 
-                # 刷新该对称件的 QTreeWidgetItem
-                # _item_by_row 按显示行顺序排列，与 _rows 索引不直接对应，
-                # 故须线性扫描 _ROW_IDX_ROLE 来找到正确的 item。
+                # Step 4：刷新该对称件的 QTreeWidgetItem
                 for vis_item in self._item_by_row:
                     if vis_item.data(0, _ROW_IDX_ROLE) != mi:
                         continue
