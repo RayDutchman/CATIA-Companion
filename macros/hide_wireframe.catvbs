@@ -20,8 +20,8 @@ Option Explicit
 '   不包含曲面（Surface）。
 '
 ' 判定叶级零件的方式：
-'   refProd.Products.Count = 0 → 叶级零件（CATPart），取 refProd.Parent 作为 PartDocument；
-'   refProd.Products.Count > 0 → 子装配体，继续递归。
+'   TypeName(refProd.Parent) = "PartDocument"  → 叶级零件，执行隐藏；
+'   TypeName(refProd.Parent) = "ProductDocument" → 子装配体，继续递归。
 '
 ' 用法：
 '   在 CATIA 中打开零件或装配体并激活对应文档后，运行本脚本。
@@ -127,10 +127,10 @@ End Sub
 ' ============================================================
 ' RecurseProduct — 递归遍历产品树，对每份唯一的叶级零件调用 HideWireframeInDoc
 '
-' 判定方式（不依赖 TypeName / .Part）：
-'   refProd.Products.Count = 0 → 叶级零件
-'     · 以 refProd.PartNumber 去重，首次遇到时取 refProd.Parent（PartDocument）执行隐藏
-'   refProd.Products.Count > 0 → 子装配体 → 递归向下
+' 判定方式（通过 TypeName(refProd.Parent) 区分零件与子装配体）：
+'   TypeName = "PartDocument"    → 叶级零件
+'     · 以 refProd.PartNumber 去重，首次遇到时对 refProd.Parent 执行隐藏
+'   TypeName = "ProductDocument" → 子装配体 → 递归向下（不对产品文档执行隐藏）
 '
 ' 参数：
 '   oProduct       — 当前层级的 Product 对象
@@ -162,48 +162,44 @@ Private Sub RecurseProduct(oProduct, ByRef processedParts, ByRef partList)
                 If IsObject(refProd) Then
                     If Not (refProd Is Nothing) Then
 
-                        ' ── 取子节点数量以判断叶级零件或子装配体 ───────────
-                        Dim childCount
-                        childCount = -1
+                        ' ── 取参考产品所在文档，以文档类型区分零件与子装配体 ──
+                        Dim parentDoc
+                        Set parentDoc = Nothing
                         On Error Resume Next
-                        childCount = refProd.Products.Count
+                        Set parentDoc = refProd.Parent
                         On Error GoTo 0
 
-                        If childCount = 0 Then
+                        If IsObject(parentDoc) Then
+                            If Not (parentDoc Is Nothing) Then
 
-                            ' ── 叶级零件：以 PartNumber 去重 ────────────────
-                            Dim partNum
-                            partNum = ""
-                            On Error Resume Next
-                            partNum = refProd.PartNumber
-                            On Error GoTo 0
+                                Dim childDocType
+                                childDocType = TypeName(parentDoc)
 
-                            If partNum <> "" Then
-                                If InStr(processedParts, "|" & partNum & "|") = 0 Then
-                                    processedParts = processedParts & partNum & "|"
+                                If childDocType = "PartDocument" Then
 
-                                    ' 取 PartDocument 并执行隐藏
-                                    Dim partDoc
-                                    Set partDoc = Nothing
+                                    ' ── 叶级零件：以 PartNumber 去重 ────────
+                                    Dim partNum
+                                    partNum = ""
                                     On Error Resume Next
-                                    Set partDoc = refProd.Parent
+                                    partNum = refProd.PartNumber
                                     On Error GoTo 0
 
-                                    If IsObject(partDoc) Then
-                                        If Not (partDoc Is Nothing) Then
-                                            HideWireframeInDoc partDoc
+                                    If partNum <> "" Then
+                                        If InStr(processedParts, "|" & partNum & "|") = 0 Then
+                                            processedParts = processedParts & partNum & "|"
+                                            HideWireframeInDoc parentDoc
                                             partList = partList & partNum & vbCrLf
                                         End If
                                     End If
 
+                                ElseIf childDocType = "ProductDocument" Then
+
+                                    ' ── 子装配体：递归向下（不对产品文档执行隐藏）──
+                                    RecurseProduct refProd, processedParts, partList
+
                                 End If
+
                             End If
-
-                        ElseIf childCount > 0 Then
-
-                            ' ── 子装配体：递归向下 ───────────────────────────
-                            RecurseProduct refProd, processedParts, partList
-
                         End If
 
                     End If
