@@ -63,6 +63,7 @@ _INERTIA_IDX: dict[str, tuple[int, int]] = {
     "Ixx": (0, 0), "Iyy": (1, 1), "Izz": (2, 2),
     "Ixy": (0, 1), "Ixz": (0, 2), "Iyz": (1, 2),
 }
+_COG_IDX: dict[str, int] = {"CogX": 0, "CogY": 1, "CogZ": 2}
 
 # 显示值随当前单位制变化的列名
 _UNIT_SENSITIVE_COLUMNS: tuple[str, ...] = (
@@ -2171,7 +2172,6 @@ class MassPropsDialog(QDialog):
                 # 刷新该对称件的 QTreeWidgetItem
                 # _item_by_row 按显示行顺序排列，与 _rows 索引不直接对应，
                 # 故须线性扫描 _ROW_IDX_ROLE 来找到正确的 item。
-                _COG_IDX = {"CogX": 0, "CogY": 1, "CogZ": 2}
                 for vis_item in self._item_by_row:
                     if vis_item.data(0, _ROW_IDX_ROLE) != mi:
                         continue
