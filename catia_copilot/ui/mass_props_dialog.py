@@ -1404,10 +1404,10 @@ class MassPropsDialog(QDialog):
                 item.setText(col_idx, self._fmt_mass_val(row_data.get("Weight")))
                 self._is_updating = False
                 return
-            if new_weight_stored < 0.0:
+            if new_weight_stored <= 0.0:
                 QMessageBox.warning(
                     self, "重量不合法",
-                    "重量不能为负数，请输入大于或等于 0 的值。",
+                    "重量必须为正数，请输入大于 0 的值。",
                 )
                 self._is_updating = True
                 item.setText(col_idx, self._fmt_mass_val(row_data.get("Weight")))
@@ -1424,10 +1424,10 @@ class MassPropsDialog(QDialog):
                 _ow = float(_old_weight) if _old_weight is not None else 0.0
             except (ValueError, TypeError):
                 _ow = 0.0
-            if _od > 0.0 and _ow > 0.0 and new_weight_stored > 0.0:
+            if _od > 0.0 and _ow > 0.0:
                 new_density_stored = _od * (new_weight_stored / _ow)
             else:
-                new_density_stored = _old_density  # 无法计算或新重量为零，密度保持不变
+                new_density_stored = _old_density  # 无法计算（旧密度/重量无效），密度保持不变
         else:  # col_name == "Density"
             try:
                 new_density_stored = float(new_text)
