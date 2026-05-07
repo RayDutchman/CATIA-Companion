@@ -19,11 +19,22 @@ Option Explicit
 '   · 平面（Plane）
 '   不包含曲面（Surface）。
 '
+' 注意事项（已加载检测）：
+'   若用户启用了以下任一 CATIA 选项，部分子零件可能处于【可视化模式】，
+'   其内部几何元素无法被 Selection.Search 搜索到，因此无法隐藏：
+'     · 工具 > 选项 > 基础结构 > 产品结构 > 缓存管理 > 激活高速缓存系统
+'     · 工具 > 选项 > 基础结构 > 零件基础结构 > 打开时不激活默认形状
+'   脚本在执行隐藏前会自动扫描产品树，若检测到可视化模式节点则弹出警告。
+'
 ' 用法：
 '   在 CATIA 中打开零件或装配体并激活对应文档后，运行本脚本。
 '   不依赖 iParameters，可通过 Tools > Macros 直接执行，
 '   也可由外部程序通过 SystemService.ExecuteScript 调用。
 ' ============================================================
+
+' CatWorkModeType 枚举常量
+Const catDesignModeType        = 1
+Const catVisualizationModeType = 2
 
 Sub CATMain()
 
@@ -49,12 +60,93 @@ Sub CATMain()
         Exit Sub
     End If
 
+    ' ── 装配体：预检可视化模式节点，若有则警告用户 ──────────────────────────
+    If docType = "ProductDocument" Then
+        Dim vizCount
+        vizCount = 0
+        ScanVizParts oDoc.Product, vizCount
+
+        If vizCount > 0 Then
+            MsgBox "警告：检测到 " & vizCount & " 个子组件处于【可视化模式】（高速缓存状态），" & vbCrLf & _
+                   "这些组件内部的点、线、草图等几何元素将【无法被隐藏】。" & vbCrLf & vbCrLf & _
+                   "可能的原因：" & vbCrLf & _
+                   "  · 工具>选项>基础结构>产品结构>" & vbCrLf & _
+                   "    缓存管理>激活高速缓存系统" & vbCrLf & _
+                   "  · 工具>选项>基础结构>零件基础结构>" & vbCrLf & _
+                   "    打开时不激活默认形状" & vbCrLf & vbCrLf & _
+                   "如需完整处理，请在装配树中右键选中未加载的零件，" & vbCrLf & _
+                   "选择【以设计模式表示】后重新运行脚本。" & vbCrLf & vbCrLf & _
+                   "点击【确定】将继续隐藏已加载零件的线框几何。", _
+                   vbExclamation, "hide_wireframe"
+        End If
+    End If
+
     ' ── 对根文档的 Selection 执行六类几何的批量搜索+隐藏 ───────────────────
     HideWireframeInDoc oDoc
 
     MsgBox "已隐藏文档 [" & oDoc.Name & "] 中的" & vbCrLf & _
            "点、线、三维曲线、草图、轴系、平面。", _
            vbInformation, "hide_wireframe"
+
+End Sub
+
+' ============================================================
+' ScanVizParts — 递归遍历产品树，统计处于可视化模式的节点数量
+'
+' 若某节点本身处于可视化模式，则计数后停止对其子节点的递归
+'（子节点在可视化模式下无法访问）。
+'
+' 参数：
+'   oProd    — 当前产品节点（Product）
+'   vizCount — 计数器（ByRef，累加）
+' ============================================================
+Private Sub ScanVizParts(oProd, ByRef vizCount)
+
+    ' 检测当前节点的工作模式（GetWorkMode 在根节点或纯零件节点上可能不存在）
+    Dim wm
+    wm = catDesignModeType
+    On Error Resume Next
+    Err.Clear
+    wm = oProd.GetWorkMode()
+    If Err.Number <> 0 Then
+        Err.Clear
+        wm = catDesignModeType
+    End If
+    On Error GoTo 0
+
+    If wm = catVisualizationModeType Then
+        ' 该节点处于可视化模式：计数并停止递归
+        vizCount = vizCount + 1
+        Exit Sub
+    End If
+
+    ' 枚举并递归子节点
+    Dim nChildren
+    nChildren = 0
+    On Error Resume Next
+    Err.Clear
+    nChildren = oProd.Products.Count
+    If Err.Number <> 0 Then
+        Err.Clear
+        nChildren = 0
+    End If
+    On Error GoTo 0
+
+    Dim i
+    For i = 1 To nChildren
+        Dim oChild
+        Dim childErr
+        On Error Resume Next
+        Err.Clear
+        Set oChild = oProd.Products.Item(i)
+        childErr = Err.Number
+        Err.Clear
+        On Error GoTo 0
+
+        If childErr = 0 Then
+            ScanVizParts oChild, vizCount
+        End If
+    Next
 
 End Sub
 
