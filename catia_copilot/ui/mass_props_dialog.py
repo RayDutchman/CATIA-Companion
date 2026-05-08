@@ -595,6 +595,7 @@ class MassPropsDialog(QDialog):
         self._table.setRootIsDecorated(True)
         self._table.setSortingEnabled(False)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.setAlternatingRowColors(True)
         self._table.setIndentation(16)
         self._table.setStyleSheet("QTreeWidget::item { min-height: 24px; }")
@@ -1966,7 +1967,17 @@ class MassPropsDialog(QDialog):
         级联删除：若被删除的行拥有关联对称件（_mirror_child_id），
         同时删除对应的对称件行（_is_mirror=True，_mirror_id 匹配）。
         """
-        indices = set(self._get_subtree_indices(row_idx))
+        self._delete_rows_multi([row_idx])
+
+    def _delete_rows_multi(self, root_idxs: list[int]) -> None:
+        """删除多个根行（及各自全部子孙行），一次重建表格并刷新汇总。
+
+        合并所有根行的子树索引后统一删除，避免因索引失效导致误删；
+        级联删除所有关联对称件（_mirror_child_id / _mirror_id 机制）。
+        """
+        indices: set[int] = set()
+        for ri in root_idxs:
+            indices.update(self._get_subtree_indices(ri))
 
         # 级联删除：收集被删除行的 _mirror_child_id，找出关联的对称件行
         mirror_child_ids: set[str] = {
@@ -2003,11 +2014,24 @@ class MassPropsDialog(QDialog):
         产品/部件行同步其子树内全部行，以保证子树整体进入/退出计算。
         切换完成后局部更新 QTreeWidgetItem 的视觉样式，并立即重新计算。
         """
-        indices = self._get_subtree_indices(row_idx)
-        new_val = not bool(self._rows[row_idx].get("_excluded", False))
-        for i in indices:
+        self._toggle_excluded_multi([row_idx])
+
+    def _toggle_excluded_multi(self, row_idxs: list[int]) -> None:
+        """批量切换多个行（及各自子孙行）的"参与计算"状态。
+
+        若所有选中行均已排除，则全部恢复参与；否则（全部参与或混合状态）
+        则将全部行标记为排除，使多选操作结果可预期且一致。
+        切换完成后局部更新 QTreeWidgetItem 的视觉样式，并立即重新计算。
+        """
+        all_excluded = all(bool(self._rows[ri].get("_excluded", False)) for ri in row_idxs)
+        new_val = not all_excluded  # 全部排除→恢复参与(False)，否则→排除(True)
+
+        all_indices: set[int] = set()
+        for ri in row_idxs:
+            all_indices.update(self._get_subtree_indices(ri))
+        for i in all_indices:
             self._rows[i]["_excluded"] = new_val
-        self._apply_excluded_style_for_indices(set(indices), new_val)
+        self._apply_excluded_style_for_indices(all_indices, new_val)
         self._calculate()
 
     # ── 对称件 ────────────────────────────────────────────────────────────
@@ -2352,15 +2376,32 @@ class MassPropsDialog(QDialog):
     # ── 右键上下文菜单 ─────────────────────────────────────────────────────
 
     def _on_tree_context_menu(self, pos) -> None:
-        """显示表格行的右键上下文菜单。"""
-        item = self._table.itemAt(pos)
-        if item is None:
+        """显示表格行的右键上下文菜单。支持多选批量操作。"""
+        clicked_item = self._table.itemAt(pos)
+        if clicked_item is None:
             return
-        row_idx = item.data(0, _ROW_IDX_ROLE)
-        if row_idx is None:
+        clicked_row_idx = clicked_item.data(0, _ROW_IDX_ROLE)
+        if clicked_row_idx is None:
             return
 
-        row_data     = self._rows[row_idx]
+        # 若右键点击的行不在当前选中集中，则清空选中并单独选中该行（单选时的默认行为）
+        if not clicked_item.isSelected():
+            self._table.clearSelection()
+            clicked_item.setSelected(True)
+
+        # 收集全部选中行的 row_idx
+        selected_idxs: list[int] = []
+        for sel_item in self._table.selectedItems():
+            ri = sel_item.data(0, _ROW_IDX_ROLE)
+            if ri is not None:
+                selected_idxs.append(ri)
+        if not selected_idxs:
+            return
+
+        is_single = len(selected_idxs) == 1
+
+        # ── 右键点击行的单行属性（用于单选专属菜单项）────────────────────
+        row_data     = self._rows[clicked_row_idx]
         fp           = str(row_data.get("_filepath", ""))
         fp_path      = Path(fp) if fp else None
         is_component = row_data.get("Type") == "部件"
@@ -2371,29 +2412,27 @@ class MassPropsDialog(QDialog):
         unreadable   = bool(row_data.get("_unreadable"))
         is_mirror    = bool(row_data.get("_is_mirror"))
 
-        if not item.isSelected():
-            self._table.clearSelection()
-            item.setSelected(True)
-
         menu = QMenu(self)
 
-        # ── 打开路径 ──────────────────────────────────────────────────────
+        # ── 打开路径（仅单选）────────────────────────────────────────────
         act_open_path = menu.addAction("打开路径")
         path_available = (
-            not is_mirror
+            is_single
+            and not is_mirror
             and bool(fp) and not no_file and fp_path is not None
             and (fp_path.exists() or fp_path.parent.exists())
         )
         act_open_path.setEnabled(path_available)
 
-        # ── 复制路径 ──────────────────────────────────────────────────────
+        # ── 复制路径（仅单选）────────────────────────────────────────────
         act_copy_path = menu.addAction("复制路径")
-        act_copy_path.setEnabled(not is_mirror and bool(fp) and not no_file)
+        act_copy_path.setEnabled(is_single and not is_mirror and bool(fp) and not no_file)
 
-        # ── 在CATIA中打开 ─────────────────────────────────────────────────
+        # ── 在CATIA中打开（仅单选）───────────────────────────────────────
         act_open_catia = menu.addAction("在CATIA中打开")
         catia_available = (
-            not is_mirror
+            is_single
+            and not is_mirror
             and not is_component and not not_found and not unreadable
             and fp_path is not None and fp_path.exists()
         )
@@ -2401,37 +2440,56 @@ class MassPropsDialog(QDialog):
 
         menu.addSeparator()
 
-        # ── 重新读取质量特性 ───────────────────────────────────────────────
+        # ── 重新读取质量特性（多选：只要有满足条件的零件行即可）──────────
         act_reread = menu.addAction("重新读取质量特性")
-        reread_available = (
-            not is_mirror
-            and is_part and not not_found
-            and fp_path is not None and fp_path.exists()
-        )
-        act_reread.setEnabled(reread_available)
-        if reread_available:
-            pn = str(row_data.get("Part Number", ""))
-            act_reread.setToolTip(
-                f"重新从 CATIA 读取零件「{pn}」的惯量包络体保持测量参数，"
-                "并同步更新所有相同零件编号的节点。"
-            )
+        reread_idxs = [
+            ri for ri in selected_idxs
+            if not self._rows[ri].get("_is_mirror")
+            and self._rows[ri].get("Type") == "零件"
+            and not self._rows[ri].get("_not_found")
+            and bool(self._rows[ri].get("_filepath", ""))
+            and Path(str(self._rows[ri].get("_filepath", ""))).exists()
+        ]
+        act_reread.setEnabled(bool(reread_idxs))
+        if reread_idxs:
+            if is_single:
+                pn = str(row_data.get("Part Number", ""))
+                act_reread.setToolTip(
+                    f"重新从 CATIA 读取零件「{pn}」的惯量包络体保持测量参数，"
+                    "并同步更新所有相同零件编号的节点。"
+                )
+            else:
+                act_reread.setToolTip(
+                    f"重新从 CATIA 读取选中的 {len(reread_idxs)} 个零件的质量特性。"
+                )
 
-        # ── 层级BOM专属：增加对称件 / 排除 / 删除 ─────────────────────────
+        # ── 层级BOM专属：增加对称件 / 参与计算 / 删除 ─────────────────────
         # act_toggle / act_delete / act_add_mirror 预置 None，以便在条件块外统一分发 action
-        act_toggle    = None
-        act_delete    = None
+        act_toggle     = None
+        act_delete     = None
         act_add_mirror = None
         if not self._summarize:
             menu.addSeparator()
-            is_excluded = bool(row_data.get("_excluded", False))
-            toggle_label = "参与计算：×" if is_excluded else "参与计算：√"
+            # 参与计算：全部已排除显示"×"，全部参与显示"√"，混合状态显示"切换"
+            all_excluded = all(bool(self._rows[ri].get("_excluded", False)) for ri in selected_idxs)
+            any_excluded = any(bool(self._rows[ri].get("_excluded", False)) for ri in selected_idxs)
+            if all_excluded:
+                toggle_label = "参与计算：×"
+            elif any_excluded:
+                toggle_label = "参与计算：切换"
+            else:
+                toggle_label = "参与计算：√"
             act_toggle = menu.addAction(toggle_label)
-            act_delete = menu.addAction("删除本行")
+            act_delete = menu.addAction("删除本行" if is_single else f"删除选中 {len(selected_idxs)} 行")
 
             menu.addSeparator()
             act_add_mirror = menu.addAction("增加对称件")
-            # 仅对非对称件的零件/产品/部件行有效；对称件自身不可再次对称
-            mirror_eligible = (is_part or is_product or is_component) and not is_mirror
+            # 仅对单选非对称件的零件/产品/部件行有效；对称件自身不可再次对称
+            mirror_eligible = (
+                is_single
+                and (is_part or is_product or is_component)
+                and not is_mirror
+            )
             act_add_mirror.setEnabled(mirror_eligible)
 
         action = menu.exec(self._table.viewport().mapToGlobal(pos))
@@ -2443,22 +2501,26 @@ class MassPropsDialog(QDialog):
         elif action == act_open_catia:
             self._open_in_catia(fp)
         elif action == act_reread:
-            self._reread_mass_props_for_row(row_idx)
+            self._reread_mass_props_for_rows(reread_idxs)
         elif act_toggle is not None and action == act_toggle:
-            self._toggle_excluded(row_idx)
+            self._toggle_excluded_multi(selected_idxs)
         elif act_delete is not None and action == act_delete:
-            pn_label = str(row_data.get("Part Number", "") or row_data.get("Filename", ""))
+            if is_single:
+                pn_label = str(row_data.get("Part Number", "") or row_data.get("Filename", ""))
+                msg = f"确定要删除「{pn_label}」及其子节点吗？\n此操作不可撤销。"
+            else:
+                msg = f"确定要删除选中的 {len(selected_idxs)} 行（及各自的子节点）吗？\n此操作不可撤销。"
             confirm = QMessageBox.question(
                 self,
                 "确认删除",
-                f"确定要删除「{pn_label}」及其子节点吗？\n此操作不可撤销。",
+                msg,
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
             if confirm == QMessageBox.StandardButton.Yes:
-                self._delete_rows(row_idx)
+                self._delete_rows_multi(selected_idxs)
         elif act_add_mirror is not None and action == act_add_mirror:
-            self._add_mirror_row(row_idx)
+            self._add_mirror_row(clicked_row_idx)
 
     def _open_path(self, fp: str) -> None:
         """在 Windows 资源管理器中打开包含 *fp* 的文件夹，并高亮选中该文件。"""
@@ -2516,29 +2578,49 @@ class MassPropsDialog(QDialog):
     def _reread_mass_props_for_row(self, row_idx: int) -> None:
         """重新从 CATIA 读取指定行（及所有同零件编号行）的质量特性。
 
-        用于用户在 CATIA 中补充或更改惯量包络体后，无需重新加载整个产品树
-        即可刷新单个零件的质量特性数据。若重新读取成功，同时恢复该零件所有
-        节点的正常显示状态（清除橙色背景、恢复文字颜色、解除行锁定），并
-        重新计算产品/部件节点的汇总质量特性。
-
-        按零件编号检索：所有在 self._rows 中拥有相同 Part Number 且类型为
-        "零件" 的行均会被同步更新，确保同一零件的多个实例数据一致。
+        委托 _reread_mass_props_for_rows 处理，保持接口不变。
         """
-        row_data = self._rows[row_idx]
-        fp = str(row_data.get("_filepath", ""))
-        pn = str(row_data.get("Part Number", ""))
-        if not fp:
-            QMessageBox.warning(self, "无文件路径", "该零件没有有效的文件路径，无法重新读取。")
+        self._reread_mass_props_for_rows([row_idx])
+
+    def _reread_mass_props_for_rows(self, row_idxs: list[int]) -> None:
+        """批量重新从 CATIA 读取多个零件行的质量特性，最后统一刷新。
+
+        按 (filepath, Part Number) 去重后逐个调用 remeasure_part_mass_props，
+        所有读取完成后统一更新 _rows、刷新可见树节点、重新计算产品/部件汇总行。
+
+        若所有零件均读取失败，则弹出错误提示并返回；
+        若部分失败，则在刷新成功零件后弹出警告；
+        全部成功时弹出成功提示。
+        """
+        if not row_idxs:
             return
 
-        # 设置等待光标，提示用户正在操作
+        # 按 (fp, pn) 去重，避免对同一零件文件读取多次
+        seen: set[tuple[str, str]] = set()
+        unique_tasks: list[tuple[str, str]] = []
+        for ri in row_idxs:
+            r  = self._rows[ri]
+            fp = str(r.get("_filepath", ""))
+            pn = str(r.get("Part Number", ""))
+            key = (fp, pn)
+            if key not in seen:
+                seen.add(key)
+                unique_tasks.append(key)
+
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        results: dict[str, object] = {}  # pn -> new_mp
+        failed_filepaths: list[str] = []
         try:
-            new_mp = remeasure_part_mass_props(fp, pn, self._read_mode)
+            for fp, pn in unique_tasks:
+                new_mp = remeasure_part_mass_props(fp, pn, self._read_mode)
+                if new_mp is None:
+                    failed_filepaths.append(fp)
+                else:
+                    results[pn] = new_mp
         finally:
             QApplication.restoreOverrideCursor()
 
-        if new_mp is None:
+        if not results:
             _read_mode_desc = {
                 "first": "「惯量包络体.1」",
                 "last":  f"编号最大的「惯量包络体.N」（N ≤ {MAX_INERTIA_INDEX}）",
@@ -2546,8 +2628,9 @@ class MassPropsDialog(QDialog):
             }.get(self._read_mode, "惯量包络体")
             QMessageBox.warning(
                 self, "重新读取失败",
-                f"未能从以下零件读取到有效的质量特性：\n{fp}\n\n"
-                "可能原因：\n"
+                f"未能从以下零件读取到有效的质量特性：\n"
+                + "\n".join(f"  • {f}" for f in failed_filepaths)
+                + "\n\n可能原因：\n"
                 "  • 该零件文档尚未在 CATIA 中打开\n"
                 f"  • 当前读取模式要求的 {_read_mode_desc} 保持测量不存在\n"
                 "  • 测量是在产品环境下建立的（使用产品坐标系，不会被读取）\n"
@@ -2555,74 +2638,84 @@ class MassPropsDialog(QDialog):
             )
             return
 
-        # ── 更新 _rows 中所有相同 PN 的零件实例 ─────────────────────────────
-        #
-        # 与初始加载时 _mass_cache 的设计一致：所有同 PN 实例共享同一个
-        # _mass_props 对象引用，以确保后续手动修改重量时缩放逻辑正确运行。
-        # 此处将所有实例的 _mass_props 统一指向同一个 new_mp 对象。
-        target_rows: list[int] = [
-            i for i, r in enumerate(self._rows)
-            if str(r.get("Part Number", "")) == pn and r.get("Type") == "零件"
-        ]
+        # ── 更新 _rows 中所有匹配 PN 的零件实例 ──────────────────────────
+        total_updated = 0
+        for pn, new_mp in results.items():
+            target_rows: list[int] = [
+                i for i, r in enumerate(self._rows)
+                if str(r.get("Part Number", "")) == pn and r.get("Type") == "零件"
+            ]
+            total_updated += len(target_rows)
 
-        for ri in target_rows:
-            r = self._rows[ri]
+            for ri in target_rows:
+                r = self._rows[ri]
+                r["_mass_props"]  = new_mp
+                r["Density"]      = new_mp.get("density", None)
+                r["Weight"]       = new_mp["weight"]
+                cog_local         = new_mp["cog"]
+                r["CogX"]         = cog_local[0]
+                r["CogY"]         = cog_local[1]
+                r["CogZ"]         = cog_local[2]
+                I_local           = new_mp["inertia"]
+                r["Ixx"]          = I_local[0][0]
+                r["Iyy"]          = I_local[1][1]
+                r["Izz"]          = I_local[2][2]
+                r["Ixy"]          = I_local[0][1]
+                r["Ixz"]          = I_local[0][2]
+                r["Iyz"]          = I_local[1][2]
+                r["_meas_failed"] = False
 
-            # 将所有实例的 _mass_props 指向同一个对象（与 _mass_cache 机制一致）
-            r["_mass_props"]  = new_mp
-            r["Density"]      = new_mp.get("density", None)
-            r["Weight"]       = new_mp["weight"]
-            cog_local         = new_mp["cog"]
-            r["CogX"]         = cog_local[0]
-            r["CogY"]         = cog_local[1]
-            r["CogZ"]         = cog_local[2]
-            I_local           = new_mp["inertia"]
-            r["Ixx"]          = I_local[0][0]
-            r["Iyy"]          = I_local[1][1]
-            r["Izz"]          = I_local[2][2]
-            r["Ixy"]          = I_local[0][1]
-            r["Ixz"]          = I_local[0][2]
-            r["Iyz"]          = I_local[1][2]
-            r["_meas_failed"] = False
+                placement = r.get("_placement")
+                if placement is not None:
+                    r["_root_mp"] = _compute_root_mp_from_placement(placement, new_mp)
+                else:
+                    r["_root_mp"] = {
+                        "weight":  new_mp["weight"],
+                        "cog":     list(cog_local),
+                        "inertia": [list(row_i) for row_i in I_local],
+                    }
 
-            # 重新计算根坐标系质量特性（_placement 在初始加载时已保存，此处直接复用）
-            placement = r.get("_placement")
-            if placement is not None:
-                r["_root_mp"] = _compute_root_mp_from_placement(placement, new_mp)
-            else:
-                # _placement 不存在（异常情况）：根坐标系与局部坐标系视为相同
-                r["_root_mp"] = {
-                    "weight":  new_mp["weight"],
-                    "cog":     list(cog_local),
-                    "inertia": [list(row_i) for row_i in I_local],
-                }
-
-        # ── 刷新可见树节点（_pn_to_items 中同 PN 的所有条目）─────────────────
+        # ── 刷新可见树节点 ────────────────────────────────────────────────
         self._is_updating = True
         try:
-            for vis_item in self._pn_to_items.get(pn, []):
-                vis_row_idx = vis_item.data(0, _ROW_IDX_ROLE)
-                if vis_row_idx is None:
-                    continue
-                vis_row = self._rows[vis_row_idx]
-                if vis_row.get("Type") != "零件":
-                    continue
-                self._refresh_part_item_after_reread(vis_item, vis_row)
+            for pn in results:
+                for vis_item in self._pn_to_items.get(pn, []):
+                    vis_row_idx = vis_item.data(0, _ROW_IDX_ROLE)
+                    if vis_row_idx is None:
+                        continue
+                    vis_row = self._rows[vis_row_idx]
+                    if vis_row.get("Type") != "零件":
+                        continue
+                    self._refresh_part_item_after_reread(vis_item, vis_row)
         finally:
             self._is_updating = False
 
-        # ── 重新计算产品/部件汇总行并刷新底部计算结果 ──────────────────────
+        # ── 重新计算产品/部件汇总行并刷新底部计算结果 ──────────────────
         recompute_product_rows(self._rows)
         self._refresh_product_items()
         self._rollup_result = None
         self._clear_summary_labels()
         self._calculate()
 
-        QMessageBox.information(
-            self, "重新读取成功",
-            f"已成功重新读取零件「{pn}」的质量特性，\n"
-            f"共更新了 {len(target_rows)} 个节点。",
-        )
+        if failed_filepaths:
+            QMessageBox.warning(
+                self, "部分读取失败",
+                f"成功更新了 {total_updated} 个节点，但以下零件读取失败：\n"
+                + "\n".join(f"  • {f}" for f in failed_filepaths),
+            )
+        elif len(results) == 1:
+            pn = next(iter(results))
+            QMessageBox.information(
+                self, "重新读取成功",
+                f"已成功重新读取零件「{pn}」的质量特性，\n"
+                f"共更新了 {total_updated} 个节点。",
+            )
+        else:
+            QMessageBox.information(
+                self, "重新读取成功",
+                f"已成功重新读取 {len(results)} 个零件的质量特性，\n"
+                f"共更新了 {total_updated} 个节点。",
+            )
 
     def _refresh_part_item_after_reread(
         self,
