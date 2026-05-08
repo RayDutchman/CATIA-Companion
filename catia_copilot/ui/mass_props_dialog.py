@@ -38,11 +38,10 @@ from catia_copilot.constants import (
     MASS_PROPS_READONLY_COLUMNS,
     FILENAME_NOT_FOUND,
     FILENAME_UNSAVED,
-    MAX_INERTIA_INDEX,
 )
 from catia_copilot.catia.mass_props_collect import (
     collect_mass_props_rows, _row_inertia_to_root, recompute_product_rows,
-    save_rows, load_rows, merge_rows, remeasure_part_mass_props,
+    save_rows, load_rows, merge_rows, MAX_INERTIA_INDEX, remeasure_part_mass_props,
     _compute_root_mp_from_placement, _rollup_one_product,
 )
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
