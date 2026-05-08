@@ -621,7 +621,7 @@ class MassPropsDialog(QDialog):
         def _fld_lbl(text: str) -> QLabel:
             return QLabel(text)
 
-        def _val_edit(min_w: int = 110) -> QLineEdit:
+        def _val_edit(min_w: int = 80) -> QLineEdit:
             le = QLineEdit("—")
             le.setReadOnly(True)
             le.setMinimumWidth(min_w)
