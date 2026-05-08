@@ -607,52 +607,92 @@ class MassPropsDialog(QDialog):
         layout.addWidget(self._table, 1)
 
         # ── 汇总面板 ────────────────────────────────────────────────────────
-        summary_group  = QGroupBox("汇总结果（基于根产品坐标系）")
-        summary_layout = QGridLayout(summary_group)
-        summary_layout.setSpacing(8)
-        summary_layout.setContentsMargins(10, 8, 10, 8)
+        summary_group = QGroupBox("汇总结果（基于根产品坐标系）")
+        summary_h = QHBoxLayout(summary_group)
+        summary_h.setSpacing(12)
+        summary_h.setContentsMargins(10, 8, 10, 8)
 
-        def _lbl(text: str) -> QLabel:
+        def _sec_lbl(text: str) -> QLabel:
             lb = QLabel(text)
             lb.setStyleSheet("font-weight: bold;")
             return lb
 
-        def _val_lbl() -> QLabel:
-            lb = QLabel("—")
-            lb.setMinimumWidth(120)
-            return lb
+        def _fld_lbl(text: str) -> QLabel:
+            return QLabel(text)
 
-        # 第0行：总重量（独占）
-        summary_layout.addWidget(_lbl("总重量："), 0, 0)
-        self._lbl_weight = _val_lbl()
-        summary_layout.addWidget(self._lbl_weight, 0, 1)
+        def _val_edit(min_w: int = 110) -> QLineEdit:
+            le = QLineEdit("—")
+            le.setReadOnly(True)
+            le.setMinimumWidth(min_w)
+            return le
 
-        # 第1行：总重心 X / Y / Z
-        summary_layout.addWidget(_lbl("总重心 X："), 1, 0)
-        self._lbl_cx = _val_lbl()
-        summary_layout.addWidget(self._lbl_cx, 1, 1)
+        # ── 左列：总重量 + 重心 (G) ─────────────────────────────────────────
+        left_w = QWidget()
+        left_g = QGridLayout(left_w)
+        left_g.setSpacing(4)
+        left_g.setContentsMargins(0, 0, 0, 0)
 
-        summary_layout.addWidget(_lbl("总重心 Y："), 1, 2)
-        self._lbl_cy = _val_lbl()
-        summary_layout.addWidget(self._lbl_cy, 1, 3)
+        left_g.addWidget(_sec_lbl("总重量"), 0, 0)
+        self._edit_weight = _val_edit()
+        left_g.addWidget(self._edit_weight, 0, 1)
 
-        summary_layout.addWidget(_lbl("总重心 Z："), 1, 4)
-        self._lbl_cz = _val_lbl()
-        summary_layout.addWidget(self._lbl_cz, 1, 5)
+        left_g.addWidget(_sec_lbl("重心 (G)"), 1, 0, 1, 2)
+        for r, (text, attr) in enumerate([("Gx", "_edit_cx"), ("Gy", "_edit_cy"), ("Gz", "_edit_cz")]):
+            left_g.addWidget(_fld_lbl(text), r + 2, 0)
+            edit = _val_edit()
+            setattr(self, attr, edit)
+            left_g.addWidget(edit, r + 2, 1)
+        left_g.setRowStretch(left_g.rowCount(), 1)
+        summary_h.addWidget(left_w)
 
-        # 第2行：Ixx / Iyy / Izz
-        for c_i, (text, attr) in enumerate([("Ixx:", "lbl_ixx"), ("Iyy:", "lbl_iyy"), ("Izz:", "lbl_izz")]):
-            summary_layout.addWidget(_lbl(text), 2, c_i * 2)
-            lbl = _val_lbl()
-            setattr(self, f"_{attr}", lbl)
-            summary_layout.addWidget(lbl, 2, c_i * 2 + 1)
+        # ── 中列：惯量矩阵 (3×3) ────────────────────────────────────────────
+        mid_w = QWidget()
+        mid_g = QGridLayout(mid_w)
+        mid_g.setSpacing(4)
+        mid_g.setContentsMargins(0, 0, 0, 0)
 
-        # 第3行：Ixy / Ixz / Iyz
-        for c_i, (text, attr) in enumerate([("Ixy:", "lbl_ixy"), ("Ixz:", "lbl_ixz"), ("Iyz:", "lbl_iyz")]):
-            summary_layout.addWidget(_lbl(text), 3, c_i * 2)
-            lbl = _val_lbl()
-            setattr(self, f"_{attr}", lbl)
-            summary_layout.addWidget(lbl, 3, c_i * 2 + 1)
+        mid_g.addWidget(_sec_lbl("惯量矩阵"), 0, 0, 1, 6)
+        _inertia_rows = [
+            ("Ixx", "_edit_ixx", "Ixy", "_edit_ixy", "Ixz", "_edit_ixz"),
+            ("Iyx", "_edit_iyx", "Iyy", "_edit_iyy", "Iyz", "_edit_iyz"),
+            ("Izx", "_edit_izx", "Izy", "_edit_izy", "Izz", "_edit_izz"),
+        ]
+        for r, row_items in enumerate(_inertia_rows):
+            for ci in range(3):
+                mid_g.addWidget(_fld_lbl(row_items[ci * 2]), r + 1, ci * 2)
+                edit = _val_edit()
+                setattr(self, row_items[ci * 2 + 1], edit)
+                mid_g.addWidget(edit, r + 1, ci * 2 + 1)
+        mid_g.setRowStretch(mid_g.rowCount(), 1)
+        summary_h.addWidget(mid_w)
+
+        # ── 右列：重心主惯量矩 + 主轴 ───────────────────────────────────────
+        right_w = QWidget()
+        right_g = QGridLayout(right_w)
+        right_g.setSpacing(4)
+        right_g.setContentsMargins(0, 0, 0, 0)
+
+        right_g.addWidget(_sec_lbl("重心主惯量矩"), 0, 0, 1, 6)
+        for c, (text, attr) in enumerate([("M1", "_edit_m1"), ("M2", "_edit_m2"), ("M3", "_edit_m3")]):
+            right_g.addWidget(_fld_lbl(text), 1, c * 2)
+            edit = _val_edit()
+            setattr(self, attr, edit)
+            right_g.addWidget(edit, 1, c * 2 + 1)
+
+        right_g.addWidget(_sec_lbl("主轴"), 2, 0, 1, 6)
+        _axes_rows = [
+            ("A1x", "_edit_a1x", "A2x", "_edit_a2x", "A3x", "_edit_a3x"),
+            ("A1y", "_edit_a1y", "A2y", "_edit_a2y", "A3y", "_edit_a3y"),
+            ("A1z", "_edit_a1z", "A2z", "_edit_a2z", "A3z", "_edit_a3z"),
+        ]
+        for r, row_items in enumerate(_axes_rows):
+            for ci in range(3):
+                right_g.addWidget(_fld_lbl(row_items[ci * 2]), r + 3, ci * 2)
+                edit = _val_edit(min_w=80)
+                setattr(self, row_items[ci * 2 + 1], edit)
+                right_g.addWidget(edit, r + 3, ci * 2 + 1)
+        right_g.setRowStretch(right_g.rowCount(), 1)
+        summary_h.addWidget(right_w)
 
         layout.addWidget(summary_group)
 
@@ -804,21 +844,6 @@ class MassPropsDialog(QDialog):
         for col_idx, col_name in enumerate(self._columns):
             if col_name in self._col_widths:
                 self._table.setColumnWidth(col_idx, self._col_widths[col_name])
-
-    def _expand_key(self, rows_idx: int) -> str:
-        """返回行的稳定展开状态键，用于跨 rebuild 恢复树节点的展开/折叠状态。
-
-        优先级：对称件使用不可变 UUID（_mirror_id）→ 普通行使用绝对文件路径
-        （_filepath）→ 兜底使用零件编号（Part Number）。
-        """
-        row = self._rows[rows_idx]
-        if row.get("_is_mirror") and row.get("_mirror_id"):
-            return "mirror:" + row["_mirror_id"]
-        fp = str(row.get("_filepath", ""))
-        if fp:
-            return "file:" + fp
-        pn = str(row.get("Part Number", ""))
-        return ("pn:" + pn) if pn else ("idx:" + str(rows_idx))
 
     def _refresh_unit_display(self) -> None:
         """仅更新列标题和重量/惯量单元格的显示值（单位切换时调用，避免全量重建）。"""
@@ -1214,16 +1239,6 @@ class MassPropsDialog(QDialog):
     # ── 填充表格 ───────────────────────────────────────────────────────────
 
     def _populate_table(self) -> None:
-        # ── ① 在清空树之前保存各折叠节点的稳定键（首次加载时 _item_by_row 为空）──
-        has_prior_state = bool(self._item_by_row)
-        collapsed_keys: set[str] = set()
-        if has_prior_state:
-            for item in self._item_by_row:
-                if item.childCount() > 0 and not item.isExpanded():
-                    rows_idx = item.data(0, _ROW_IDX_ROLE)
-                    if rows_idx is not None and rows_idx < len(self._rows):
-                        collapsed_keys.add(self._expand_key(rows_idx))
-
         self._is_updating = True
         self._table.blockSignals(True)
 
@@ -1241,18 +1256,7 @@ class MassPropsDialog(QDialog):
         else:
             self._populate_tree(display_rows)
 
-        # ── ② 恢复展开/折叠状态（首次加载时全部展开）─────────────────────────
-        if has_prior_state:
-            for item in self._item_by_row:
-                if item.childCount() == 0:
-                    continue
-                rows_idx = item.data(0, _ROW_IDX_ROLE)
-                if rows_idx is None:
-                    continue
-                item.setExpanded(self._expand_key(rows_idx) not in collapsed_keys)
-        else:
-            self._table.expandAll()
-
+        self._table.expandAll()
         self._table.blockSignals(False)
         self._is_updating = False
 
@@ -1684,28 +1688,60 @@ class MassPropsDialog(QDialog):
             self._is_updating = False
 
     def _clear_summary_labels(self) -> None:
-        for lbl in (self._lbl_weight, self._lbl_cx, self._lbl_cy, self._lbl_cz,
-                    self._lbl_ixx, self._lbl_iyy, self._lbl_izz,
-                    self._lbl_ixy, self._lbl_ixz, self._lbl_iyz):
-            lbl.setText("—")
+        for attr in (
+            "_edit_weight",
+            "_edit_cx", "_edit_cy", "_edit_cz",
+            "_edit_ixx", "_edit_ixy", "_edit_ixz",
+            "_edit_iyx", "_edit_iyy", "_edit_iyz",
+            "_edit_izx", "_edit_izy", "_edit_izz",
+            "_edit_m1", "_edit_m2", "_edit_m3",
+            "_edit_a1x", "_edit_a1y", "_edit_a1z",
+            "_edit_a2x", "_edit_a2y", "_edit_a2z",
+            "_edit_a3x", "_edit_a3y", "_edit_a3z",
+        ):
+            getattr(self, attr).setText("—")
 
     def _update_summary_labels(self, result: dict) -> None:
         unit_lbl     = self._weight_unit_label()
         inertia_unit = self._inertia_unit_label()
         cog_unit     = self._cog_unit_label()
+
         w_val = result.get("total_weight", 0.0)
-        self._lbl_weight.setText(f"{self._fmt_mass_val(w_val)} {unit_lbl}")
+        self._edit_weight.setText(f"{self._fmt_mass_val(w_val)} {unit_lbl}")
+
         cog = result.get("cog", [0.0, 0.0, 0.0])
-        self._lbl_cx.setText(f"{self._fmt_cog_val(cog[0])} {cog_unit}")
-        self._lbl_cy.setText(f"{self._fmt_cog_val(cog[1])} {cog_unit}")
-        self._lbl_cz.setText(f"{self._fmt_cog_val(cog[2])} {cog_unit}")
+        self._edit_cx.setText(f"{self._fmt_cog_val(cog[0])} {cog_unit}")
+        self._edit_cy.setText(f"{self._fmt_cog_val(cog[1])} {cog_unit}")
+        self._edit_cz.setText(f"{self._fmt_cog_val(cog[2])} {cog_unit}")
+
         I = result.get("inertia", [[0.0] * 3 for _ in range(3)])
-        self._lbl_ixx.setText(f"{self._fmt_inertia_val(I[0][0])} {inertia_unit}")
-        self._lbl_iyy.setText(f"{self._fmt_inertia_val(I[1][1])} {inertia_unit}")
-        self._lbl_izz.setText(f"{self._fmt_inertia_val(I[2][2])} {inertia_unit}")
-        self._lbl_ixy.setText(f"{self._fmt_inertia_val(I[0][1])} {inertia_unit}")
-        self._lbl_ixz.setText(f"{self._fmt_inertia_val(I[0][2])} {inertia_unit}")
-        self._lbl_iyz.setText(f"{self._fmt_inertia_val(I[1][2])} {inertia_unit}")
+        self._edit_ixx.setText(f"{self._fmt_inertia_val(I[0][0])} {inertia_unit}")
+        self._edit_ixy.setText(f"{self._fmt_inertia_val(I[0][1])} {inertia_unit}")
+        self._edit_ixz.setText(f"{self._fmt_inertia_val(I[0][2])} {inertia_unit}")
+        self._edit_iyx.setText(f"{self._fmt_inertia_val(I[1][0])} {inertia_unit}")
+        self._edit_iyy.setText(f"{self._fmt_inertia_val(I[1][1])} {inertia_unit}")
+        self._edit_iyz.setText(f"{self._fmt_inertia_val(I[1][2])} {inertia_unit}")
+        self._edit_izx.setText(f"{self._fmt_inertia_val(I[2][0])} {inertia_unit}")
+        self._edit_izy.setText(f"{self._fmt_inertia_val(I[2][1])} {inertia_unit}")
+        self._edit_izz.setText(f"{self._fmt_inertia_val(I[2][2])} {inertia_unit}")
+
+        pm = result.get("principal_moments", [0.0, 0.0, 0.0])
+        self._edit_m1.setText(f"{self._fmt_inertia_val(pm[0])} {inertia_unit}")
+        self._edit_m2.setText(f"{self._fmt_inertia_val(pm[1])} {inertia_unit}")
+        self._edit_m3.setText(f"{self._fmt_inertia_val(pm[2])} {inertia_unit}")
+
+        # principal_axes[row][col]: col=主轴序号(0=A1,1=A2,2=A3), row=分量(0=x,1=y,2=z)
+        pa = result.get("principal_axes", [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+        _fmt6 = lambda v: f"{v:.6g}"
+        self._edit_a1x.setText(_fmt6(pa[0][0]))
+        self._edit_a2x.setText(_fmt6(pa[0][1]))
+        self._edit_a3x.setText(_fmt6(pa[0][2]))
+        self._edit_a1y.setText(_fmt6(pa[1][0]))
+        self._edit_a2y.setText(_fmt6(pa[1][1]))
+        self._edit_a3y.setText(_fmt6(pa[1][2]))
+        self._edit_a1z.setText(_fmt6(pa[2][0]))
+        self._edit_a2z.setText(_fmt6(pa[2][1]))
+        self._edit_a3z.setText(_fmt6(pa[2][2]))
 
     # ── 导出 ───────────────────────────────────────────────────────────────
 
