@@ -70,7 +70,7 @@ _UNIT_SENSITIVE_COLUMNS: tuple[str, ...] = (
     "Weight",
 ) + tuple(_INERTIA_IDX.keys()) + ("CogX", "CogY", "CogZ")
 _SUMMARY_SORT_COLUMNS: list[str] = [
-    "Part Number", "Nomenclature", "Revision", "Filename", "Weight",
+    "Part Number", "Nomenclature", "Revision", "Filename", "Quantity", "Weight",
     "CogX", "CogY", "CogZ",
 ]
 
@@ -1182,10 +1182,16 @@ class MassPropsDialog(QDialog):
         # 类型过滤作为保险：上方循环已只处理零件/对称件行，此处过滤冗余但保留以防万一
         result = [r for r in result if r.get("Type") in ("零件", "对称件")]
 
-        # 按排序列排序
+        # 按排序列排序（数值列按数值升序，字符串列按字典序升序）
         if self._summary_sort_column:
             col = self._summary_sort_column
-            result.sort(key=lambda r: str(r.get(col, "") or ""))
+            result.sort(
+                key=lambda r: (
+                    (0, float(r.get(col, 0)), "")
+                    if isinstance(r.get(col), (int, float))
+                    else (1, 0.0, str(r.get(col, "") or "").lower())
+                )
+            )
 
         return result
 
