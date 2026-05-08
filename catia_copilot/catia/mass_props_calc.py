@@ -7,6 +7,8 @@
                              总重心和总转动惯量。
 """
 
+import math
+
 
 def _mat3_mul(A: list[list[float]], B: list[list[float]]) -> list[list[float]]:
     """3×3 矩阵乘法，返回 A @ B。"""
@@ -21,6 +23,66 @@ def _mat3_mul(A: list[list[float]], B: list[list[float]]) -> list[list[float]]:
 def _mat3_transpose(A: list[list[float]]) -> list[list[float]]:
     """返回 3×3 矩阵的转置。"""
     return [[A[j][i] for j in range(3)] for i in range(3)]
+
+
+def _jacobi_eigen3(
+    A: list[list[float]],
+) -> tuple[list[float], list[list[float]]]:
+    """3×3 对称矩阵的 Jacobi 特征值分解（无外部依赖）。
+
+    返回 ``(eigenvalues, eigenvectors)``：
+
+    - ``eigenvalues``  : ``[λ1, λ2, λ3]``，按升序排列（SI 单位，kg·m²）。
+    - ``eigenvectors`` : ``[[e1x, e2x, e3x], [e1y, e2y, e3y], [e1z, e2z, e3z]]``
+      即 ``eigenvectors[row][col_idx]`` = 第 ``col_idx`` 个特征向量的第 ``row`` 分量
+      （各列对应一个主轴方向单位向量）。
+    """
+    a = [[float(A[i][j]) for j in range(3)] for i in range(3)]
+    V = [[1.0 if i == j else 0.0 for j in range(3)] for i in range(3)]
+
+    for _ in range(100):
+        # 找最大非对角元素
+        max_val = 0.0
+        p, q = 0, 1
+        for i in range(3):
+            for j in range(i + 1, 3):
+                if abs(a[i][j]) > max_val:
+                    max_val = abs(a[i][j])
+                    p, q = i, j
+        if max_val < 1e-15:
+            break
+
+        diff = a[p][p] - a[q][q]
+        theta = (math.pi / 4.0) if abs(diff) < 1e-15 else 0.5 * math.atan2(2.0 * a[p][q], diff)
+        c, s = math.cos(theta), math.sin(theta)
+
+        # 更新矩阵 a' = G^T @ a @ G
+        app = c * c * a[p][p] + 2 * c * s * a[p][q] + s * s * a[q][q]
+        aqq = s * s * a[p][p] - 2 * c * s * a[p][q] + c * c * a[q][q]
+        off: dict[int, tuple[float, float]] = {}
+        for r in range(3):
+            if r == p or r == q:
+                continue
+            off[r] = (c * a[r][p] + s * a[r][q], -s * a[r][p] + c * a[r][q])
+        a[p][p] = app
+        a[q][q] = aqq
+        a[p][q] = a[q][p] = 0.0
+        for r, (rp, rq) in off.items():
+            a[r][p] = a[p][r] = rp
+            a[r][q] = a[q][r] = rq
+
+        # 更新特征向量矩阵 V' = V @ G
+        for r in range(3):
+            v_rp, v_rq = V[r][p], V[r][q]
+            V[r][p] = c * v_rp + s * v_rq
+            V[r][q] = -s * v_rp + c * v_rq
+
+    # 按升序排列特征值和对应特征向量
+    eigenvalues = [a[0][0], a[1][1], a[2][2]]
+    idx = sorted(range(3), key=lambda i: eigenvalues[i])
+    sorted_vals = [eigenvalues[i] for i in idx]
+    sorted_vecs = [[V[r][idx[j]] for j in range(3)] for r in range(3)]
+    return sorted_vals, sorted_vecs
 
 
 def rollup_mass_properties(rows: list[dict]) -> dict:
@@ -123,10 +185,13 @@ def rollup_mass_properties(rows: list[dict]) -> dict:
                 I_at_origin[ii][jj] += I_root_at_origin_i[ii][jj]
 
     if M_total <= 0.0:
+        zero3x3 = [[0.0] * 3 for _ in range(3)]
         return {
-            "total_weight": 0.0,
-            "cog":          [0.0, 0.0, 0.0],
-            "inertia":      [[0.0] * 3 for _ in range(3)],
+            "total_weight":      0.0,
+            "cog":               [0.0, 0.0, 0.0],
+            "inertia":           zero3x3,
+            "principal_moments": [0.0, 0.0, 0.0],
+            "principal_axes":    [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         }
 
     # 6. 计算总重心
@@ -141,8 +206,13 @@ def rollup_mass_properties(rows: list[dict]) -> dict:
             delta = (1.0 if ii == jj else 0.0) * r2 - r[ii] * r[jj]
             I_final[ii][jj] = I_at_origin[ii][jj] - M_total * delta
 
+    # 8. 主惯量和主轴（特征值分解）
+    principal_moments, principal_axes = _jacobi_eigen3(I_final)
+
     return {
-        "total_weight": M_total,
-        "cog":          cog_total,
-        "inertia":      I_final,
+        "total_weight":      M_total,
+        "cog":               cog_total,
+        "inertia":           I_final,
+        "principal_moments": principal_moments,
+        "principal_axes":    principal_axes,
     }

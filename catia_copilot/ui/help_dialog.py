@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from catia_copilot.constants import APP_NAME, APP_VERSION, APP_AUTHOR, APP_CONTACT
+from catia_copilot.utils import resource_path
 
 
 _HELP_HTML = f"""\
@@ -98,6 +99,19 @@ _HELP_HTML = f"""\
       CATIA 会依次生成 <code>惯量包络体.2</code>、<code>惯量包络体.3</code>……
       本功能最多读取编号 1 到 20 的保持测量。</li>
 </ol>
+<p>
+<b>重要：自定义测量参数的最小勾选要求</b><br/>
+CATIA 的"测量惯量"对话框支持通过"自定义…"按钮选择保存哪些参数。
+本功能需要读取以下参数，<b>请确保这些项目均已勾选</b>，否则惯量包络体中将缺少必要数据导致读取失败：
+</p>
+<ul>
+  <li>质量（Mass）</li>
+  <li>密度（Density）</li>
+  <li>重心 G 坐标：Gx、Gy、Gz</li>
+  <li>关于 G 点的惯量矩及惯量积：IoxG、IoyG、IozG、IxyG、IxzG、IyzG</li>
+</ul>
+<p>下图为"自定义测量"对话框中所需勾选的最小范围示意（勾选项目少于此范围则无法正常读取）：</p>
+<p><img src="inertia_keep_params.png" alt="惯量保持测量最小参数示意图" style="max-width:480px;"/></p>
 <p>
 <b>提示：</b>测量惯量生成的惯量包络体须手动更新，全局更新不会更新惯量包络体。
 </p>
@@ -380,6 +394,8 @@ class HelpDialog(QDialog):
 
         browser = QTextBrowser()
         browser.setOpenExternalLinks(True)
+        # Allow relative <img> paths in the HTML to resolve from the resources folder
+        browser.setSearchPaths([str(resource_path("resources"))])
         browser.setHtml(_HELP_HTML)
         layout.addWidget(browser)
 
