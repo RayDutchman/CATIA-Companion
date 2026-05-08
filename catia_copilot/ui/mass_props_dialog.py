@@ -611,6 +611,7 @@ class MassPropsDialog(QDialog):
         summary_h = QHBoxLayout(summary_group)
         summary_h.setSpacing(12)
         summary_h.setContentsMargins(10, 8, 10, 8)
+        summary_h.setAlignment(Qt.AlignmentFlag.AlignBottom)
 
         def _sec_lbl(text: str) -> QLabel:
             lb = QLabel(text)
@@ -643,7 +644,7 @@ class MassPropsDialog(QDialog):
             setattr(self, attr, edit)
             left_g.addWidget(edit, r + 2, 1)
         left_g.setRowStretch(left_g.rowCount(), 1)
-        summary_h.addWidget(left_w)
+        summary_h.addWidget(left_w, 0, Qt.AlignmentFlag.AlignBottom)
 
         # ── 中列：惯量矩阵 (3×3) ────────────────────────────────────────────
         mid_w = QWidget()
@@ -664,7 +665,7 @@ class MassPropsDialog(QDialog):
                 setattr(self, row_items[ci * 2 + 1], edit)
                 mid_g.addWidget(edit, r + 1, ci * 2 + 1)
         mid_g.setRowStretch(mid_g.rowCount(), 1)
-        summary_h.addWidget(mid_w)
+        summary_h.addWidget(mid_w, 0, Qt.AlignmentFlag.AlignBottom)
 
         # ── 右列：重心主惯量矩 + 主轴 ───────────────────────────────────────
         right_w = QWidget()
@@ -692,7 +693,7 @@ class MassPropsDialog(QDialog):
                 setattr(self, row_items[ci * 2 + 1], edit)
                 right_g.addWidget(edit, r + 3, ci * 2 + 1)
         right_g.setRowStretch(right_g.rowCount(), 1)
-        summary_h.addWidget(right_w)
+        summary_h.addWidget(right_w, 0, Qt.AlignmentFlag.AlignBottom)
 
         layout.addWidget(summary_group)
 
