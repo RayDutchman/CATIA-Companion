@@ -56,3 +56,4 @@ macros/nut_plate_assembly.catvba
 crack/
 macros/refresh_drawing_info.catvba
 test.py
+catia_copilot/ui/help.html
