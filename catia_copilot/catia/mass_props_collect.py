@@ -48,17 +48,9 @@ from pathlib import Path
 
 
 
-from catia_copilot.constants import FILENAME_NOT_FOUND, FILENAME_UNSAVED
+from catia_copilot.constants import FILENAME_NOT_FOUND, FILENAME_UNSAVED, MAX_INERTIA_INDEX
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# 可调参数：惯量包络体编号上限
-# ---------------------------------------------------------------------------
-
-# 每个零件最多读取"惯量包络体.1"到"惯量包络体.MAX_INERTIA_INDEX"的保持测量。
-# 编号不要求连续；所有编号在此范围内存在的测量均会被读取并在零件级汇总。
-MAX_INERTIA_INDEX: int = 20
 
 
 # ---------------------------------------------------------------------------
