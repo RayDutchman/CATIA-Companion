@@ -805,6 +805,21 @@ class MassPropsDialog(QDialog):
             if col_name in self._col_widths:
                 self._table.setColumnWidth(col_idx, self._col_widths[col_name])
 
+    def _expand_key(self, rows_idx: int) -> str:
+        """返回行的稳定展开状态键，用于跨 rebuild 恢复树节点的展开/折叠状态。
+
+        优先级：对称件使用不可变 UUID（_mirror_id）→ 普通行使用绝对文件路径
+        （_filepath）→ 兜底使用零件编号（Part Number）。
+        """
+        row = self._rows[rows_idx]
+        if row.get("_is_mirror") and row.get("_mirror_id"):
+            return "mirror:" + row["_mirror_id"]
+        fp = str(row.get("_filepath", ""))
+        if fp:
+            return "file:" + fp
+        pn = str(row.get("Part Number", ""))
+        return ("pn:" + pn) if pn else ("idx:" + str(rows_idx))
+
     def _refresh_unit_display(self) -> None:
         """仅更新列标题和重量/惯量单元格的显示值（单位切换时调用，避免全量重建）。"""
         # 更新列标题
@@ -1199,6 +1214,16 @@ class MassPropsDialog(QDialog):
     # ── 填充表格 ───────────────────────────────────────────────────────────
 
     def _populate_table(self) -> None:
+        # ── ① 在清空树之前保存各折叠节点的稳定键（首次加载时 _item_by_row 为空）──
+        has_prior_state = bool(self._item_by_row)
+        collapsed_keys: set[str] = set()
+        if has_prior_state:
+            for item in self._item_by_row:
+                if item.childCount() > 0 and not item.isExpanded():
+                    rows_idx = item.data(0, _ROW_IDX_ROLE)
+                    if rows_idx is not None and rows_idx < len(self._rows):
+                        collapsed_keys.add(self._expand_key(rows_idx))
+
         self._is_updating = True
         self._table.blockSignals(True)
 
@@ -1216,7 +1241,18 @@ class MassPropsDialog(QDialog):
         else:
             self._populate_tree(display_rows)
 
-        self._table.expandAll()
+        # ── ② 恢复展开/折叠状态（首次加载时全部展开）─────────────────────────
+        if has_prior_state:
+            for item in self._item_by_row:
+                if item.childCount() == 0:
+                    continue
+                rows_idx = item.data(0, _ROW_IDX_ROLE)
+                if rows_idx is None:
+                    continue
+                item.setExpanded(self._expand_key(rows_idx) not in collapsed_keys)
+        else:
+            self._table.expandAll()
+
         self._table.blockSignals(False)
         self._is_updating = False
 
