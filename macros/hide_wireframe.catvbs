@@ -190,7 +190,7 @@ Private Function HideWireframeInDoc(oDoc, ByRef debugLog, ByRef outAlreadyHidden
                 On Error Resume Next
                 Err.Clear
                 oSel.Item(j).VisProperties.GetShow showVal
-                If Err.Number = 0 And showVal = 0 Then   ' catVisNoShow = 0
+                If Err.Number = 0 And showVal = 1 Then   ' catVisNoShow = 1 (已隐藏); catVisShow = 0 (可见)
                     alreadyHiddenCount = alreadyHiddenCount + 1
                 End If
                 Err.Clear
