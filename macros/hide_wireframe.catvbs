@@ -83,10 +83,9 @@ Sub CATMain()
     End If
 
     ' ── 执行搜索+隐藏 ────────────────────────────────────────────────────────
-    Dim totalNewlyHidden
-    Dim totalAlreadyHidden
+    Dim totalHidden
     Dim debugLog
-    totalNewlyHidden = HideWireframeInDoc(oDoc, debugLog, totalAlreadyHidden)
+    totalHidden = HideWireframeInDoc(oDoc, debugLog)
 
     ' ── 恢复原 InWorkObject ──────────────────────────────────────────────────
     If bInWorkChanged Then
@@ -97,18 +96,10 @@ Sub CATMain()
     End If
 
     ' ── 根据实际结果给出相应提示（附 Debug 详情）────────────────────────────
-    Dim totalFound
-    totalFound = totalNewlyHidden + totalAlreadyHidden
-
-    If totalFound > 0 Then
-        Dim summaryLine
-        summaryLine = "本次新隐藏：" & totalNewlyHidden & " 个"
-        If totalAlreadyHidden > 0 Then
-            summaryLine = summaryLine & "，其中已隐藏（跳过）：" & totalAlreadyHidden & " 个"
-        End If
+    If totalHidden > 0 Then
         MsgBox "已处理文档 [" & oDoc.Name & "] 中的" & vbCrLf & _
                "点、线、三维曲线、草图、轴系、平面。" & vbCrLf & _
-               summaryLine & vbCrLf & vbCrLf & _
+               "共隐藏 " & totalHidden & " 个元素。" & vbCrLf & vbCrLf & _
                "── Debug 详情 ──" & vbCrLf & debugLog, _
                vbInformation, "hide_wireframe"
     Else
@@ -121,18 +112,17 @@ Sub CATMain()
 End Sub
 
 ' ============================================================
-' HideWireframeInDoc — 对指定文档的 Selection 依次搜索六种几何类型并隐藏
+' HideWireframeInDoc — 对指定文档的 Selection 依次搜索五种几何类型并隐藏
 '
 ' 搜索范围 "All" 覆盖文档内（含所有子孙零件）的全部几何体。
 '
 ' 参数：
-'   oDoc            — 目标文档（PartDocument 或 ProductDocument）
-'   debugLog        — 传出：各类型搜索/隐藏的详细 debug 日志（字符串）
-'   outAlreadyHidden — 传出：搜索到的元素中原先已隐藏的数量（Long）
+'   oDoc     — 目标文档（PartDocument 或 ProductDocument）
+'   debugLog — 传出：各类型搜索/隐藏的详细 debug 日志（字符串）
 '
-' 返回值：本次新隐藏（原先可见）的元素总数（Long）
+' 返回值：本次隐藏的元素总数（Long）
 ' ============================================================
-Private Function HideWireframeInDoc(oDoc, ByRef debugLog, ByRef outAlreadyHidden)
+Private Function HideWireframeInDoc(oDoc, ByRef debugLog)
 
     Dim oSel
     Set oSel = oDoc.Selection
@@ -144,10 +134,8 @@ Private Function HideWireframeInDoc(oDoc, ByRef debugLog, ByRef outAlreadyHidden
     Dim geomLabels
     geomLabels = Array("点", "三维曲线", "草图", "轴系", "平面")
 
-    Dim totalNewlyHidden
-    Dim totalAlreadyHidden
-    totalNewlyHidden = 0
-    totalAlreadyHidden = 0
+    Dim totalHidden
+    totalHidden = 0
     debugLog = "文档类型: " & TypeName(oDoc) & vbCrLf
 
     Dim i
@@ -180,35 +168,7 @@ Private Function HideWireframeInDoc(oDoc, ByRef debugLog, ByRef outAlreadyHidden
         ElseIf foundCount = 0 Then
             debugLog = debugLog & "  搜索结果: 0 个（无可隐藏元素）" & vbCrLf
         Else
-            ' ── 统计其中原先已隐藏的数量 ──────────────────────────────────
-            Dim alreadyHiddenCount
-            alreadyHiddenCount = 0
-            Dim j
-            For j = 1 To foundCount
-                Dim showVal
-                showVal = -1
-                On Error Resume Next
-                Err.Clear
-                ' oSel.Item(j) 返回 SelectedElement（无 VisProperties），需通过 .Value 获取实际 CATIA 对象
-                Dim oItemVal
-                Set oItemVal = oSel.Item(j).Value
-                If Err.Number = 0 Then
-                    Err.Clear
-                    oItemVal.VisProperties.GetShow showVal
-                End If
-                If Err.Number = 0 And showVal = 1 Then   ' catVisNoShow = 1 (已隐藏); catVisShow = 0 (可见)
-                    alreadyHiddenCount = alreadyHiddenCount + 1
-                End If
-                Set oItemVal = Nothing
-                Err.Clear
-                On Error GoTo 0
-            Next
-
-            Dim newlyHiddenCount
-            newlyHiddenCount = foundCount - alreadyHiddenCount
-
-            debugLog = debugLog & "  搜索结果: " & foundCount & " 个" & _
-                       "（已隐藏 " & alreadyHiddenCount & "，可见 " & newlyHiddenCount & "）" & vbCrLf
+            debugLog = debugLog & "  搜索结果: " & foundCount & " 个" & vbCrLf
 
             ' ── 隐藏 ──────────────────────────────────────────────────────
             On Error Resume Next
@@ -221,9 +181,8 @@ Private Function HideWireframeInDoc(oDoc, ByRef debugLog, ByRef outAlreadyHidden
             If showErrNum <> 0 Then
                 debugLog = debugLog & "  SetShow 错误: #" & showErrNum & " - " & showErrDesc & vbCrLf
             Else
-                totalNewlyHidden = totalNewlyHidden + newlyHiddenCount
-                totalAlreadyHidden = totalAlreadyHidden + alreadyHiddenCount
-                debugLog = debugLog & "  本次新隐藏: " & newlyHiddenCount & " 个" & vbCrLf
+                totalHidden = totalHidden + foundCount
+                debugLog = debugLog & "  本次隐藏: " & foundCount & " 个" & vbCrLf
             End If
         End If
 
@@ -231,11 +190,8 @@ Private Function HideWireframeInDoc(oDoc, ByRef debugLog, ByRef outAlreadyHidden
     Next
 
     debugLog = debugLog & vbCrLf & _
-               "合计搜索到: " & (totalNewlyHidden + totalAlreadyHidden) & " 个元素" & vbCrLf & _
-               "  其中新隐藏: " & totalNewlyHidden & " 个" & vbCrLf & _
-               "  其中已隐藏: " & totalAlreadyHidden & " 个"
+               "合计隐藏: " & totalHidden & " 个元素"
 
-    outAlreadyHidden = totalAlreadyHidden
-    HideWireframeInDoc = totalNewlyHidden
+    HideWireframeInDoc = totalHidden
 
 End Function
