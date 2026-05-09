@@ -23,6 +23,30 @@ Option Explicit
 '   在 CATIA 中打开零件或装配体并激活对应文档后，运行本脚本。
 '   不依赖 iParameters，可通过 Tools > Macros 直接执行，
 '   也可由外部程序通过 SystemService.ExecuteScript 调用。
+'
+' ── Debug 说明（已知三处 Bug 及修复）─────────────────────────────────────
+'
+' Bug 1【根本原因】：最终 MsgBox"已隐藏…"无条件执行
+'   原代码在调用 HideWireframeInDoc 后立即弹窗，无论该函数内部
+'   六次搜索是否找到任何元素，窗口都会出现，造成"假隐藏"的假象。
+'   修复：HideWireframeInDoc 返回实际隐藏的元素总数，仅当 > 0 时
+'   才显示成功消息；为 0 时明确告知"未找到任何可隐藏元素"。
+'
+' Bug 2：SetShow 使用了错误的常量
+'   原代码：oSel.VisProperties.SetShow catVisPropertyNoShowAttr
+'   catVisPropertyNoShowAttr 属于 CatVisPropertyAttribute 枚举（值 = 2），
+'   用于描述属性掩码，并非 CatVisPropertyShow 的合法参数值。
+'   Selection.VisProperties.SetShow 期望 CatVisPropertyShow：
+'     catVisShow   = 0（显示）
+'     catVisNoShow = 1（隐藏）
+'   传入 2 会使 CATIA 静默忽略或产生未定义行为，元素实际未被隐藏。
+'   修复：改为 catVisNoShow（= 1）。
+'
+' Bug 3：搜索字符串格式
+'   原代码："Type=" & geomTypes(i) & ", All"
+'   逗号后有空格，部分 CATIA 版本的搜索解析器对此敏感，
+'   可能导致搜索悄悄返回 0 结果。
+'   修复：改为 "Type=" & geomTypes(i) & ",All"（无空格）。
 ' ============================================================
 
 Sub CATMain()
@@ -50,11 +74,24 @@ Sub CATMain()
     End If
 
     ' ── 对根文档的 Selection 执行六类几何的批量搜索+隐藏 ───────────────────
-    HideWireframeInDoc oDoc
+    ' Bug 1 修复：接收实际隐藏数量，避免无条件弹出成功窗口
+    Dim totalHidden
+    Dim debugLog
+    totalHidden = HideWireframeInDoc(oDoc, debugLog)
 
-    MsgBox "已隐藏文档 [" & oDoc.Name & "] 中的" & vbCrLf & _
-           "点、线、三维曲线、草图、轴系、平面。", _
-           vbInformation, "hide_wireframe"
+    ' ── 根据实际结果给出相应提示（附 Debug 详情）────────────────────────────
+    If totalHidden > 0 Then
+        MsgBox "已隐藏文档 [" & oDoc.Name & "] 中的" & vbCrLf & _
+               "点、线、三维曲线、草图、轴系、平面。" & vbCrLf & vbCrLf & _
+               "── Debug 详情 ──" & vbCrLf & debugLog, _
+               vbInformation, "hide_wireframe"
+    Else
+        ' Bug 1 原因：此处原代码没有分支，无论如何都弹"已隐藏"
+        MsgBox "文档 [" & oDoc.Name & "] 中未找到任何可隐藏的线框元素，" & vbCrLf & _
+               "点、线、三维曲线、草图、轴系、平面均不存在或搜索失败。" & vbCrLf & vbCrLf & _
+               "── Debug 详情 ──" & vbCrLf & debugLog, _
+               vbExclamation, "hide_wireframe"
+    End If
 
 End Sub
 
@@ -64,31 +101,82 @@ End Sub
 ' 搜索范围 "All" 覆盖文档内（含所有子孙零件）的全部几何体。
 '
 ' 参数：
-'   oDoc — 目标文档（PartDocument 或 ProductDocument）
+'   oDoc     — 目标文档（PartDocument 或 ProductDocument）
+'   debugLog — 传出：各类型搜索/隐藏的详细 debug 日志（字符串）
+'
+' 返回值：实际执行了 SetShow 隐藏操作的元素总数（Long）
 ' ============================================================
-Private Sub HideWireframeInDoc(oDoc)
+Private Function HideWireframeInDoc(oDoc, ByRef debugLog)
 
     Dim oSel
     Set oSel = oDoc.Selection
     oSel.Clear
 
+    ' Bug 3 修复：移除逗号后的空格，避免部分 CATIA 版本解析失败
     Dim geomTypes
     geomTypes = Array("Point", "Line", "Curve", "Sketch", "AxisSystem", "Plane")
 
+    Dim geomLabels
+    geomLabels = Array("点", "线", "三维曲线", "草图", "轴系", "平面")
+
+    Dim totalHidden As Long
+    totalHidden = 0
+    debugLog = "文档类型: " & TypeName(oDoc) & vbCrLf
+
     Dim i
     For i = 0 To UBound(geomTypes)
+
+        ' ── 搜索 ──────────────────────────────────────────────────────────
+        Dim searchQuery
+        searchQuery = "Type=" & geomTypes(i) & ",All"   ' Bug 3 修复：无空格
+
         On Error Resume Next
         Err.Clear
-        oSel.Search "Type=" & geomTypes(i) & ", All"
-        Dim searchErr: searchErr = Err.Number
-        Err.Clear
+        oSel.Search searchQuery
+        Dim searchErrNum: searchErrNum = Err.Number
+        Dim searchErrDesc: searchErrDesc = Err.Description
         On Error GoTo 0
 
-        If searchErr = 0 And oSel.Count > 0 Then
-            oSel.VisProperties.SetShow catVisPropertyNoShowAttr
+        Dim foundCount As Long
+        foundCount = 0
+        If searchErrNum = 0 Then
+            On Error Resume Next
+            foundCount = oSel.Count
+            On Error GoTo 0
+        End If
+
+        debugLog = debugLog & geomLabels(i) & " [" & geomTypes(i) & "]" & vbCrLf
+
+        If searchErrNum <> 0 Then
+            ' 搜索本身抛出异常
+            debugLog = debugLog & "  搜索错误: #" & searchErrNum & " - " & searchErrDesc & vbCrLf
+        ElseIf foundCount = 0 Then
+            ' 搜索成功但结果为空 —— 这是"未真正隐藏任何东西"的常见路径
+            debugLog = debugLog & "  搜索结果: 0 个（无可隐藏元素）" & vbCrLf
+        Else
+            debugLog = debugLog & "  搜索结果: " & foundCount & " 个" & vbCrLf
+
+            ' ── 隐藏 ──────────────────────────────────────────────────────
+            ' Bug 2 修复：使用 catVisNoShow (=1) 而非 catVisPropertyNoShowAttr (=2)
+            On Error Resume Next
+            Err.Clear
+            oSel.VisProperties.SetShow catVisNoShow   ' catVisNoShow = 1
+            Dim showErrNum: showErrNum = Err.Number
+            Dim showErrDesc: showErrDesc = Err.Description
+            On Error GoTo 0
+
+            If showErrNum <> 0 Then
+                debugLog = debugLog & "  SetShow 错误: #" & showErrNum & " - " & showErrDesc & vbCrLf
+            Else
+                totalHidden = totalHidden + foundCount
+                debugLog = debugLog & "  已隐藏: " & foundCount & " 个" & vbCrLf
+            End If
         End If
 
         oSel.Clear
     Next
 
-End Sub
+    debugLog = debugLog & vbCrLf & "合计隐藏: " & totalHidden & " 个元素"
+    HideWireframeInDoc = totalHidden
+
+End Function
