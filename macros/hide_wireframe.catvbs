@@ -139,10 +139,10 @@ Private Function HideWireframeInDoc(oDoc, ByRef debugLog, ByRef outAlreadyHidden
     oSel.Clear
 
     Dim geomTypes
-    geomTypes = Array("Point", "Line", "Curve", "Sketch", "AxisSystem", "Plane")
+    geomTypes = Array("Point", "Curve", "Sketch", "AxisSystem", "Plane")
 
     Dim geomLabels
-    geomLabels = Array("点", "线", "三维曲线", "草图", "轴系", "平面")
+    geomLabels = Array("点", "三维曲线", "草图", "轴系", "平面")
 
     Dim totalNewlyHidden
     Dim totalAlreadyHidden
@@ -190,7 +190,7 @@ Private Function HideWireframeInDoc(oDoc, ByRef debugLog, ByRef outAlreadyHidden
                 On Error Resume Next
                 Err.Clear
                 oSel.Item(j).VisProperties.GetShow showVal
-                If Err.Number = 0 And showVal = 1 Then   ' catVisNoShow = 1
+                If Err.Number = 0 And showVal = 0 Then   ' catVisNoShow = 0
                     alreadyHiddenCount = alreadyHiddenCount + 1
                 End If
                 Err.Clear
