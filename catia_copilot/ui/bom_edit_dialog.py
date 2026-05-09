@@ -1255,34 +1255,41 @@ class BomEditDialog(QDialog):
         已修改但未写回CATIA的字段：加粗 + 橙色前景（文本单元格）或橙色样式（下拉框）。
         未修改字段：恢复默认外观。锁定行（文件未找到/轻量化）不受影响。
         """
-        for pn in pns:
-            items = self._pn_to_items.get(pn, [])
-            modified_cols = self._modified_keys.get(pn, set())
-            for item in items:
-                if item.data(0, _ITEM_LOCKED_ROLE):
-                    continue  # 锁定行保持固定的灰色/红色样式
-                for col_idx, col_name in enumerate(self._columns):
-                    if col_name in BOM_READONLY_COLUMNS or col_name == BOM_ROW_NUMBER_COLUMN:
-                        continue
-                    is_modified = col_name in modified_cols
-                    widget = self._table.itemWidget(item, col_idx)
-                    if isinstance(widget, QComboBox):
-                        widget.setStyleSheet(
-                            _MODIFIED_COMBO_STYLE if is_modified else ""
-                        )
-                    else:
-                        if is_modified:
-                            font = item.font(col_idx)
-                            font.setBold(True)
-                            item.setFont(col_idx, font)
-                            item.setForeground(col_idx, _MODIFIED_FG)
+        # 纯视觉更新（setFont/setForeground/setData role）会触发 itemChanged 信号，
+        # 进而回调 _on_item_changed 并错误地将字段重新标记为已修改。
+        # 用 _is_updating 标志屏蔽这些信号，避免循环触发。
+        self._is_updating = True
+        try:
+            for pn in pns:
+                items = self._pn_to_items.get(pn, [])
+                modified_cols = self._modified_keys.get(pn, set())
+                for item in items:
+                    if item.data(0, _ITEM_LOCKED_ROLE):
+                        continue  # 锁定行保持固定的灰色/红色样式
+                    for col_idx, col_name in enumerate(self._columns):
+                        if col_name in BOM_READONLY_COLUMNS or col_name == BOM_ROW_NUMBER_COLUMN:
+                            continue
+                        is_modified = col_name in modified_cols
+                        widget = self._table.itemWidget(item, col_idx)
+                        if isinstance(widget, QComboBox):
+                            widget.setStyleSheet(
+                                _MODIFIED_COMBO_STYLE if is_modified else ""
+                            )
                         else:
-                            # 清除 ForegroundRole 和 FontRole 的自定义数据，
-                            # 让 Qt 回退到默认外观（普通字重、默认文本色）。
-                            # 注意：setForeground(QColor()) 会存储一个无效画刷而非清除角色，
-                            # 必须用 setData(..., None) 才能真正恢复默认。
-                            item.setData(col_idx, Qt.ItemDataRole.ForegroundRole, None)
-                            item.setData(col_idx, Qt.ItemDataRole.FontRole, None)
+                            if is_modified:
+                                font = item.font(col_idx)
+                                font.setBold(True)
+                                item.setFont(col_idx, font)
+                                item.setForeground(col_idx, _MODIFIED_FG)
+                            else:
+                                # 清除 ForegroundRole 和 FontRole 的自定义数据，
+                                # 让 Qt 回退到默认外观（普通字重、默认文本色）。
+                                # 注意：setForeground(QColor()) 会存储一个无效画刷而非清除角色，
+                                # 必须用 setData(..., None) 才能真正恢复默认。
+                                item.setData(col_idx, Qt.ItemDataRole.ForegroundRole, None)
+                                item.setData(col_idx, Qt.ItemDataRole.FontRole, None)
+        finally:
+            self._is_updating = False
 
     def _update_undo_redo_buttons(self) -> None:
         """根据撤销/重做栈的状态启用或禁用对应按钮。"""
