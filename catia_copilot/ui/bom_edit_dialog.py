@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QProgressDialog, QRadioButton, QButtonGroup,
     QMenu, QWidgetAction, QLineEdit, QGridLayout
 )
-from PySide6.QtGui import QPixmap, QColor
+from PySide6.QtGui import QPixmap, QColor, QKeySequence
 from PySide6.QtCore import Qt, QSettings
 
 from catia_copilot.constants import (
@@ -48,6 +48,10 @@ from catia_copilot.ui.bom_file_rename_dialog import _FileRenameDialog
 
 logger = logging.getLogger(__name__)
 
+# ── 已修改但未写回CATIA的字段视觉样式 ─────────────────────────────────────────
+_MODIFIED_FG         = QColor("#b85c00")                          # 深橙色前景（文本单元格）
+_MODIFIED_COMBO_STYLE = "QComboBox { font-weight: bold; color: #b85c00; }"  # 下拉框样式
+_MAX_HISTORY         = 10                                         # 撤销/重做最大步数
 
 
 class BomEditDialog(QDialog):
@@ -141,6 +145,9 @@ class BomEditDialog(QDialog):
         self._pn_to_items: dict[str, list[QTreeWidgetItem]] = {}
         # 列名→像素宽度缓存；在列可见性切换时保留用户调整的列宽
         self._col_widths: dict[str, int] = {}
+        # 撤销/重做历史栈（最多 _MAX_HISTORY 步）；每项为若干 (pn, col, old, new) 元组的列表
+        self._undo_stack: list[list[tuple]] = []
+        self._redo_stack: list[list[tuple]] = []
 
         # ── 界面布局 ──────────────────────────────────────────────────────────
         layout = QVBoxLayout(self)
@@ -341,6 +348,21 @@ class BomEditDialog(QDialog):
         self._rename_file_btn.setEnabled(False)
         self._rename_file_btn.clicked.connect(self._rename_selected_file)
         btn_row.addWidget(self._rename_file_btn)
+
+        self._undo_btn = QPushButton("撤销")
+        self._undo_btn.setToolTip("撤销上一步字段编辑（Ctrl+Z）")
+        self._undo_btn.setShortcut(QKeySequence("Ctrl+Z"))
+        self._undo_btn.setEnabled(False)
+        self._undo_btn.clicked.connect(self._undo)
+        btn_row.addWidget(self._undo_btn)
+
+        self._redo_btn = QPushButton("重做")
+        self._redo_btn.setToolTip("重做上一步撤销的编辑（Ctrl+Y）")
+        self._redo_btn.setShortcut(QKeySequence("Ctrl+Y"))
+        self._redo_btn.setEnabled(False)
+        self._redo_btn.clicked.connect(self._redo)
+        btn_row.addWidget(self._redo_btn)
+
         btn_row.addStretch()
 
         self._export_btn = QPushButton("导出表格")
@@ -698,6 +720,10 @@ class BomEditDialog(QDialog):
 
         self._snapshot_data  = copy.deepcopy(self._canonical_data)
         self._modified_keys.clear()
+        # 加载新BOM时清空撤销/重做历史
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        self._update_undo_redo_buttons()
 
         # 刷新前按列名保存当前列宽
         if self._bom_loaded:
@@ -906,6 +932,9 @@ class BomEditDialog(QDialog):
                     item.setToolTip(fn_col, "该零件尚未保存到磁盘，可通过右键菜单「另存为」将其保存。")
 
         self._table.expandAll()
+        # 为已有修改的字段恢复视觉标记（例如重新填充表格后）
+        if self._modified_keys:
+            self._refresh_pns_appearance(set(self._modified_keys.keys()))
         self._table.blockSignals(False)
         self._is_updating = False
 
@@ -942,8 +971,11 @@ class BomEditDialog(QDialog):
             if pn:
                 pns_to_update.add(pn)
 
+        # 记录旧值以支持撤销
+        old_vals: dict[str, str] = {}
         for pn in pns_to_update:
             if pn in self._canonical_data:
+                old_vals[pn] = self._canonical_data[pn].get("Source", "")
                 self._canonical_data[pn]["Source"] = text
                 self._modified_keys.setdefault(pn, set()).add("Source")
 
@@ -958,6 +990,16 @@ class BomEditDialog(QDialog):
                         combo.setCurrentText(text)
                         combo.blockSignals(False)
         self._is_updating = False
+
+        # 推入撤销栈并刷新视觉状态
+        undo_actions = [
+            (pn, "Source", old_vals[pn], text)
+            for pn in pns_to_update
+            if pn in old_vals and old_vals[pn] != text
+        ]
+        if undo_actions:
+            self._push_undo(undo_actions)
+        self._refresh_pns_appearance(pns_to_update)
 
     # ── 用户自定义选项列变更 ──────────────────────────────────────────────────
 
@@ -981,8 +1023,11 @@ class BomEditDialog(QDialog):
             if pn:
                 pns_to_update.add(pn)
 
+        # 记录旧值以支持撤销
+        old_vals: dict[str, str] = {}
         for pn in pns_to_update:
             if pn in self._canonical_data:
+                old_vals[pn] = self._canonical_data[pn].get(col_name, "")
                 self._canonical_data[pn][col_name] = text
                 self._modified_keys.setdefault(pn, set()).add(col_name)
 
@@ -997,6 +1042,16 @@ class BomEditDialog(QDialog):
                         combo.setCurrentText(text)
                         combo.blockSignals(False)
         self._is_updating = False
+
+        # 推入撤销栈并刷新视觉状态
+        undo_actions = [
+            (pn, col_name, old_vals[pn], text)
+            for pn in pns_to_update
+            if pn in old_vals and old_vals[pn] != text
+        ]
+        if undo_actions:
+            self._push_undo(undo_actions)
+        self._refresh_pns_appearance(pns_to_update)
 
     # ── 普通单元格编辑 ────────────────────────────────────────────────────────
 
@@ -1083,12 +1138,15 @@ class BomEditDialog(QDialog):
         }
         direct_rows = selected_row_indices if row_idx in selected_row_indices else {row_idx}
 
+        # 记录旧值并应用变更
+        old_vals: dict[str, str] = {}
         pns_to_update: set[str] = set()
         for r in direct_rows:
             r_pn = str(self._rows[r].get("Part Number", ""))
             if r_pn:
                 pns_to_update.add(r_pn)
                 if r_pn in self._canonical_data:
+                    old_vals[r_pn] = self._canonical_data[r_pn].get(col_name, "")
                     self._canonical_data[r_pn][col_name] = new_value
                     self._modified_keys.setdefault(r_pn, set()).add(col_name)
 
@@ -1100,6 +1158,127 @@ class BomEditDialog(QDialog):
                     if other_item.text(col_idx) != new_value:
                         other_item.setText(col_idx, new_value)
         self._is_updating = False
+
+        # 推入撤销栈并刷新视觉状态
+        undo_actions = [
+            (r_pn, col_name, old_vals[r_pn], new_value)
+            for r_pn in pns_to_update
+            if r_pn in old_vals and old_vals[r_pn] != new_value
+        ]
+        if undo_actions:
+            self._push_undo(undo_actions)
+        self._refresh_pns_appearance(pns_to_update)
+
+    # ── 撤销/重做 ─────────────────────────────────────────────────────────────
+
+    def _push_undo(self, actions: list[tuple]) -> None:
+        """将一组字段变更推入撤销栈（最多保留 _MAX_HISTORY 步）。"""
+        if not actions:
+            return
+        self._undo_stack.append(actions)
+        if len(self._undo_stack) > _MAX_HISTORY:
+            self._undo_stack.pop(0)
+        self._redo_stack.clear()
+        self._update_undo_redo_buttons()
+
+    def _undo(self) -> None:
+        """撤销最近一步字段变更。"""
+        if not self._undo_stack:
+            return
+        actions = self._undo_stack.pop()
+        self._apply_field_changes(actions, forward=False)
+        self._redo_stack.append(actions)
+        self._update_undo_redo_buttons()
+
+    def _redo(self) -> None:
+        """重做最近一步撤销的字段变更。"""
+        if not self._redo_stack:
+            return
+        actions = self._redo_stack.pop()
+        self._apply_field_changes(actions, forward=True)
+        self._undo_stack.append(actions)
+        self._update_undo_redo_buttons()
+
+    def _apply_field_changes(self, actions: list[tuple], *, forward: bool) -> None:
+        """将一组字段变更应用到规范数据和界面。
+
+        Args:
+            actions: 每项为 ``(pn, col_name, old_val, new_val)``。
+            forward: ``True`` 应用 new_val（重做），``False`` 应用 old_val（撤销）。
+        """
+        pns_affected: set[str] = set()
+        self._is_updating = True
+        try:
+            for pn, col_name, old_val, new_val in actions:
+                value = new_val if forward else old_val
+                if pn not in self._canonical_data:
+                    continue
+
+                self._canonical_data[pn][col_name] = value
+
+                # 根据快照决定字段是否仍为脏状态
+                snap_val = self._snapshot_data.get(pn, {}).get(col_name, "")
+                if value != snap_val:
+                    self._modified_keys.setdefault(pn, set()).add(col_name)
+                else:
+                    if pn in self._modified_keys:
+                        self._modified_keys[pn].discard(col_name)
+                        if not self._modified_keys[pn]:
+                            del self._modified_keys[pn]
+
+                # 更新界面中所有关联该零件编号的单元格
+                col_idx = self._columns.index(col_name) if col_name in self._columns else -1
+                if col_idx >= 0:
+                    for item in self._pn_to_items.get(pn, []):
+                        widget = self._table.itemWidget(item, col_idx)
+                        if isinstance(widget, QComboBox):
+                            widget.blockSignals(True)
+                            widget.setCurrentText(value)
+                            widget.blockSignals(False)
+                        else:
+                            item.setText(col_idx, value)
+
+                pns_affected.add(pn)
+        finally:
+            self._is_updating = False
+
+        if pns_affected:
+            self._refresh_pns_appearance(pns_affected)
+
+    def _refresh_pns_appearance(self, pns: "set[str]") -> None:
+        """刷新指定零件编号对应所有行的已修改字段视觉标记。
+
+        已修改但未写回CATIA的字段：加粗 + 橙色前景（文本单元格）或橙色样式（下拉框）。
+        未修改字段：恢复默认外观。锁定行（文件未找到/轻量化）不受影响。
+        """
+        for pn in pns:
+            items = self._pn_to_items.get(pn, [])
+            modified_cols = self._modified_keys.get(pn, set())
+            for item in items:
+                if item.data(0, _ITEM_LOCKED_ROLE):
+                    continue  # 锁定行保持固定的灰色/红色样式
+                for col_idx, col_name in enumerate(self._columns):
+                    if col_name in BOM_READONLY_COLUMNS or col_name == BOM_ROW_NUMBER_COLUMN:
+                        continue
+                    is_modified = col_name in modified_cols
+                    widget = self._table.itemWidget(item, col_idx)
+                    if isinstance(widget, QComboBox):
+                        widget.setStyleSheet(
+                            _MODIFIED_COMBO_STYLE if is_modified else ""
+                        )
+                    else:
+                        font = item.font(col_idx)
+                        font.setBold(is_modified)
+                        item.setFont(col_idx, font)
+                        item.setForeground(
+                            col_idx,
+                            _MODIFIED_FG if is_modified else QColor(),
+                        )
+
+    def _update_undo_redo_buttons(self) -> None:
+        """根据撤销/重做栈的状态启用或禁用对应按钮。"""
+        self._undo_btn.setEnabled(bool(self._undo_stack))
+        self._redo_btn.setEnabled(bool(self._redo_stack))
 
     # ── 写回CATIA ─────────────────────────────────────────────────────────────
 
@@ -1471,6 +1650,10 @@ class BomEditDialog(QDialog):
                 self._modified_keys[pn] -= set(changed.keys())
                 if not self._modified_keys[pn]:
                     del self._modified_keys[pn]
+
+        # 刷新已写回字段的视觉标记（清除橙色高亮）
+        pns_written = {pn_remap.get(cp, cp) for cp in dirty_data.keys()}
+        self._refresh_pns_appearance(pns_written)
 
         self._save_btn.setEnabled(True)
         self._finish_btn.setEnabled(True)
