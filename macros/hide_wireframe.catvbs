@@ -26,17 +26,13 @@ Option Explicit
 '
 ' ── 已修复的问题 ──────────────────────────────────────────────────────────
 '
-' Bug 1【根本原因】：最终 MsgBox"已隐藏…"无条件执行
-'   修复：HideWireframeInDoc 返回实际隐藏的元素总数，仅当 > 0 时
-'   才显示成功消息；为 0 时明确告知"未找到任何可隐藏元素"。
-'
-' Bug 2：InWorkObject 不是根产品时搜索可能抛出异常（仅装配体）
+' Bug 1：InWorkObject 不是根产品时搜索可能抛出异常（仅装配体）
 '   若用户双击进入了某个子零件的上下文（即 InWorkObject 不是根 Product），
 '   Selection.Search 在部分 CATIA 版本中会抛出异常或仅在当前上下文内搜索。
 '   修复：仅对 ProductDocument，在搜索前将 InWorkObject 设置为根 Product，
 '   搜索/隐藏完成后恢复原值。PartDocument 无此问题，无需切换。
 '
-' Bug 3：搜索字符串格式
+' Bug 2：搜索字符串格式
 '   修复：改为 "Type=" & geomTypes(i) & ",All"（逗号后无空格）。
 ' ============================================================
 
@@ -65,7 +61,7 @@ Sub CATMain()
     End If
 
     ' ── 仅对装配体将 InWorkObject 设为根产品，避免子上下文导致搜索异常 ─────
-    ' Bug 2 修复：保存原 InWorkObject，设为根，执行后恢复
+    ' Bug 1 修复：保存原 InWorkObject，设为根，执行后恢复
     ' 零件文档无需切换 InWorkObject
     Dim oOldInWork
     Dim bInWorkChanged
@@ -83,9 +79,8 @@ Sub CATMain()
     End If
 
     ' ── 执行搜索+隐藏 ────────────────────────────────────────────────────────
-    Dim totalHidden
     Dim debugLog
-    totalHidden = HideWireframeInDoc(oDoc, debugLog)
+    HideWireframeInDoc oDoc, debugLog
 
     ' ── 恢复原 InWorkObject ──────────────────────────────────────────────────
     If bInWorkChanged Then
@@ -95,19 +90,11 @@ Sub CATMain()
         On Error GoTo 0
     End If
 
-    ' ── 根据实际结果给出相应提示（附 Debug 详情）────────────────────────────
-    If totalHidden > 0 Then
-        MsgBox "已处理文档 [" & oDoc.Name & "] 中的" & vbCrLf & _
-               "点、线、三维曲线、草图、轴系、平面。" & vbCrLf & _
-               "共隐藏 " & totalHidden & " 个元素。" & vbCrLf & vbCrLf & _
-               "── Debug 详情 ──" & vbCrLf & debugLog, _
-               vbInformation, "hide_wireframe"
-    Else
-        MsgBox "文档 [" & oDoc.Name & "] 中未找到任何可隐藏的线框元素，" & vbCrLf & _
-               "点、线、三维曲线、草图、轴系、平面均不存在或搜索失败。" & vbCrLf & vbCrLf & _
-               "── Debug 详情 ──" & vbCrLf & debugLog, _
-               vbExclamation, "hide_wireframe"
-    End If
+    ' ── 完成提示（附 Debug 详情）─────────────────────────────────────────────
+    MsgBox "已处理文档 [" & oDoc.Name & "] 中的" & vbCrLf & _
+           "点、线、三维曲线、草图、轴系、平面。" & vbCrLf & vbCrLf & _
+           "── Debug 详情 ──" & vbCrLf & debugLog, _
+           vbInformation, "hide_wireframe"
 
 End Sub
 
@@ -119,10 +106,8 @@ End Sub
 ' 参数：
 '   oDoc     — 目标文档（PartDocument 或 ProductDocument）
 '   debugLog — 传出：各类型搜索/隐藏的详细 debug 日志（字符串）
-'
-' 返回值：本次隐藏的元素总数（Long）
 ' ============================================================
-Private Function HideWireframeInDoc(oDoc, ByRef debugLog)
+Private Sub HideWireframeInDoc(oDoc, ByRef debugLog)
 
     Dim oSel
     Set oSel = oDoc.Selection
@@ -134,15 +119,13 @@ Private Function HideWireframeInDoc(oDoc, ByRef debugLog)
     Dim geomLabels
     geomLabels = Array("点", "三维曲线", "草图", "轴系", "平面")
 
-    Dim totalHidden
-    totalHidden = 0
     debugLog = "文档类型: " & TypeName(oDoc) & vbCrLf
 
     Dim i
     For i = 0 To UBound(geomTypes)
 
         ' ── 搜索 ──────────────────────────────────────────────────────────
-        ' Bug 3 修复：逗号后无空格
+        ' Bug 2 修复：逗号后无空格
         Dim searchQuery
         searchQuery = "Type=" & geomTypes(i) & ",All"
 
@@ -153,11 +136,11 @@ Private Function HideWireframeInDoc(oDoc, ByRef debugLog)
         Dim searchErrDesc: searchErrDesc = Err.Description
         On Error GoTo 0
 
-        Dim foundCount
-        foundCount = 0
+        Dim hasResults
+        hasResults = False
         If searchErrNum = 0 Then
             On Error Resume Next
-            foundCount = oSel.Count
+            hasResults = (oSel.Count > 0)
             On Error GoTo 0
         End If
 
@@ -165,11 +148,9 @@ Private Function HideWireframeInDoc(oDoc, ByRef debugLog)
 
         If searchErrNum <> 0 Then
             debugLog = debugLog & "  搜索错误: #" & searchErrNum & " - " & searchErrDesc & vbCrLf
-        ElseIf foundCount = 0 Then
-            debugLog = debugLog & "  搜索结果: 0 个（无可隐藏元素）" & vbCrLf
+        ElseIf Not hasResults Then
+            debugLog = debugLog & "  无可隐藏元素" & vbCrLf
         Else
-            debugLog = debugLog & "  搜索结果: " & foundCount & " 个" & vbCrLf
-
             ' ── 隐藏 ──────────────────────────────────────────────────────
             On Error Resume Next
             Err.Clear
@@ -181,17 +162,11 @@ Private Function HideWireframeInDoc(oDoc, ByRef debugLog)
             If showErrNum <> 0 Then
                 debugLog = debugLog & "  SetShow 错误: #" & showErrNum & " - " & showErrDesc & vbCrLf
             Else
-                totalHidden = totalHidden + foundCount
-                debugLog = debugLog & "  本次隐藏: " & foundCount & " 个" & vbCrLf
+                debugLog = debugLog & "  已执行隐藏" & vbCrLf
             End If
         End If
 
         oSel.Clear
     Next
 
-    debugLog = debugLog & vbCrLf & _
-               "合计隐藏: " & totalHidden & " 个元素"
-
-    HideWireframeInDoc = totalHidden
-
-End Function
+End Sub
