@@ -119,7 +119,7 @@ Private Function HideWireframeInDoc(oDoc, ByRef debugLog)
     Dim geomLabels
     geomLabels = Array("点", "线", "三维曲线", "草图", "轴系", "平面")
 
-    Dim totalHidden As Long
+    Dim totalHidden
     totalHidden = 0
     debugLog = "文档类型: " & TypeName(oDoc) & vbCrLf
 
@@ -137,7 +137,7 @@ Private Function HideWireframeInDoc(oDoc, ByRef debugLog)
         Dim searchErrDesc: searchErrDesc = Err.Description
         On Error GoTo 0
 
-        Dim foundCount As Long
+        Dim foundCount
         foundCount = 0
         If searchErrNum = 0 Then
             On Error Resume Next
