@@ -23,6 +23,20 @@ Option Explicit
 '   在 CATIA 中打开零件或装配体并激活对应文档后，运行本脚本。
 '   不依赖 iParameters，可通过 Tools > Macros 直接执行，
 '   也可由外部程序通过 SystemService.ExecuteScript 调用。
+'
+' ── 已修复的问题 ──────────────────────────────────────────────────────────
+'
+' Bug 1【根本原因】：最终 MsgBox"已隐藏…"无条件执行
+'   修复：HideWireframeInDoc 返回实际隐藏的元素总数，仅当 > 0 时
+'   才显示成功消息；为 0 时明确告知"未找到任何可隐藏元素"。
+'
+' Bug 2：InWorkObject 不是根对象时搜索可能抛出异常
+'   若用户双击进入了某个子零件的上下文（即 InWorkObject 不是根 Part/Product），
+'   Selection.Search 在部分 CATIA 版本中会抛出异常或仅在当前上下文内搜索。
+'   修复：在搜索前将 InWorkObject 设置为根对象，搜索/隐藏完成后恢复原值。
+'
+' Bug 3：搜索字符串格式
+'   修复：改为 "Type=" & geomTypes(i) & ",All"（逗号后无空格）。
 ' ============================================================
 
 Sub CATMain()
@@ -49,11 +63,48 @@ Sub CATMain()
         Exit Sub
     End If
 
-    ' ── 对根文档的 Selection 执行六类几何的批量搜索+隐藏 ───────────────────
-    ' Bug 1 修复：接收实际隐藏数量，避免无条件弹出成功窗口
+    ' ── 将 InWorkObject 设为根对象，避免子上下文导致搜索异常 ────────────────
+    ' Bug 2 修复：保存原 InWorkObject，设为根，执行后恢复
+    Dim oRootObj
+    Dim oOldInWork
+    Dim bInWorkChanged
+
+    bInWorkChanged = False
+    On Error Resume Next
+    If docType = "PartDocument" Then
+        Set oRootObj  = oDoc.Part
+        Set oOldInWork = oDoc.Part.InWorkObject
+        If Err.Number = 0 Then
+            oDoc.Part.InWorkObject = oRootObj
+            bInWorkChanged = (Err.Number = 0)
+        End If
+    Else
+        Set oRootObj  = oDoc.Product
+        Set oOldInWork = oDoc.Product.InWorkObject
+        If Err.Number = 0 Then
+            oDoc.Product.InWorkObject = oRootObj
+            bInWorkChanged = (Err.Number = 0)
+        End If
+    End If
+    Err.Clear
+    On Error GoTo 0
+
+    ' ── 执行搜索+隐藏 ────────────────────────────────────────────────────────
     Dim totalHidden
     Dim debugLog
     totalHidden = HideWireframeInDoc(oDoc, debugLog)
+
+    ' ── 恢复原 InWorkObject ──────────────────────────────────────────────────
+    If bInWorkChanged Then
+        On Error Resume Next
+        If docType = "PartDocument" Then
+            oDoc.Part.InWorkObject = oOldInWork
+        Else
+            oDoc.Product.InWorkObject = oOldInWork
+        End If
+        Err.Clear
+        On Error GoTo 0
+    End If
 
     ' ── 根据实际结果给出相应提示（附 Debug 详情）────────────────────────────
     If totalHidden > 0 Then
@@ -62,7 +113,6 @@ Sub CATMain()
                "── Debug 详情 ──" & vbCrLf & debugLog, _
                vbInformation, "hide_wireframe"
     Else
-        ' Bug 1 原因：此处原代码没有分支，无论如何都弹"已隐藏"
         MsgBox "文档 [" & oDoc.Name & "] 中未找到任何可隐藏的线框元素，" & vbCrLf & _
                "点、线、三维曲线、草图、轴系、平面均不存在或搜索失败。" & vbCrLf & vbCrLf & _
                "── Debug 详情 ──" & vbCrLf & debugLog, _
@@ -102,6 +152,7 @@ Private Function HideWireframeInDoc(oDoc, ByRef debugLog)
     For i = 0 To UBound(geomTypes)
 
         ' ── 搜索 ──────────────────────────────────────────────────────────
+        ' Bug 3 修复：逗号后无空格
         Dim searchQuery
         searchQuery = "Type=" & geomTypes(i) & ",All"
 
@@ -123,10 +174,8 @@ Private Function HideWireframeInDoc(oDoc, ByRef debugLog)
         debugLog = debugLog & geomLabels(i) & " [" & geomTypes(i) & "]" & vbCrLf
 
         If searchErrNum <> 0 Then
-            ' 搜索本身抛出异常
             debugLog = debugLog & "  搜索错误: #" & searchErrNum & " - " & searchErrDesc & vbCrLf
         ElseIf foundCount = 0 Then
-            ' 搜索成功但结果为空 —— 这是"未真正隐藏任何东西"的常见路径
             debugLog = debugLog & "  搜索结果: 0 个（无可隐藏元素）" & vbCrLf
         Else
             debugLog = debugLog & "  搜索结果: " & foundCount & " 个" & vbCrLf
