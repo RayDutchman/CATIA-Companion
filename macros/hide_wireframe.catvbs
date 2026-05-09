@@ -30,10 +30,11 @@ Option Explicit
 '   修复：HideWireframeInDoc 返回实际隐藏的元素总数，仅当 > 0 时
 '   才显示成功消息；为 0 时明确告知"未找到任何可隐藏元素"。
 '
-' Bug 2：InWorkObject 不是根对象时搜索可能抛出异常
-'   若用户双击进入了某个子零件的上下文（即 InWorkObject 不是根 Part/Product），
+' Bug 2：InWorkObject 不是根产品时搜索可能抛出异常（仅装配体）
+'   若用户双击进入了某个子零件的上下文（即 InWorkObject 不是根 Product），
 '   Selection.Search 在部分 CATIA 版本中会抛出异常或仅在当前上下文内搜索。
-'   修复：在搜索前将 InWorkObject 设置为根对象，搜索/隐藏完成后恢复原值。
+'   修复：仅对 ProductDocument，在搜索前将 InWorkObject 设置为根 Product，
+'   搜索/隐藏完成后恢复原值。PartDocument 无此问题，无需切换。
 '
 ' Bug 3：搜索字符串格式
 '   修复：改为 "Type=" & geomTypes(i) & ",All"（逗号后无空格）。
@@ -63,31 +64,23 @@ Sub CATMain()
         Exit Sub
     End If
 
-    ' ── 将 InWorkObject 设为根对象，避免子上下文导致搜索异常 ────────────────
+    ' ── 仅对装配体将 InWorkObject 设为根产品，避免子上下文导致搜索异常 ─────
     ' Bug 2 修复：保存原 InWorkObject，设为根，执行后恢复
-    Dim oRootObj
+    ' 零件文档无需切换 InWorkObject
     Dim oOldInWork
     Dim bInWorkChanged
 
     bInWorkChanged = False
-    On Error Resume Next
-    If docType = "PartDocument" Then
-        Set oRootObj  = oDoc.Part
-        Set oOldInWork = oDoc.Part.InWorkObject
-        If Err.Number = 0 Then
-            oDoc.Part.InWorkObject = oRootObj
-            bInWorkChanged = (Err.Number = 0)
-        End If
-    Else
-        Set oRootObj  = oDoc.Product
+    If docType = "ProductDocument" Then
+        On Error Resume Next
         Set oOldInWork = oDoc.Product.InWorkObject
         If Err.Number = 0 Then
-            oDoc.Product.InWorkObject = oRootObj
+            oDoc.Product.InWorkObject = oDoc.Product
             bInWorkChanged = (Err.Number = 0)
         End If
+        Err.Clear
+        On Error GoTo 0
     End If
-    Err.Clear
-    On Error GoTo 0
 
     ' ── 执行搜索+隐藏 ────────────────────────────────────────────────────────
     Dim totalHidden
@@ -97,11 +90,7 @@ Sub CATMain()
     ' ── 恢复原 InWorkObject ──────────────────────────────────────────────────
     If bInWorkChanged Then
         On Error Resume Next
-        If docType = "PartDocument" Then
-            oDoc.Part.InWorkObject = oOldInWork
-        Else
-            oDoc.Product.InWorkObject = oOldInWork
-        End If
+        oDoc.Product.InWorkObject = oOldInWork
         Err.Clear
         On Error GoTo 0
     End If
