@@ -5,48 +5,33 @@ Option Explicit
 '
 ' 功能概述：
 '   一键隐藏 CATIA V5 活动文档中所有点、线、三维曲线、草图、轴系、平面（不含曲面）。
-'   · 零件（CATPart）：直接对该文档的 Selection 执行搜索+隐藏。
-'   · 装配体（CATProduct）：直接对根文档的 Selection 以 "All" 范围搜索，
-'     CATIA V5 在装配体上下文中会自动跨越所有子孙零件返回结果，
-'     因此无需逐零件切换 InWorkObject 或递归遍历产品树。
+'   · 零件（CATPart）：遍历 Part.AxisSystems / Part.Bodies[i].Sketches /
+'     Part.HybridBodies / Body.HybridBodies 集合，递归处理嵌套几何集。
+'   · 装配体（CATProduct）：递归遍历产品树，对每个子零件的 Part 执行同样操作。
 '
-' 隐藏的几何类型：
-'   · 点（Point）
-'   · 线（Line）
-'   · 三维曲线（Curve）
-'   · 草图（Sketch）
-'   · 轴系（AxisSystem）
-'   · 平面（Plane）
-'   不包含曲面（Surface）。
+' 隐藏的几何类型（通过 TypeName 白名单识别，不含曲面）：
+'   · 点   — TypeName 含 "Point"
+'   · 线   — TypeName 含 "Line"
+'   · 平面 — TypeName 含 "Plane"
+'   · 圆弧 — TypeName 含 "Circle"
+'   · 样条 — TypeName 含 "Spline"
+'   · 螺旋 — TypeName 含 "Helix"
+'   · 折线 — TypeName 含 "Polyline" / "Polygon"
+'   · 三维曲线 — TypeName 含 "Corner"/"Connect"/"Conic"/"Reflect"/"Extremum"/
+'                "Project"/"Intersect"/"Combine"/"Parallel"/"Boundary"/"Outline"
+'   · 轴线特征 — TypeName 含 "AxisLine"（如 HybridShapeAxisLine）
+'   · 草图 — Sketch 集合（Body.Sketches / HybridBody.Sketches）
+'   · 轴系 — Part.AxisSystems 集合
+'   不包含曲面（Fill / Extrude / Revolve / Sweep / Loft / Blend 等）。
+'
+' 说明：
+'   之前版本使用 Selection.Search "Type=X,All" 进行搜索，在部分 CATIA V5 版本中
+'   该格式被视为非法搜索字符串，抛出 COM 异常 E_FAIL（-2147467259），导致全部
+'   六种类型均搜索失败、实际什么都没有隐藏。本版本改为直接访问 CATIA 对象模型
+'   集合，不依赖搜索字符串，兼容性更好。
 '
 ' 用法：
 '   在 CATIA 中打开零件或装配体并激活对应文档后，运行本脚本。
-'   不依赖 iParameters，可通过 Tools > Macros 直接执行，
-'   也可由外部程序通过 SystemService.ExecuteScript 调用。
-'
-' ── Debug 说明（已知三处 Bug 及修复）─────────────────────────────────────
-'
-' Bug 1【根本原因】：最终 MsgBox"已隐藏…"无条件执行
-'   原代码在调用 HideWireframeInDoc 后立即弹窗，无论该函数内部
-'   六次搜索是否找到任何元素，窗口都会出现，造成"假隐藏"的假象。
-'   修复：HideWireframeInDoc 返回实际隐藏的元素总数，仅当 > 0 时
-'   才显示成功消息；为 0 时明确告知"未找到任何可隐藏元素"。
-'
-' Bug 2：SetShow 使用了错误的常量
-'   原代码：oSel.VisProperties.SetShow catVisPropertyNoShowAttr
-'   catVisPropertyNoShowAttr 属于 CatVisPropertyAttribute 枚举（值 = 2），
-'   用于描述属性掩码，并非 CatVisPropertyShow 的合法参数值。
-'   Selection.VisProperties.SetShow 期望 CatVisPropertyShow：
-'     catVisShow   = 0（显示）
-'     catVisNoShow = 1（隐藏）
-'   传入 2 会使 CATIA 静默忽略或产生未定义行为，元素实际未被隐藏。
-'   修复：改为 catVisNoShow（= 1）。
-'
-' Bug 3：搜索字符串格式
-'   原代码："Type=" & geomTypes(i) & ", All"
-'   逗号后有空格，部分 CATIA 版本的搜索解析器对此敏感，
-'   可能导致搜索悄悄返回 0 结果。
-'   修复：改为 "Type=" & geomTypes(i) & ",All"（无空格）。
 ' ============================================================
 
 Sub CATMain()
@@ -73,8 +58,7 @@ Sub CATMain()
         Exit Sub
     End If
 
-    ' ── 对根文档的 Selection 执行六类几何的批量搜索+隐藏 ───────────────────
-    ' Bug 1 修复：接收实际隐藏数量，避免无条件弹出成功窗口
+    ' ── 执行隐藏，接收实际隐藏数量 ──────────────────────────────────────────
     Dim totalHidden
     Dim debugLog
     totalHidden = HideWireframeInDoc(oDoc, debugLog)
@@ -86,9 +70,8 @@ Sub CATMain()
                "── Debug 详情 ──" & vbCrLf & debugLog, _
                vbInformation, "hide_wireframe"
     Else
-        ' Bug 1 原因：此处原代码没有分支，无论如何都弹"已隐藏"
         MsgBox "文档 [" & oDoc.Name & "] 中未找到任何可隐藏的线框元素，" & vbCrLf & _
-               "点、线、三维曲线、草图、轴系、平面均不存在或搜索失败。" & vbCrLf & vbCrLf & _
+               "点、线、三维曲线、草图、轴系、平面均不存在或已全部隐藏。" & vbCrLf & vbCrLf & _
                "── Debug 详情 ──" & vbCrLf & debugLog, _
                vbExclamation, "hide_wireframe"
     End If
@@ -96,87 +79,335 @@ Sub CATMain()
 End Sub
 
 ' ============================================================
-' HideWireframeInDoc — 对指定文档的 Selection 依次搜索六种几何类型并隐藏
-'
-' 搜索范围 "All" 覆盖文档内（含所有子孙零件）的全部几何体。
-'
-' 参数：
-'   oDoc     — 目标文档（PartDocument 或 ProductDocument）
-'   debugLog — 传出：各类型搜索/隐藏的详细 debug 日志（字符串）
-'
-' 返回值：实际执行了 SetShow 隐藏操作的元素总数（Long）
+' HideWireframeInDoc — 根据文档类型分派处理
 ' ============================================================
 Private Function HideWireframeInDoc(oDoc, ByRef debugLog)
-
-    Dim oSel
-    Set oSel = oDoc.Selection
-    oSel.Clear
-
-    ' Bug 3 修复：移除逗号后的空格，避免部分 CATIA 版本解析失败
-    Dim geomTypes
-    geomTypes = Array("Point", "Line", "Curve", "Sketch", "AxisSystem", "Plane")
-
-    Dim geomLabels
-    geomLabels = Array("点", "线", "三维曲线", "草图", "轴系", "平面")
 
     Dim totalHidden
     totalHidden = 0
     debugLog = "文档类型: " & TypeName(oDoc) & vbCrLf
 
-    Dim i
-    For i = 0 To UBound(geomTypes)
-
-        ' ── 搜索 ──────────────────────────────────────────────────────────
-        Dim searchQuery
-        searchQuery = "Type=" & geomTypes(i) & ",All"   ' Bug 3 修复：无空格
+    If TypeName(oDoc) = "PartDocument" Then
 
         On Error Resume Next
+        Dim oPart
+        Set oPart = oDoc.Part
+        Dim partErr:     partErr     = Err.Number
+        Dim partErrDesc: partErrDesc = Err.Description
         Err.Clear
-        oSel.Search searchQuery
-        Dim searchErrNum: searchErrNum = Err.Number
-        Dim searchErrDesc: searchErrDesc = Err.Description
         On Error GoTo 0
 
-        Dim foundCount
-        foundCount = 0
-        If searchErrNum = 0 Then
-            On Error Resume Next
-            foundCount = oSel.Count
-            On Error GoTo 0
-        End If
-
-        debugLog = debugLog & geomLabels(i) & " [" & geomTypes(i) & "]" & vbCrLf
-
-        If searchErrNum <> 0 Then
-            ' 搜索本身抛出异常
-            debugLog = debugLog & "  搜索错误: #" & searchErrNum & " - " & searchErrDesc & vbCrLf
-        ElseIf foundCount = 0 Then
-            ' 搜索成功但结果为空 —— 这是"未真正隐藏任何东西"的常见路径
-            debugLog = debugLog & "  搜索结果: 0 个（无可隐藏元素）" & vbCrLf
+        If partErr <> 0 Or Not IsObject(oPart) Then
+            debugLog = debugLog & "  [错误] 无法获取 Part 对象: #" & partErr & _
+                       " " & partErrDesc & vbCrLf
         Else
-            debugLog = debugLog & "  搜索结果: " & foundCount & " 个" & vbCrLf
-
-            ' ── 隐藏 ──────────────────────────────────────────────────────
-            ' Bug 2 修复：使用 catVisNoShow (=1) 而非 catVisPropertyNoShowAttr (=2)
-            On Error Resume Next
-            Err.Clear
-            oSel.VisProperties.SetShow catVisNoShow   ' catVisNoShow = 1
-            Dim showErrNum: showErrNum = Err.Number
-            Dim showErrDesc: showErrDesc = Err.Description
-            On Error GoTo 0
-
-            If showErrNum <> 0 Then
-                debugLog = debugLog & "  SetShow 错误: #" & showErrNum & " - " & showErrDesc & vbCrLf
-            Else
-                totalHidden = totalHidden + foundCount
-                debugLog = debugLog & "  已隐藏: " & foundCount & " 个" & vbCrLf
-            End If
+            totalHidden = HidePartWireframe(oPart, debugLog)
         End If
 
-        oSel.Clear
-    Next
+    Else
+
+        ' ProductDocument：递归遍历产品树
+        On Error Resume Next
+        Dim oProduct
+        Set oProduct = oDoc.Product
+        Dim prodErr:     prodErr     = Err.Number
+        Dim prodErrDesc: prodErrDesc = Err.Description
+        Err.Clear
+        On Error GoTo 0
+
+        If prodErr <> 0 Or Not IsObject(oProduct) Then
+            debugLog = debugLog & "  [错误] 无法获取 Product 对象: #" & prodErr & _
+                       " " & prodErrDesc & vbCrLf
+        Else
+            TraverseProduct oProduct, totalHidden, debugLog
+        End If
+
+    End If
 
     debugLog = debugLog & vbCrLf & "合计隐藏: " & totalHidden & " 个元素"
     HideWireframeInDoc = totalHidden
+
+End Function
+
+' ============================================================
+' HidePartWireframe — 遍历 Part 集合，隐藏所有线框元素
+'
+' 访问路径：
+'   Part.AxisSystems            — 轴系
+'   Part.Bodies[i].Sketches     — 实体主体内的草图
+'   Part.Bodies[i].HybridBodies — 实体主体内的有序几何集
+'   Part.HybridBodies           — 顶层几何集（含嵌套，递归处理）
+'
+' 返回：实际隐藏的元素总数
+' ============================================================
+Private Function HidePartWireframe(oPart, ByRef debugLog)
+
+    Dim axisHid, skHid, wfHid
+    axisHid = 0
+    skHid   = 0
+    wfHid   = 0
+
+    ' ── 1. 轴系 (Part.AxisSystems) ──────────────────────────────────────────
+    On Error Resume Next
+    Dim axisN
+    axisN = 0
+    axisN = oPart.AxisSystems.Count
+    If Err.Number = 0 Then
+        Dim ia
+        For ia = 1 To axisN
+            Err.Clear
+            oPart.AxisSystems.Item(ia).VisProperties.SetShow catVisNoShow
+            If Err.Number = 0 Then axisHid = axisHid + 1
+        Next ia
+    End If
+    Err.Clear
+    On Error GoTo 0
+
+    ' ── 2. 实体主体（Bodies）内的草图和有序几何集 ───────────────────────────
+    On Error Resume Next
+    Dim bodyN
+    bodyN = 0
+    bodyN = oPart.Bodies.Count
+    If Err.Number = 0 Then
+        Dim ib
+        For ib = 1 To bodyN
+            Err.Clear
+            Dim oBody
+            Set oBody = oPart.Bodies.Item(ib)
+            If Err.Number = 0 Then
+
+                ' Sketches directly inside this body
+                Err.Clear
+                Dim bSkN
+                bSkN = 0
+                bSkN = oBody.Sketches.Count
+                If Err.Number = 0 And bSkN > 0 Then
+                    Dim is1
+                    For is1 = 1 To bSkN
+                        Err.Clear
+                        oBody.Sketches.Item(is1).VisProperties.SetShow catVisNoShow
+                        If Err.Number = 0 Then skHid = skHid + 1
+                    Next is1
+                End If
+                Err.Clear
+
+                ' Ordered geometrical sets (HybridBodies) inside this body
+                Dim bHBN
+                bHBN = 0
+                bHBN = oBody.HybridBodies.Count
+                If Err.Number = 0 And bHBN > 0 Then
+                    HideInHybridBodies oBody.HybridBodies, wfHid, skHid
+                End If
+
+            End If
+            Err.Clear
+        Next ib
+    End If
+    Err.Clear
+    On Error GoTo 0
+
+    ' ── 3. 顶层 HybridBodies（几何集 / GSD 线框，递归） ─────────────────────
+    On Error Resume Next
+    Dim topHBN
+    topHBN = 0
+    topHBN = oPart.HybridBodies.Count
+    If Err.Number = 0 And topHBN > 0 Then
+        HideInHybridBodies oPart.HybridBodies, wfHid, skHid
+    End If
+    Err.Clear
+    On Error GoTo 0
+
+    debugLog = debugLog & "  轴系: "   & axisHid & " 个" & vbCrLf
+    debugLog = debugLog & "  草图: "   & skHid   & " 个" & vbCrLf
+    debugLog = debugLog & "  线框几何: " & wfHid  & " 个" & vbCrLf
+
+    HidePartWireframe = axisHid + skHid + wfHid
+
+End Function
+
+' ============================================================
+' HideInHybridBodies — 递归遍历 HybridBodies 集合
+'   · 对每个 HybridBody 内的 HybridShapes，按 TypeName 白名单判断是否为线框，
+'     是则隐藏（跳过曲面等不在白名单中的类型）。
+'   · 同时隐藏 HybridBody.Sketches 中的草图。
+'   · 递归处理嵌套的 HybridBodies。
+' ============================================================
+Private Sub HideInHybridBodies(hBodies, ByRef wfHid, ByRef skHid)
+
+    On Error Resume Next
+    Dim hbN
+    hbN = 0
+    hbN = hBodies.Count
+    If Err.Number <> 0 Then Err.Clear: Exit Sub
+
+    Dim i
+    For i = 1 To hbN
+
+        Err.Clear
+        Dim hb
+        Set hb = hBodies.Item(i)
+        If Err.Number = 0 Then
+
+            ' ── HybridShapes（按 TypeName 白名单过滤）──────────────────────────
+            Err.Clear
+            Dim hsN
+            hsN = 0
+            hsN = hb.HybridShapes.Count
+            If Err.Number = 0 And hsN > 0 Then
+                Dim j
+                For j = 1 To hsN
+                    Err.Clear
+                    Dim hs
+                    Set hs = hb.HybridShapes.Item(j)
+                    If Err.Number = 0 Then
+                        Dim tn
+                        tn = TypeName(hs)
+                        If Err.Number = 0 And IsWireframeType(tn) Then
+                            Err.Clear
+                            hs.VisProperties.SetShow catVisNoShow
+                            If Err.Number = 0 Then wfHid = wfHid + 1
+                        End If
+                    End If
+                    Err.Clear
+                Next j
+            End If
+            Err.Clear
+
+            ' ── Sketches in this geometrical set ────────────────────────────────
+            Dim skN
+            skN = 0
+            skN = hb.Sketches.Count
+            If Err.Number = 0 And skN > 0 Then
+                Dim k
+                For k = 1 To skN
+                    Err.Clear
+                    hb.Sketches.Item(k).VisProperties.SetShow catVisNoShow
+                    If Err.Number = 0 Then skHid = skHid + 1
+                    Err.Clear
+                Next k
+            End If
+            Err.Clear
+
+            ' ── 嵌套几何集（递归）───────────────────────────────────────────────
+            Dim nestedN
+            nestedN = 0
+            nestedN = hb.HybridBodies.Count
+            If Err.Number = 0 And nestedN > 0 Then
+                HideInHybridBodies hb.HybridBodies, wfHid, skHid
+            End If
+            Err.Clear
+
+        End If
+        Err.Clear
+    Next i
+
+    On Error GoTo 0
+
+End Sub
+
+' ============================================================
+' TraverseProduct — 递归遍历 ProductDocument 产品树
+'   对每个子产品，尝试获取其 Part 并调用 HidePartWireframe。
+'   使用 ReferenceProduct 指向实际零件文件，避免对实例重复处理。
+' ============================================================
+Private Sub TraverseProduct(oProduct, ByRef totalHidden, ByRef debugLog)
+
+    ' 尝试获取此产品自身的 Part（装配体本身也可能拥有几何）
+    On Error Resume Next
+    Dim oPart
+    Set oPart = oProduct.Part
+    If Err.Number = 0 And IsObject(oPart) Then
+        totalHidden = totalHidden + HidePartWireframe(oPart, debugLog)
+    End If
+    Err.Clear
+    On Error GoTo 0
+
+    ' 递归子产品
+    On Error Resume Next
+    Dim sc
+    sc = 0
+    sc = oProduct.Products.Count
+    On Error GoTo 0
+
+    Dim i
+    For i = 1 To sc
+        On Error Resume Next
+        Dim subProd
+        Set subProd = oProduct.Products.Item(i)
+        If Err.Number = 0 Then
+            ' 使用 ReferenceProduct 获取实际零件（而非实例代理）
+            Dim refProd
+            Set refProd = subProd.ReferenceProduct
+            If Err.Number = 0 And IsObject(refProd) Then
+                TraverseProduct refProd, totalHidden, debugLog
+            Else
+                Err.Clear
+                TraverseProduct subProd, totalHidden, debugLog
+            End If
+        End If
+        Err.Clear
+        On Error GoTo 0
+    Next i
+
+End Sub
+
+' ============================================================
+' IsWireframeType — 根据 TypeName 判断是否为线框元素
+'
+' 采用白名单策略：仅隐藏明确属于线框的类型；
+' 不在白名单中的类型（曲面、变换特征等）一律跳过，确保不误隐藏曲面。
+'
+' CATIA V5 VBScript 中，TypeName(hybridShape) 返回具体子类型名，例如：
+'   点类：HybridShapePointCoord / HybridShapePointOnCurve / ...
+'   线类：HybridShapeLinePtDir  / HybridShapeLinePtPt    / ...
+'   面类：HybridShapeFill / HybridShapeExtrude / ...（不在白名单，不隐藏）
+' ============================================================
+Private Function IsWireframeType(typeName)
+
+    Dim tn
+    tn = UCase(typeName)
+
+    ' ── 点（0D）─────────────────────────────────────────────────────────────
+    If InStr(tn, "POINT")     > 0 Then IsWireframeType = True:  Exit Function
+    ' ── 线（1D）─────────────────────────────────────────────────────────────
+    If InStr(tn, "LINE")      > 0 Then IsWireframeType = True:  Exit Function
+    ' ── 平面（参考平面，非曲面）─────────────────────────────────────────────
+    If InStr(tn, "PLANE")     > 0 Then IsWireframeType = True:  Exit Function
+    ' ── 圆 / 弧（曲线）──────────────────────────────────────────────────────
+    If InStr(tn, "CIRCLE")    > 0 Then IsWireframeType = True:  Exit Function
+    ' ── 样条曲线 ─────────────────────────────────────────────────────────────
+    If InStr(tn, "SPLINE")    > 0 Then IsWireframeType = True:  Exit Function
+    ' ── 螺旋线 ───────────────────────────────────────────────────────────────
+    If InStr(tn, "HELIX")     > 0 Then IsWireframeType = True:  Exit Function
+    ' ── 折线 / 多边形 ────────────────────────────────────────────────────────
+    If InStr(tn, "POLYLINE")  > 0 Then IsWireframeType = True:  Exit Function
+    If InStr(tn, "POLYGON")   > 0 Then IsWireframeType = True:  Exit Function
+    ' ── 倒角线（线框圆角，结果为曲线）──────────────────────────────────────
+    If InStr(tn, "CORNER")    > 0 Then IsWireframeType = True:  Exit Function
+    ' ── 连接曲线 ─────────────────────────────────────────────────────────────
+    If InStr(tn, "CONNECT")   > 0 Then IsWireframeType = True:  Exit Function
+    ' ── 二次曲线（椭圆弧、抛物线、双曲线）──────────────────────────────────
+    If InStr(tn, "CONIC")     > 0 Then IsWireframeType = True:  Exit Function
+    ' ── 反射线（始终为曲线）─────────────────────────────────────────────────
+    If InStr(tn, "REFLECT")   > 0 Then IsWireframeType = True:  Exit Function
+    ' ── 极值点（始终为点）───────────────────────────────────────────────────
+    If InStr(tn, "EXTREMUM")  > 0 Then IsWireframeType = True:  Exit Function
+    ' ── 投影曲线 / 点 ────────────────────────────────────────────────────────
+    If InStr(tn, "PROJECT")   > 0 Then IsWireframeType = True:  Exit Function
+    ' ── 交线 / 交点 ──────────────────────────────────────────────────────────
+    If InStr(tn, "INTERSECT") > 0 Then IsWireframeType = True:  Exit Function
+    ' ── 组合曲线 ─────────────────────────────────────────────────────────────
+    If InStr(tn, "COMBINE")   > 0 Then IsWireframeType = True:  Exit Function
+    ' ── 等距曲线（平行线）───────────────────────────────────────────────────
+    If InStr(tn, "PARALLEL")  > 0 Then IsWireframeType = True:  Exit Function
+    ' ── 曲面边界（结果为曲线）───────────────────────────────────────────────
+    If InStr(tn, "BOUNDARY")  > 0 Then IsWireframeType = True:  Exit Function
+    ' ── 轮廓线 ───────────────────────────────────────────────────────────────
+    If InStr(tn, "OUTLINE")   > 0 Then IsWireframeType = True:  Exit Function
+    ' ── 轴线特征（如 HybridShapeAxisLine）──────────────────────────────────
+    If InStr(tn, "AXISLINE")  > 0 Then IsWireframeType = True:  Exit Function
+
+    ' 未识别（曲面、变换特征等）→ 不隐藏
+    IsWireframeType = False
 
 End Function
