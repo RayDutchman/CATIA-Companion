@@ -146,8 +146,8 @@ class BomEditDialog(QDialog):
         # 列名→像素宽度缓存；在列可见性切换时保留用户调整的列宽
         self._col_widths: dict[str, int] = {}
         # 撤销/重做历史栈（最多 _MAX_HISTORY 步）；每项为若干 (pn, col_name, old_val, new_val) 元组的列表
-        self._undo_stack: list[list[tuple]] = []
-        self._redo_stack: list[list[tuple]] = []
+        self._undo_stack: list[list[tuple[str, str, str, str]]] = []
+        self._redo_stack: list[list[tuple[str, str, str, str]]] = []
 
         # ── 界面布局 ──────────────────────────────────────────────────────────
         layout = QVBoxLayout(self)
@@ -1171,7 +1171,7 @@ class BomEditDialog(QDialog):
 
     # ── 撤销/重做 ─────────────────────────────────────────────────────────────
 
-    def _push_undo(self, actions: list[tuple]) -> None:
+    def _push_undo(self, actions: list[tuple[str, str, str, str]]) -> None:
         """将一组字段变更推入撤销栈（最多保留 _MAX_HISTORY 步）。
 
         Args:
@@ -1203,7 +1203,7 @@ class BomEditDialog(QDialog):
         self._undo_stack.append(actions)
         self._update_undo_redo_buttons()
 
-    def _apply_field_changes(self, actions: list[tuple], *, forward: bool) -> None:
+    def _apply_field_changes(self, actions: list[tuple[str, str, str, str]], *, forward: bool) -> None:
         """将一组字段变更应用到规范数据和界面。
 
         Args:
@@ -1271,13 +1271,18 @@ class BomEditDialog(QDialog):
                             _MODIFIED_COMBO_STYLE if is_modified else ""
                         )
                     else:
-                        font = item.font(col_idx)
-                        font.setBold(is_modified)
-                        item.setFont(col_idx, font)
-                        item.setForeground(
-                            col_idx,
-                            _MODIFIED_FG if is_modified else QColor(),
-                        )
+                        if is_modified:
+                            font = item.font(col_idx)
+                            font.setBold(True)
+                            item.setFont(col_idx, font)
+                            item.setForeground(col_idx, _MODIFIED_FG)
+                        else:
+                            # 清除 ForegroundRole 和 FontRole 的自定义数据，
+                            # 让 Qt 回退到默认外观（普通字重、默认文本色）。
+                            # 注意：setForeground(QColor()) 会存储一个无效画刷而非清除角色，
+                            # 必须用 setData(..., None) 才能真正恢复默认。
+                            item.setData(col_idx, Qt.ItemDataRole.ForegroundRole, None)
+                            item.setData(col_idx, Qt.ItemDataRole.FontRole, None)
 
     def _update_undo_redo_buttons(self) -> None:
         """根据撤销/重做栈的状态启用或禁用对应按钮。"""
