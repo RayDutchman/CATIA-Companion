@@ -23,6 +23,17 @@ Option Explicit
 '   在 CATIA 中打开零件或装配体并激活对应文档后，运行本脚本。
 '   不依赖 iParameters，可通过 Tools > Macros 直接执行，
 '   也可由外部程序通过 SystemService.ExecuteScript 调用。
+'
+' ── 已修复的问题 ──────────────────────────────────────────────────────────
+'
+' Bug 1：InWorkObject 不是根产品时搜索可能抛出异常（仅装配体）
+'   若用户双击进入了某个子零件的上下文（即 InWorkObject 不是根 Product），
+'   Selection.Search 在部分 CATIA 版本中会抛出异常或仅在当前上下文内搜索。
+'   修复：仅对 ProductDocument，在搜索前将 InWorkObject 设置为根 Product，
+'   搜索/隐藏完成后恢复原值。PartDocument 无此问题，无需切换。
+'
+' Bug 2：搜索字符串格式
+'   修复：改为 "Type=" & geomTypes(i) & ",All"（逗号后无空格）。
 ' ============================================================
 
 Sub CATMain()
@@ -49,43 +60,110 @@ Sub CATMain()
         Exit Sub
     End If
 
-    ' ── 对根文档的 Selection 执行六类几何的批量搜索+隐藏 ───────────────────
-    HideWireframeInDoc oDoc
+    ' ── 仅对装配体将 InWorkObject 设为根产品，避免子上下文导致搜索异常 ─────
+    ' Bug 1 修复：保存原 InWorkObject，设为根，执行后恢复
+    ' 零件文档无需切换 InWorkObject
+    Dim oOldInWork
+    Dim bInWorkChanged
 
-    MsgBox "已隐藏文档 [" & oDoc.Name & "] 中的" & vbCrLf & _
-           "点、线、三维曲线、草图、轴系、平面。", _
+    bInWorkChanged = False
+    If docType = "ProductDocument" Then
+        On Error Resume Next
+        Set oOldInWork = oDoc.Product.InWorkObject
+        If Err.Number = 0 Then
+            oDoc.Product.InWorkObject = oDoc.Product
+            bInWorkChanged = (Err.Number = 0)
+        End If
+        Err.Clear
+        On Error GoTo 0
+    End If
+
+    ' ── 执行搜索+隐藏 ────────────────────────────────────────────────────────
+    Dim debugLog
+    HideWireframeInDoc oDoc, debugLog
+
+    ' ── 恢复原 InWorkObject ──────────────────────────────────────────────────
+    If bInWorkChanged Then
+        On Error Resume Next
+        oDoc.Product.InWorkObject = oOldInWork
+        Err.Clear
+        On Error GoTo 0
+    End If
+
+    ' ── 完成提示（附 Debug 详情）─────────────────────────────────────────────
+    MsgBox "已处理文档 [" & oDoc.Name & "] 中的" & vbCrLf & _
+           "点、线、三维曲线、草图、轴系、平面。" & vbCrLf & vbCrLf & _
+           "── Debug 详情 ──" & vbCrLf & debugLog, _
            vbInformation, "hide_wireframe"
 
 End Sub
 
 ' ============================================================
-' HideWireframeInDoc — 对指定文档的 Selection 依次搜索六种几何类型并隐藏
+' HideWireframeInDoc — 对指定文档的 Selection 依次搜索五种几何类型并隐藏
 '
 ' 搜索范围 "All" 覆盖文档内（含所有子孙零件）的全部几何体。
 '
 ' 参数：
-'   oDoc — 目标文档（PartDocument 或 ProductDocument）
+'   oDoc     — 目标文档（PartDocument 或 ProductDocument）
+'   debugLog — 传出：各类型搜索/隐藏的详细 debug 日志（字符串）
 ' ============================================================
-Private Sub HideWireframeInDoc(oDoc)
+Private Sub HideWireframeInDoc(oDoc, ByRef debugLog)
 
     Dim oSel
     Set oSel = oDoc.Selection
     oSel.Clear
 
     Dim geomTypes
-    geomTypes = Array("Point", "Line", "Curve", "Sketch", "AxisSystem", "Plane")
+    geomTypes = Array("Point", "Curve", "Sketch", "AxisSystem", "Plane")
+
+    Dim geomLabels
+    geomLabels = Array("点", "三维曲线", "草图", "轴系", "平面")
+
+    debugLog = "文档类型: " & TypeName(oDoc) & vbCrLf
 
     Dim i
     For i = 0 To UBound(geomTypes)
+
+        ' ── 搜索 ──────────────────────────────────────────────────────────
+        ' Bug 2 修复：逗号后无空格
+        Dim searchQuery
+        searchQuery = "Type=" & geomTypes(i) & ",All"
+
         On Error Resume Next
         Err.Clear
-        oSel.Search "Type=" & geomTypes(i) & ", All"
-        Dim searchErr: searchErr = Err.Number
-        Err.Clear
+        oSel.Search searchQuery
+        Dim searchErrNum: searchErrNum = Err.Number
+        Dim searchErrDesc: searchErrDesc = Err.Description
         On Error GoTo 0
 
-        If searchErr = 0 And oSel.Count > 0 Then
+        Dim hasResults
+        hasResults = False
+        If searchErrNum = 0 Then
+            On Error Resume Next
+            hasResults = (oSel.Count > 0)
+            On Error GoTo 0
+        End If
+
+        debugLog = debugLog & geomLabels(i) & " [" & geomTypes(i) & "]" & vbCrLf
+
+        If searchErrNum <> 0 Then
+            debugLog = debugLog & "  搜索错误: #" & searchErrNum & " - " & searchErrDesc & vbCrLf
+        ElseIf Not hasResults Then
+            debugLog = debugLog & "  无可隐藏元素" & vbCrLf
+        Else
+            ' ── 隐藏 ──────────────────────────────────────────────────────
+            On Error Resume Next
+            Err.Clear
             oSel.VisProperties.SetShow catVisPropertyNoShowAttr
+            Dim showErrNum: showErrNum = Err.Number
+            Dim showErrDesc: showErrDesc = Err.Description
+            On Error GoTo 0
+
+            If showErrNum <> 0 Then
+                debugLog = debugLog & "  SetShow 错误: #" & showErrNum & " - " & showErrDesc & vbCrLf
+            Else
+                debugLog = debugLog & "  已执行隐藏" & vbCrLf
+            End If
         End If
 
         oSel.Clear
