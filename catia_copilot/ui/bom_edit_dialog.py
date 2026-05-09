@@ -349,14 +349,16 @@ class BomEditDialog(QDialog):
         self._rename_file_btn.clicked.connect(self._rename_selected_file)
         btn_row.addWidget(self._rename_file_btn)
 
-        self._undo_btn = QPushButton("撤销")
+        self._undo_btn = QPushButton("↶")
+        self._undo_btn.setAccessibleName("撤销")
         self._undo_btn.setToolTip("撤销上一步字段编辑（Ctrl+Z）")
         self._undo_btn.setShortcut(QKeySequence("Ctrl+Z"))
         self._undo_btn.setEnabled(False)
         self._undo_btn.clicked.connect(self._undo)
         btn_row.addWidget(self._undo_btn)
 
-        self._redo_btn = QPushButton("重做")
+        self._redo_btn = QPushButton("↷")
+        self._redo_btn.setAccessibleName("重做")
         self._redo_btn.setToolTip("重做上一步撤销的编辑（Ctrl+Y）")
         self._redo_btn.setShortcut(QKeySequence("Ctrl+Y"))
         self._redo_btn.setEnabled(False)
@@ -913,23 +915,21 @@ class BomEditDialog(QDialog):
                 for ci in range(len(self._columns)):
                     item.setForeground(ci, grey)
                     item.setBackground(ci, bg)
-                fn_col = self._columns.index("Filename") if "Filename" in self._columns else -1
-                if fn_col >= 0:
-                    tip = (
-                        "该零件/装配体的文件未被CATIA检索到，行内容不可编辑。"
-                        if not_found else
-                        "该零件/装配体处于轻量化模式，无法读取属性。"
-                    )
-                    item.setToolTip(fn_col, tip)
+                tip = (
+                    "该零件/装配体的文件未被CATIA检索到，行内容不可编辑。"
+                    if not_found else
+                    "该零件/装配体处于轻量化模式，无法读取属性。"
+                )
+                for ci in range(len(self._columns)):
+                    item.setToolTip(ci, tip)
 
             # _no_file 行（文件未保存到磁盘）：不锁定，但以淡黄背景和专属提示标识
             if no_file:
-                fn_col = self._columns.index("Filename") if "Filename" in self._columns else -1
                 bg_unsaved = QColor(255, 245, 180)
+                no_file_tip = "该零件尚未保存到磁盘，可通过右键菜单「另存为」将其保存。"
                 for ci in range(len(self._columns)):
                     item.setBackground(ci, bg_unsaved)
-                if fn_col >= 0:
-                    item.setToolTip(fn_col, "该零件尚未保存到磁盘，可通过右键菜单「另存为」将其保存。")
+                    item.setToolTip(ci, no_file_tip)
 
         self._table.expandAll()
         # 为已有修改的字段恢复视觉标记（例如重新填充表格后）
