@@ -189,10 +189,17 @@ Private Function HideWireframeInDoc(oDoc, ByRef debugLog, ByRef outAlreadyHidden
                 showVal = -1
                 On Error Resume Next
                 Err.Clear
-                oSel.Item(j).VisProperties.GetShow showVal
+                ' oSel.Item(j) 返回 SelectedElement（无 VisProperties），需通过 .Value 获取实际 CATIA 对象
+                Dim oItemVal
+                Set oItemVal = oSel.Item(j).Value
+                If Err.Number = 0 Then
+                    Err.Clear
+                    oItemVal.VisProperties.GetShow showVal
+                End If
                 If Err.Number = 0 And showVal = 1 Then   ' catVisNoShow = 1 (已隐藏); catVisShow = 0 (可见)
                     alreadyHiddenCount = alreadyHiddenCount + 1
                 End If
+                Set oItemVal = Nothing
                 Err.Clear
                 On Error GoTo 0
             Next
