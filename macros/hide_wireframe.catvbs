@@ -23,20 +23,6 @@ Option Explicit
 '   在 CATIA 中打开零件或装配体并激活对应文档后，运行本脚本。
 '   不依赖 iParameters，可通过 Tools > Macros 直接执行，
 '   也可由外部程序通过 SystemService.ExecuteScript 调用。
-'
-' ── 已修复的问题 ──────────────────────────────────────────────────────────
-'
-' Bug 1【根本原因】：最终 MsgBox"已隐藏…"无条件执行
-'   原代码在调用 HideWireframeInDoc 后立即弹窗，无论该函数内部
-'   六次搜索是否找到任何元素，窗口都会出现，造成"假隐藏"的假象。
-'   修复：HideWireframeInDoc 返回实际隐藏的元素总数，仅当 > 0 时
-'   才显示成功消息；为 0 时明确告知"未找到任何可隐藏元素"。
-'
-' Bug 3：搜索字符串格式
-'   原代码："Type=" & geomTypes(i) & ", All"
-'   逗号后有空格，部分 CATIA 版本的搜索解析器对此敏感，
-'   可能导致搜索悄悄返回 0 结果。
-'   修复：改为 "Type=" & geomTypes(i) & ",All"（无空格）。
 ' ============================================================
 
 Sub CATMain()
@@ -116,7 +102,6 @@ Private Function HideWireframeInDoc(oDoc, ByRef debugLog)
     For i = 0 To UBound(geomTypes)
 
         ' ── 搜索 ──────────────────────────────────────────────────────────
-        ' Bug 3 修复：移除逗号后的空格，避免部分 CATIA 版本解析失败
         Dim searchQuery
         searchQuery = "Type=" & geomTypes(i) & ",All"
 
