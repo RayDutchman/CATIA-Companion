@@ -145,7 +145,7 @@ class BomEditDialog(QDialog):
         self._pn_to_items: dict[str, list[QTreeWidgetItem]] = {}
         # 列名→像素宽度缓存；在列可见性切换时保留用户调整的列宽
         self._col_widths: dict[str, int] = {}
-        # 撤销/重做历史栈（最多 _MAX_HISTORY 步）；每项为若干 (pn, col, old, new) 元组的列表
+        # 撤销/重做历史栈（最多 _MAX_HISTORY 步）；每项为若干 (pn, col_name, old_val, new_val) 元组的列表
         self._undo_stack: list[list[tuple]] = []
         self._redo_stack: list[list[tuple]] = []
 
@@ -1172,7 +1172,11 @@ class BomEditDialog(QDialog):
     # ── 撤销/重做 ─────────────────────────────────────────────────────────────
 
     def _push_undo(self, actions: list[tuple]) -> None:
-        """将一组字段变更推入撤销栈（最多保留 _MAX_HISTORY 步）。"""
+        """将一组字段变更推入撤销栈（最多保留 _MAX_HISTORY 步）。
+
+        Args:
+            actions: 每项为 ``(pn, col_name, old_val, new_val)``。
+        """
         if not actions:
             return
         self._undo_stack.append(actions)
@@ -1245,7 +1249,7 @@ class BomEditDialog(QDialog):
         if pns_affected:
             self._refresh_pns_appearance(pns_affected)
 
-    def _refresh_pns_appearance(self, pns: "set[str]") -> None:
+    def _refresh_pns_appearance(self, pns: set[str]) -> None:
         """刷新指定零件编号对应所有行的已修改字段视觉标记。
 
         已修改但未写回CATIA的字段：加粗 + 橙色前景（文本单元格）或橙色样式（下拉框）。
