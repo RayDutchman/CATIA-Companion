@@ -18,8 +18,8 @@ from PySide6.QtWidgets import (
     QFileDialog, QProgressDialog, QRadioButton, QButtonGroup,
     QMenu, QWidgetAction, QLineEdit, QGridLayout
 )
-from PySide6.QtGui import QPixmap, QColor, QBrush, QShortcut
-from PySide6.QtCore import Qt, QSettings, QKeySequence
+from PySide6.QtGui import QPixmap, QColor, QBrush, QShortcut, QCloseEvent, QDesktopServices
+from PySide6.QtCore import Qt, QSettings, QKeySequence, QUrl
 
 from catia_copilot.constants import (
     PRESET_USER_REF_PROPERTIES,
@@ -392,14 +392,22 @@ class BomEditDialog(QDialog):
         layout.addLayout(btn_row)
 
         # ── 键盘快捷键 ────────────────────────────────────────────────────────
-        QShortcut(QKeySequence("F5"),          self).activated.connect(self._load_bom)
-        QShortcut(QKeySequence("Ctrl+S"),      self).activated.connect(self._apply_changes)
-        QShortcut(QKeySequence("Ctrl+Return"), self).activated.connect(self._finish_and_close)
-        QShortcut(QKeySequence("Ctrl+F"),      self).activated.connect(
+        self._shortcuts = [
+            QShortcut(QKeySequence("F5"),          self),
+            QShortcut(QKeySequence("Ctrl+S"),      self),
+            QShortcut(QKeySequence("Ctrl+Return"), self),
+            QShortcut(QKeySequence("Ctrl+F"),      self),
+            QShortcut(QKeySequence("Ctrl+E"),      self),
+            QShortcut(QKeySequence("Ctrl+Z"),      self),
+        ]
+        self._shortcuts[0].activated.connect(self._load_bom)
+        self._shortcuts[1].activated.connect(self._apply_changes)
+        self._shortcuts[2].activated.connect(self._finish_and_close)
+        self._shortcuts[3].activated.connect(
             lambda: self._search_edit.setFocus(Qt.FocusReason.ShortcutFocusReason)
         )
-        QShortcut(QKeySequence("Ctrl+E"),      self).activated.connect(self._export_table)
-        QShortcut(QKeySequence("Ctrl+Z"),      self).activated.connect(self._undo)
+        self._shortcuts[4].activated.connect(self._export_table)
+        self._shortcuts[5].activated.connect(self._undo)
 
         # 选中变化 → 状态栏刷新
         self._table.itemSelectionChanged.connect(self._update_status_bar)
@@ -1163,7 +1171,8 @@ class BomEditDialog(QDialog):
             r_pn = str(self._rows[r].get("Part Number", ""))
             if r_pn:
                 pns_to_update.add(r_pn)
-        self._push_undo()
+        if pns_to_update:
+            self._push_undo()
         for r_pn in pns_to_update:
             if r_pn in self._canonical_data:
                 self._canonical_data[r_pn][col_name] = new_value
@@ -2020,6 +2029,8 @@ class BomEditDialog(QDialog):
         def _item_matches(item: QTreeWidgetItem) -> bool:
             row_idx = item.data(0, Qt.ItemDataRole.UserRole)
             if row_idx is None or row_idx >= len(self._rows):
+                if row_idx is not None:
+                    logger.debug("_apply_search_filter: row_idx %d out of range", row_idx)
                 return False
             row_data = self._rows[row_idx]
             pn = str(row_data.get("Part Number", ""))
@@ -2068,7 +2079,7 @@ class BomEditDialog(QDialog):
     def _save_geometry(self) -> None:
         self._edit_settings.setValue("geometry", self.saveGeometry())
 
-    def closeEvent(self, event) -> None:  # type: ignore[override]
+    def closeEvent(self, event: QCloseEvent) -> None:
         if self._modified_keys:
             ret = QMessageBox.question(
                 self, "存在未写回的修改",
@@ -2119,8 +2130,10 @@ class BomEditDialog(QDialog):
             self._open_path(str(dest))
 
     def _open_file(self, fp: str) -> None:
-        """用系统默认程序打开文件。"""
+        """用系统默认程序打开文件（跨平台）。"""
         try:
-            os.startfile(fp)
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(fp)):
+                raise RuntimeError("QDesktopServices.openUrl returned False")
         except Exception as exc:
             logger.warning(f"Failed to open file with default app: {exc}")
+            QMessageBox.warning(self, "打开失败", f"无法用默认程序打开文件：\n{fp}")
