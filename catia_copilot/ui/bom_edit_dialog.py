@@ -18,8 +18,8 @@ from PySide6.QtWidgets import (
     QFileDialog, QProgressDialog, QRadioButton, QButtonGroup,
     QMenu, QWidgetAction, QLineEdit, QGridLayout
 )
-from PySide6.QtGui import QPixmap, QColor, QBrush, QShortcut, QCloseEvent, QDesktopServices
-from PySide6.QtCore import Qt, QSettings, QKeySequence, QUrl
+from PySide6.QtGui import QPixmap, QColor, QBrush, QShortcut, QCloseEvent, QDesktopServices, QKeySequence
+from PySide6.QtCore import Qt, QSettings, QUrl
 
 from catia_copilot.constants import (
     PRESET_USER_REF_PROPERTIES,
@@ -2017,7 +2017,8 @@ class BomEditDialog(QDialog):
                 for i in range(item.childCount()):
                     _show_all(item.child(i))
             for i in range(self._table.topLevelItemCount()):
-                _show_all(self._table.topLevelItem(i))
+                if (_top := self._table.topLevelItem(i)) is not None:
+                    _show_all(_top)
             return
 
         text_lower = text.strip().lower()
@@ -2054,7 +2055,8 @@ class BomEditDialog(QDialog):
             return visible
 
         for i in range(self._table.topLevelItemCount()):
-            _process(self._table.topLevelItem(i))
+            if (_top := self._table.topLevelItem(i)) is not None:
+                _process(_top)
 
     # ── 状态栏 ────────────────────────────────────────────────────────────────
 
