@@ -429,7 +429,8 @@ class BomEditDialog(QDialog):
         self._summarize = summary_checked
         self._edit_settings.setValue("summarize", summary_checked)
         self._summary_opts_widget.setVisible(summary_checked)
-        # 若BOM已加载，则从原始行重新生成显示行并刷新表格
+        # 若BOM已加载，则从原始行重新生成显示行并刷新表格；
+        # _populate_table 内部会根据 self._summarize 启用/禁用表头排序。
         if self._raw_rows:
             self._rows = (
                 flatten_bom_to_summary(
@@ -440,8 +441,9 @@ class BomEditDialog(QDialog):
                 if summary_checked else self._raw_rows
             )
             self._rebuild_columns_and_repopulate()
-        # 汇总模式支持表头点击排序；层级模式禁用以维持树结构
-        self._table.setSortingEnabled(summary_checked and self._bom_loaded)
+        else:
+            # BOM 尚未加载时，根据当前模式预置排序使能状态
+            self._table.setSortingEnabled(False)
 
     def _on_include_assemblies_toggled(self, checked: bool) -> None:
         self._summary_include_assemblies = checked
@@ -1850,10 +1852,6 @@ class BomEditDialog(QDialog):
         act_copy_path = menu.addAction("复制路径")
         act_copy_path.setEnabled(bool(fp) and not no_file)
 
-        # ── 复制零件编号 ──────────────────────────────────────────────────────
-        act_copy_pn = menu.addAction(f"复制零件编号（{pn}）" if pn else "复制零件编号")
-        act_copy_pn.setEnabled(bool(pn))
-
         # ── 复制当前单元格内容 ────────────────────────────────────────────────
         _clicked_col = self._table.columnAt(pos.x())
         _cell_text   = ""
@@ -1895,8 +1893,6 @@ class BomEditDialog(QDialog):
             self._open_path(fp)
         elif action == act_copy_path:
             QApplication.clipboard().setText(fp)
-        elif action == act_copy_pn:
-            QApplication.clipboard().setText(pn)
         elif action == act_copy_cell:
             QApplication.clipboard().setText(_cell_text)
         elif action == act_open_catia:
