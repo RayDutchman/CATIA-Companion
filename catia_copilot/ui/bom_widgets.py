@@ -8,6 +8,8 @@ from catia_copilot.constants import BOM_READONLY_COLUMNS
 
 # 自定义 UserRole 用于 QTreeWidgetItem：标记行为锁定（不可读/未找到）
 _ITEM_LOCKED_ROLE: int = Qt.ItemDataRole.UserRole + 1
+# 存储行的状态类型（"normal" / "not_found" / "unreadable" / "no_file"），用于修改高亮色刷新
+_ITEM_ROW_STATE_ROLE: int = Qt.ItemDataRole.UserRole + 2
 
 
 class _BomTreeDelegate(QStyledItemDelegate):
