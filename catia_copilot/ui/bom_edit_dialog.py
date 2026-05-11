@@ -18,8 +18,8 @@ from PySide6.QtWidgets import (
     QFileDialog, QProgressDialog, QRadioButton, QButtonGroup,
     QMenu, QWidgetAction, QLineEdit, QGridLayout, QShortcut,
 )
-from PySide6.QtGui import QPixmap, QColor, QKeySequence, QCloseEvent
-from PySide6.QtCore import Qt, QSettings, QByteArray
+from PySide6.QtGui import QPixmap, QColor, QKeySequence, QCloseEvent, QDesktopServices
+from PySide6.QtCore import Qt, QSettings, QByteArray, QUrl
 
 from catia_copilot.constants import (
     PRESET_USER_REF_PROPERTIES,
@@ -1924,7 +1924,26 @@ class BomEditDialog(QDialog):
             QMessageBox.critical(self, "导出失败", f"导出时出错：\n{e}")
             return
 
-        QMessageBox.information(self, "导出成功", f"BOM已成功导出：\n{dest_path}")
+        self._show_export_success(dest_path)
+
+    def _show_export_success(self, dest_path: Path) -> None:
+        """导出成功后弹出含"打开文件"和"打开所在文件夹"按钮的提示框。"""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("导出成功")
+        msg.setText(f"BOM已成功导出：\n{dest_path}")
+        msg.setIcon(QMessageBox.Icon.Information)
+        open_file_btn   = msg.addButton("打开文件", QMessageBox.ButtonRole.ActionRole)
+        open_folder_btn = msg.addButton("打开所在文件夹", QMessageBox.ButtonRole.ActionRole)
+        msg.addButton(QMessageBox.StandardButton.Ok)
+        msg.exec()
+        clicked = msg.clickedButton()
+        if clicked == open_file_btn:
+            try:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(dest_path)))
+            except Exception as exc:
+                logger.warning(f"Failed to open exported file: {exc}")
+        elif clicked == open_folder_btn:
+            self._open_path(str(dest_path))
 
     def _export_header(self, col_name: str) -> str:
         """返回列的显示表头字符串，与当前表格保持一致。"""
@@ -2090,6 +2109,19 @@ class BomEditDialog(QDialog):
         act_copy_path = menu.addAction("复制路径")
         act_copy_path.setEnabled(bool(fp) and not no_file)
 
+        # ── 复制单元格内容 ────────────────────────────────────────────────────
+        # 根据鼠标所在列动态获取单元格文本
+        clicked_col_idx = self._table.columnAt(pos.x())
+        cell_text: str = ""
+        if 0 <= clicked_col_idx < len(self._columns):
+            widget = self._table.itemWidget(item, clicked_col_idx)
+            if isinstance(widget, QComboBox):
+                cell_text = widget.currentText()
+            else:
+                cell_text = item.text(clicked_col_idx)
+        act_copy_cell = menu.addAction("复制单元格内容")
+        act_copy_cell.setEnabled(bool(cell_text))
+
         # ── 在CATIA中打开 ─────────────────────────────────────────────────────
         # 仅当文件在磁盘上存在且不是损坏/轻量化引用时启用。
         # 部件行共享父产品的文件路径，因此也排除在外。
@@ -2114,6 +2146,8 @@ class BomEditDialog(QDialog):
             self._open_path(fp)
         elif action == act_copy_path:
             QApplication.clipboard().setText(fp)
+        elif action == act_copy_cell:
+            QApplication.clipboard().setText(cell_text)
         elif action == act_open_catia:
             self._open_in_catia(fp)
         elif action == act_edit_path:
