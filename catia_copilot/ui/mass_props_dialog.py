@@ -2065,6 +2065,18 @@ class MassPropsDialog(QDialog):
                 ):
                     indices.add(i)
 
+        # 反向关联清理：若被删除的行中包含对称件行，将对应源行的
+        # _mirror_child_id 清除，使源行可以再次添加对称件。
+        deleted_mirror_ids: set[str] = {
+            self._rows[i]["_mirror_id"]
+            for i in indices
+            if self._rows[i].get("_is_mirror") and self._rows[i].get("_mirror_id")
+        }
+        if deleted_mirror_ids:
+            for i, row in enumerate(self._rows):
+                if i not in indices and row.get("_mirror_child_id") in deleted_mirror_ids:
+                    row.pop("_mirror_child_id", None)
+
         self._rows = [r for i, r in enumerate(self._rows) if i not in indices]
 
         if not self._rows:
