@@ -1386,7 +1386,9 @@ class MassPropsDialog(QDialog):
             elif col_name == "Density":
                 density = row_data.get("Density")
                 if density is None:
-                    item.setText(col_idx, "—" if node_type in ("零件", "对称件") else "")
+                    # 对称件：按原件类型决定空显示（产品/部件→""，零件→"—"）
+                    effective_type = row_data.get("_mirror_src_type") if node_type == "对称件" else node_type
+                    item.setText(col_idx, "" if (effective_type or node_type) in ("产品", "部件") else "—")
                 elif density < 0:
                     item.setText(col_idx, "不统一")
                 else:
@@ -1394,13 +1396,15 @@ class MassPropsDialog(QDialog):
             elif col_name == "Weight":
                 raw = row_data.get("Weight")
                 if raw is None:
-                    item.setText(col_idx, "—" if node_type in ("零件", "对称件") else "")
+                    effective_type = row_data.get("_mirror_src_type") if node_type == "对称件" else node_type
+                    item.setText(col_idx, "" if (effective_type or node_type) in ("产品", "部件") else "—")
                 else:
                     item.setText(col_idx, self._fmt_mass_val(raw))
             elif col_name in _INERTIA_IDX or col_name in ("CogX", "CogY", "CogZ"):
                 raw = row_data.get(col_name)
                 if raw is None:
-                    item.setText(col_idx, "—" if node_type in ("零件", "对称件") else "")
+                    effective_type = row_data.get("_mirror_src_type") if node_type == "对称件" else node_type
+                    item.setText(col_idx, "" if (effective_type or node_type) in ("产品", "部件") else "—")
                 else:
                     if col_name in _INERTIA_IDX:
                         item.setText(col_idx, self._fmt_inertia_val(raw))
@@ -2274,15 +2278,24 @@ class MassPropsDialog(QDialog):
             ]
             density = None
 
+        # ── 无有效数据检测 ────────────────────────────────────────────────
+        # 当 weight <= 0.0 时视为"无测量数据"，COG/惯量全部置 None，
+        # 保留原件的空值语义（零件显示"—"，产品/部件显示""）。
+        has_data = weight > 0.0
+
         # ── ZX 平面对称变换：Y 分量取反 ──────────────────────────────────
         # 使用 (0.0 - x) 代替 (-x)，避免对 0.0 取负产生 IEEE 754 负零（-0.0），
         # 防止负零进入导出文件（CSV/xlsx）或引发下游比较歧义。
-        cog_mirror = [cog_root[0], 0.0 - cog_root[1], cog_root[2]]
-        I_mirror = [
-            [ I_root[0][0], 0.0 - I_root[0][1],  I_root[0][2]],
-            [0.0 - I_root[1][0],  I_root[1][1], 0.0 - I_root[1][2]],
-            [ I_root[2][0], 0.0 - I_root[2][1],  I_root[2][2]],
-        ]
+        if has_data:
+            cog_mirror: list | None = [cog_root[0], 0.0 - cog_root[1], cog_root[2]]
+            I_mirror: list | None = [
+                [ I_root[0][0], 0.0 - I_root[0][1],  I_root[0][2]],
+                [0.0 - I_root[1][0],  I_root[1][1], 0.0 - I_root[1][2]],
+                [ I_root[2][0], 0.0 - I_root[2][1],  I_root[2][2]],
+            ]
+        else:
+            cog_mirror = None
+            I_mirror   = None
 
         # 单位矩阵 placement：对称件的"局部坐标系"等于根坐标系
         identity_placement = [
@@ -2293,8 +2306,8 @@ class MassPropsDialog(QDialog):
         ]
         mirror_mp = {
             "weight":  weight,
-            "cog":     cog_mirror,
-            "inertia": I_mirror,
+            "cog":     cog_mirror if cog_mirror is not None else [0.0, 0.0, 0.0],
+            "inertia": I_mirror if I_mirror is not None else [[0.0] * 3 for _ in range(3)],
             "density": density,
         }
 
@@ -2308,16 +2321,16 @@ class MassPropsDialog(QDialog):
             "Nomenclature": source_row.get("Nomenclature", ""),
             "Revision":     source_row.get("Revision", ""),
             "Density":      density,
-            "Weight":       weight if weight > 0.0 else None,
-            "CogX":         cog_mirror[0],
-            "CogY":         cog_mirror[1],
-            "CogZ":         cog_mirror[2],
-            "Ixx":          I_mirror[0][0],
-            "Iyy":          I_mirror[1][1],
-            "Izz":          I_mirror[2][2],
-            "Ixy":          I_mirror[0][1],
-            "Ixz":          I_mirror[0][2],
-            "Iyz":          I_mirror[1][2],
+            "Weight":       weight if has_data else None,
+            "CogX":         cog_mirror[0] if cog_mirror is not None else None,
+            "CogY":         cog_mirror[1] if cog_mirror is not None else None,
+            "CogZ":         cog_mirror[2] if cog_mirror is not None else None,
+            "Ixx":          I_mirror[0][0] if I_mirror is not None else None,
+            "Iyy":          I_mirror[1][1] if I_mirror is not None else None,
+            "Izz":          I_mirror[2][2] if I_mirror is not None else None,
+            "Ixy":          I_mirror[0][1] if I_mirror is not None else None,
+            "Ixz":          I_mirror[0][2] if I_mirror is not None else None,
+            "Iyz":          I_mirror[1][2] if I_mirror is not None else None,
             "_filepath":    "",
             "_placement":   identity_placement,
             "_not_found":   False,
@@ -2329,9 +2342,10 @@ class MassPropsDialog(QDialog):
                 "weight":  weight,
                 "cog":     cog_mirror,
                 "inertia": I_mirror,
-            },
+            } if has_data else None,
             "_is_mirror":        True,
             "_mirror_source_pn": source_pn,
+            "_mirror_src_type":  node_type,  # 原件类型，用于 None 值的空白/破折号显示判断
         }
 
     def _add_mirror_row(self, row_idx: int) -> None:
@@ -2449,32 +2463,40 @@ class MassPropsDialog(QDialog):
                 for vis_item in self._item_by_row:
                     if vis_item.data(0, _ROW_IDX_ROLE) != mi:
                         continue
-                    rmp = mirror_row.get("_root_mp")
+                    src_type = str(src_row.get("Type", "零件"))
+                    # 原件为产品/部件时，None 值显示空字符串；原件为零件时显示"—"
+                    empty_text = "" if src_type in ("产品", "部件") else "—"
                     for ci, col in enumerate(self._columns):
                         if col == "Weight":
-                            vis_item.setText(ci, self._fmt_mass_val(mirror_row.get("Weight")))
+                            raw = mirror_row.get("Weight")
+                            if raw is None:
+                                vis_item.setText(ci, empty_text)
+                            else:
+                                vis_item.setText(ci, self._fmt_mass_val(raw))
                         elif col == "Density":
                             d_val = mirror_row.get("Density")
-                            src_type = str(src_row.get("Type", "零件"))
                             if d_val is None:
-                                d_text = "" if src_type in ("产品", "部件") else "—"
+                                d_text = empty_text
                             elif d_val < 0:
                                 d_text = "不统一"
                             else:
                                 d_text = _fmt(d_val)
                             vis_item.setText(ci, d_text)
                         elif col in _COG_IDX:
-                            cog_i = _COG_IDX[col]
-                            raw = rmp["cog"][cog_i] if rmp else mirror_row.get(col)
-                            vis_item.setText(ci, self._fmt_cog_val(raw) if raw is not None else "—")
+                            # mirror_row 中的 CogX/Y/Z 已在 _make_mirror_row() 中
+                            # 保留了 None 语义（原件无数据时为 None）
+                            raw = mirror_row.get(col)
+                            if raw is None:
+                                vis_item.setText(ci, empty_text)
+                            else:
+                                vis_item.setText(ci, self._fmt_cog_val(raw))
                         elif col in _INERTIA_IDX:
-                            ir, ic = _INERTIA_IDX[col]
-                            raw = (
-                                rmp["inertia"][ir][ic]
-                                if rmp and rmp.get("inertia")
-                                else mirror_row.get(col)
-                            )
-                            vis_item.setText(ci, self._fmt_inertia_val(raw) if raw is not None else "—")
+                            # 同上，Ixx/Ixy/… 亦保留 None 语义
+                            raw = mirror_row.get(col)
+                            if raw is None:
+                                vis_item.setText(ci, empty_text)
+                            else:
+                                vis_item.setText(ci, self._fmt_inertia_val(raw))
                     break
         finally:
             self._is_updating = False
