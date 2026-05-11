@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QRadioButton, QButtonGroup, QWidget, QComboBox,
     QStyledItemDelegate, QMenu,
 )
-from PySide6.QtGui import QBrush, QColor, QFont, QDesktopServices, QShortcut, QKeySequence
+from PySide6.QtGui import QBrush, QFont, QDesktopServices, QShortcut, QKeySequence
 from PySide6.QtCore import Qt, QSettings, QByteArray, QUrl
 
 from catia_copilot.constants import (
@@ -46,6 +46,13 @@ from catia_copilot.catia.mass_props_collect import (
     _compute_root_mp_from_placement, _rollup_one_product,
 )
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
+from catia_copilot.ui.ui_colors import (
+    EXCL_BG   as _EXCL_BG_COLOR,
+    EXCL_FG   as _EXCL_FG_COLOR,
+    MIRROR_BG as _MIRROR_BG_COLOR,
+    ROW_LOCKED_FG, ROW_NOT_FOUND_BG, ROW_MEAS_FAILED_BG,
+    ROW_LIGHTWEIGHT_BG, ROW_UNSAVED_BG, ROW_PRODUCT_BG,
+)
 from catia_copilot.ui.bom_widgets import _BomTreeWidget, _BomSortItem
 
 logger = logging.getLogger(__name__)
@@ -74,14 +81,11 @@ _UNIT_SENSITIVE_COLUMNS: tuple[str, ...] = (
 # 数值格式化：判断"接近整数"的绝对容差（用于 _fmt / _fmt_scaled）
 _INTEGER_ABS_TOL: float = 1e-9
 
-# 排除行视觉样式（背景色 / 前景色 / 斜体字体）
-_EXCL_BG_COLOR: QColor = QColor(216, 216, 232)   # 浅灰紫，区别于红/橙/黄等异常色
-_EXCL_FG_COLOR: QColor = QColor(130, 130, 150)
+# 排除行视觉样式（斜体字体；背景/前景色已移至 ui_colors.py）
 _EXCL_FONT: QFont = QFont()
 _EXCL_FONT.setItalic(True)
 
 # 对称件（虚拟行）视觉样式
-_MIRROR_BG_COLOR: QColor = QColor(230, 240, 255)  # 浅蓝色，标识对称件虚拟行
 _MIRROR_TOOLTIP: str = "对称件（虚拟行），相对 ZX 平面与原件对称，不可直接编辑。"
 
 
@@ -259,18 +263,6 @@ class MassPropsDialog(QDialog):
         }
         return _map.get(inertia_unit, 1.0)
 
-    def _weight_unit_label(self) -> str:
-        """返回重量列的单位标签字符串。"""
-        return self._mass_unit
-
-    def _inertia_unit_label(self) -> str:
-        """返回惯量列的单位标签字符串（当前独立选择的惯量单位）。"""
-        return self._inertia_unit
-
-    def _cog_unit_label(self) -> str:
-        """返回重心坐标列的单位标签字符串。"""
-        return self._cog_unit
-
     def _build_columns(self) -> list[str]:
         """根据当前可见性设置和 BOM 模式，构建列名列表。
 
@@ -298,11 +290,11 @@ class MassPropsDialog(QDialog):
         if col_name == "Density":
             return "密度 (kg/m³)"
         if col_name == "Weight":
-            return f"重量 ({self._weight_unit_label()})"
+            return f"重量 ({self._mass_unit})"
         if col_name in _INERTIA_IDX:
-            return f"{col_name} ({self._inertia_unit_label()})"
+            return f"{col_name} ({self._inertia_unit})"
         if col_name in ("CogX", "CogY", "CogZ"):
-            return f"{col_name} ({self._cog_unit_label()})"
+            return f"{col_name} ({self._cog_unit})"
         return MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col_name, col_name)
 
     def _display_headers(self) -> list[str]:
@@ -312,20 +304,13 @@ class MassPropsDialog(QDialog):
     def _fmt_scaled(value, factor: float) -> str:
         """将原始 SI 值乘以换算因子后格式化为字符串。
 
-        None → '—'；整数值（误差 < _INTEGER_ABS_TOL）→ 无小数位；
-        |v| ≥ 1e5 或绝对值极小（0 < |v| < 0.001）→ 科学计数法；
-        其余 → 保留三位小数。
+        None → '—'；数值格式化规则与模块级 _fmt() 完全一致（委托调用）；
+        乘法本身若抛出 TypeError/ValueError 则回退为 str(value)。
         """
         if value is None:
             return "—"
         try:
-            v = float(value) * factor
-            rv = round(v)
-            if math.isclose(v, rv, rel_tol=0.0, abs_tol=_INTEGER_ABS_TOL):
-                return f"{rv:.0f}"
-            if abs(v) >= 1e5 or abs(v) < 0.001:
-                return f"{v:.3e}"
-            return f"{v:.3f}"
+            return _fmt(float(value) * factor)
         except (TypeError, ValueError):
             return str(value)
 
@@ -830,6 +815,8 @@ class MassPropsDialog(QDialog):
         self._rebuild_columns_and_table()
 
     def _on_read_mode_changed(self, checked: bool) -> None:
+        if not checked:
+            return
         if self._radio_read_first.isChecked():
             self._read_mode = "first"
         elif self._radio_read_last.isChecked():
@@ -843,6 +830,8 @@ class MassPropsDialog(QDialog):
         self._settings.setValue("skip_hidden", self._skip_hidden)
 
     def _on_unit_changed(self, checked: bool) -> None:
+        if not checked:
+            return
         self._mass_unit = "g" if self._radio_mass_g.isChecked() else "kg"
         self._cog_unit  = "mm" if self._radio_cog_mm.isChecked() else "m"
         self._unit_factor, _, self._cog_unit_factor = (
@@ -861,11 +850,14 @@ class MassPropsDialog(QDialog):
             self._refresh_unit_display()
 
     def _on_col_visibility_changed(self, checked: bool) -> None:
-        for col_name, cb in self._hid_col_checks.items():
-            if cb.isChecked():
-                self._visible_hideable_cols.add(col_name)
-            else:
-                self._visible_hideable_cols.discard(col_name)
+        cb = self.sender()
+        if cb is not None:
+            col_name = cb.property("col_name")
+            if col_name:
+                if checked:
+                    self._visible_hideable_cols.add(col_name)
+                else:
+                    self._visible_hideable_cols.discard(col_name)
         self._settings.setValue("visible_hideable_cols",
                                 list(self._visible_hideable_cols))
         self._rebuild_columns_and_table()
@@ -1305,9 +1297,6 @@ class MassPropsDialog(QDialog):
             r["Quantity"] = qty[pn]
             result.append(r)
 
-        # 类型过滤作为保险：上方循环已只处理零件行，此处过滤冗余但保留以防万一
-        result = [r for r in result if r.get("Type") == "零件"]
-
         return result
 
     # ── 填充表格 ───────────────────────────────────────────────────────────
@@ -1426,36 +1415,7 @@ class MassPropsDialog(QDialog):
         item.setData(0, _DENSITY_LOCKED_ROLE, density_locked)
 
         # 行背景色设置
-        if is_mirror:
-            # 对称件（虚拟行）：浅蓝背景，不显示错误色
-            for ci in range(len(self._columns)):
-                item.setBackground(ci, _MIRROR_BG_COLOR)
-                item.setToolTip(ci, _MIRROR_TOOLTIP)
-        elif row_locked:
-            grey = QColor(160, 160, 160)
-            if not_found:
-                bg  = QColor(255, 205, 205)
-                tip = "该零件/装配体的文件未被CATIA检索到，行内容不可编辑。"
-            elif meas_failed:
-                bg  = QColor(255, 210, 160)
-                tip = "该零件的质量特性测量失败，行内容不可编辑。"
-            else:
-                bg  = QColor(245, 245, 245)
-                tip = "该零件/装配体处于轻量化模式，无法读取属性。"
-            for ci in range(len(self._columns)):
-                item.setForeground(ci, grey)
-                item.setBackground(ci, bg)
-                item.setToolTip(ci, tip)
-        elif no_file:
-            bg_unsaved = QColor(255, 245, 180)
-            no_file_tip = "该零件尚未保存到磁盘，质量特性数据可能不完整。"
-            for ci in range(len(self._columns)):
-                item.setBackground(ci, bg_unsaved)
-                item.setToolTip(ci, no_file_tip)
-        elif node_type in ("产品", "部件"):
-            bg = QColor(240, 242, 245)
-            for ci in range(len(self._columns)):
-                item.setBackground(ci, bg)
+        self._apply_row_state_style(item, row_data)
 
         # 排除状态：覆盖背景色、设置斜体灰色前景
         is_excluded = bool(row_data.get("_excluded", False))
@@ -1790,9 +1750,9 @@ class MassPropsDialog(QDialog):
             getattr(self, attr).setText("—")
 
     def _update_summary_labels(self, result: dict) -> None:
-        unit_lbl     = self._weight_unit_label()
-        inertia_unit = self._inertia_unit_label()
-        cog_unit     = self._cog_unit_label()
+        unit_lbl     = self._mass_unit
+        inertia_unit = self._inertia_unit
+        cog_unit     = self._cog_unit
 
         w_val = result.get("total_weight", 0.0)
         self._edit_weight.setText(f"{self._fmt_mass_val(w_val)} {unit_lbl}")
@@ -2135,19 +2095,6 @@ class MassPropsDialog(QDialog):
                 break
         return indices
 
-    def _delete_rows(self, row_idx: int) -> None:
-        """删除 row_idx 行及其全部子孙行，并立即重新计算汇总结果。
-
-        删除完成后调用 _rebuild_columns_and_table() 整体重建表格，
-        再调用 _calculate() 刷新底部汇总数值。
-        当合并了多个分总成时，根节点（Level=0）同样可被删除，以便移除某个
-        不需要的分总成；若删除后列表为空则直接清空表格。
-
-        级联删除：若被删除的行拥有关联对称件（_mirror_child_id），
-        同时删除对应的对称件行（_is_mirror=True，_mirror_id 匹配）。
-        """
-        self._delete_rows_multi([row_idx])
-
     def _delete_rows_multi(self, root_idxs: list[int]) -> None:
         """删除多个根行（及各自全部子孙行），一次重建表格并刷新汇总。
 
@@ -2197,15 +2144,6 @@ class MassPropsDialog(QDialog):
 
         self._rebuild_columns_and_table()
         self._calculate()
-
-    def _toggle_excluded(self, row_idx: int) -> None:
-        """切换 row_idx 行（及其子孙行）的"参与计算"状态。
-
-        若当前行被排除则恢复参与；若当前行参与则标记为排除。
-        产品/部件行同步其子树内全部行，以保证子树整体进入/退出计算。
-        切换完成后局部更新 QTreeWidgetItem 的视觉样式，并立即重新计算。
-        """
-        self._toggle_excluded_multi([row_idx])
 
     def _toggle_excluded_multi(self, row_idxs: list[int]) -> None:
         """批量切换多个行（及各自子孙行）的"参与计算"状态。
@@ -2355,7 +2293,7 @@ class MassPropsDialog(QDialog):
         插入后重建表格并重新计算汇总。
         """
         mirror_id = uuid.uuid4().hex
-        # 在源行上标记其对称件 ID（供 _delete_rows 级联删除用）
+        # 在源行上标记其对称件 ID（供 _delete_rows_multi 级联删除用）
         self._rows[row_idx]["_mirror_child_id"] = mirror_id
 
         mirror_row = self._make_mirror_row(row_idx)
@@ -2551,43 +2489,52 @@ class MassPropsDialog(QDialog):
 
             # 恢复时重新应用该行原有的背景（异常/产品/正常等状态）
             if not excluded:
-                r_data = self._rows[r_idx]
-                not_found   = bool(r_data.get("_not_found"))
-                meas_failed = bool(r_data.get("_meas_failed"))
-                unreadable  = bool(r_data.get("_unreadable"))
-                no_file     = bool(r_data.get("_no_file"))
-                node_type   = str(r_data.get("Type", ""))
-                is_mirror   = bool(r_data.get("_is_mirror"))
-                row_locked  = unreadable or not_found or meas_failed or is_mirror
-                if is_mirror:
-                    for ci in range(len(self._columns)):
-                        item.setBackground(ci, _MIRROR_BG_COLOR)
-                        item.setToolTip(ci, _MIRROR_TOOLTIP)
-                elif row_locked:
-                    grey = QColor(160, 160, 160)
-                    if not_found:
-                        bg  = QColor(255, 205, 205)
-                        tip = "该零件/装配体的文件未被CATIA检索到，行内容不可编辑。"
-                    elif meas_failed:
-                        bg  = QColor(255, 210, 160)
-                        tip = "该零件的质量特性测量失败，行内容不可编辑。"
-                    else:
-                        bg  = QColor(245, 245, 245)
-                        tip = "该零件/装配体处于轻量化模式，无法读取属性。"
-                    for ci in range(len(self._columns)):
-                        item.setForeground(ci, grey)
-                        item.setBackground(ci, bg)
-                        item.setToolTip(ci, tip)
-                elif no_file:
-                    bg_unsaved = QColor(255, 245, 180)
-                    no_file_tip = "该零件尚未保存到磁盘，质量特性数据可能不完整。"
-                    for ci in range(len(self._columns)):
-                        item.setBackground(ci, bg_unsaved)
-                        item.setToolTip(ci, no_file_tip)
-                elif node_type in ("产品", "部件"):
-                    bg = QColor(240, 242, 245)
-                    for ci in range(len(self._columns)):
-                        item.setBackground(ci, bg)
+                self._apply_row_state_style(item, self._rows[r_idx])
+
+    def _apply_row_state_style(self, item: QTreeWidgetItem, row_data: dict) -> None:
+        """根据行状态设置 item 的背景色和 tooltip。
+
+        覆盖以下状态：对称件（浅蓝）、锁定行（not_found/meas_failed/unreadable）、
+        未保存（no_file）、产品/部件（淡灰）。
+        不处理"排除"状态，该状态由 _apply_excluded_style_impl 单独管理。
+        """
+        not_found   = bool(row_data.get("_not_found"))
+        meas_failed = bool(row_data.get("_meas_failed"))
+        unreadable  = bool(row_data.get("_unreadable"))
+        no_file     = bool(row_data.get("_no_file"))
+        node_type   = str(row_data.get("Type", ""))
+        is_mirror   = bool(row_data.get("_is_mirror"))
+        row_locked  = unreadable or not_found or meas_failed or is_mirror
+        col_count   = len(self._columns)
+        if is_mirror:
+            for ci in range(col_count):
+                item.setBackground(ci, _MIRROR_BG_COLOR)
+                item.setToolTip(ci, _MIRROR_TOOLTIP)
+        elif row_locked:
+            grey = ROW_LOCKED_FG
+            if not_found:
+                bg  = ROW_NOT_FOUND_BG
+                tip = "该零件/装配体的文件未被CATIA检索到，行内容不可编辑。"
+            elif meas_failed:
+                bg  = ROW_MEAS_FAILED_BG
+                tip = "该零件的质量特性测量失败，行内容不可编辑。"
+            else:
+                bg  = ROW_LIGHTWEIGHT_BG
+                tip = "该零件/装配体处于轻量化模式，无法读取属性。"
+            for ci in range(col_count):
+                item.setForeground(ci, grey)
+                item.setBackground(ci, bg)
+                item.setToolTip(ci, tip)
+        elif no_file:
+            bg_unsaved = ROW_UNSAVED_BG
+            no_file_tip = "该零件尚未保存到磁盘，质量特性数据可能不完整。"
+            for ci in range(col_count):
+                item.setBackground(ci, bg_unsaved)
+                item.setToolTip(ci, no_file_tip)
+        elif node_type in ("产品", "部件"):
+            bg = ROW_PRODUCT_BG
+            for ci in range(col_count):
+                item.setBackground(ci, bg)
 
     # ── 右键上下文菜单 ─────────────────────────────────────────────────────
 
@@ -2797,13 +2744,6 @@ class MassPropsDialog(QDialog):
 
     # ── 重新读取质量特性 ────────────────────────────────────────────────────
 
-    def _reread_mass_props_for_row(self, row_idx: int) -> None:
-        """重新从 CATIA 读取指定行（及所有同零件编号行）的质量特性。
-
-        委托 _reread_mass_props_for_rows 处理，保持接口不变。
-        """
-        self._reread_mass_props_for_rows([row_idx])
-
     def _reread_mass_props_for_rows(self, row_idxs: list[int]) -> None:
         """批量重新从 CATIA 读取多个零件行的质量特性，最后统一刷新。
 
@@ -2913,8 +2853,8 @@ class MassPropsDialog(QDialog):
             self._is_updating = False
 
         # ── 重新计算产品/部件汇总行并刷新底部计算结果 ──────────────────
-        recompute_product_rows(self._rows)
-        self._refresh_product_items()
+        # recompute_product_rows / _refresh_product_items 由 _calculate() 内部
+        # 在 _sync_all_mirrors() 之后统一调用，此处无需提前调用。
         self._rollup_result = None
         self._clear_summary_labels()
         self._calculate()

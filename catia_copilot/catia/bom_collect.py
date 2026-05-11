@@ -140,10 +140,12 @@ def collect_bom_rows(
 
         if not_found:
             # No backing file: skip all property reads to avoid redundant
-            # DEBUG messages.  Properties will be empty; mark as unreadable.
+            # DEBUG messages.  Properties will be empty strings.
+            # Note: _not_found and _unreadable are mutually exclusive —
+            # _unreadable is reserved for lightweight/visualization-mode nodes
+            # where the mode switch (apply_work_mode) fails.
             props = {col: "" for col in columns}
-            props["_is_readable"] = False
-            is_readable = False
+            props["_is_readable"] = True
         elif not cached:
             # Performance optimization: Check current work mode before switching
             # to avoid unnecessary DESIGN_MODE transitions (costly COM calls)

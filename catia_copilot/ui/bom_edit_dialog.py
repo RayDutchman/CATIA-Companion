@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QProgressDialog, QRadioButton, QButtonGroup,
     QMenu, QWidgetAction, QLineEdit,
 )
-from PySide6.QtGui import QPixmap, QColor, QKeySequence, QCloseEvent, QDesktopServices, QShortcut
+from PySide6.QtGui import QPixmap, QKeySequence, QCloseEvent, QDesktopServices, QShortcut
 from PySide6.QtCore import Qt, QSettings, QByteArray, QUrl
 
 from catia_copilot.constants import (
@@ -45,13 +45,15 @@ from catia_copilot.ui.bom_catia_helpers import (
 )
 from catia_copilot.ui.bom_widgets import _BomTreeDelegate, _BomTreeWidget, _ITEM_LOCKED_ROLE, _BomSortItem
 from catia_copilot.ui.bom_file_rename_dialog import _FileRenameDialog
+from catia_copilot.ui.ui_colors import (
+    MODIFIED_FG          as _MODIFIED_FG,
+    MODIFIED_COMBO_STYLE as _MODIFIED_COMBO_STYLE,
+    ROW_LOCKED_FG, ROW_NOT_FOUND_BG, ROW_LIGHTWEIGHT_BG, ROW_UNSAVED_BG,
+)
 
 logger = logging.getLogger(__name__)
 
-# ── 已修改但未写回CATIA的字段视觉样式 ─────────────────────────────────────────
-_MODIFIED_FG         = QColor("#b85c00")                          # 深橙色前景（文本单元格）
-_MODIFIED_COMBO_STYLE = "QComboBox { font-weight: bold; color: #b85c00; }"  # 下拉框样式
-_MAX_HISTORY         = 10                                         # 撤销/重做最大步数
+_MAX_HISTORY = 10  # 撤销/重做最大步数
 
 
 class BomEditDialog(QDialog):
@@ -907,8 +909,8 @@ class BomEditDialog(QDialog):
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
                 item.setData(0, _ITEM_LOCKED_ROLE, False)
             else:
-                grey = QColor(160, 160, 160)
-                bg   = QColor(255, 205, 205) if not_found else QColor(245, 245, 245)
+                grey = ROW_LOCKED_FG
+                bg   = ROW_NOT_FOUND_BG if not_found else ROW_LIGHTWEIGHT_BG
                 item.setData(0, _ITEM_LOCKED_ROLE, True)
                 for ci in range(len(self._columns)):
                     item.setForeground(ci, grey)
@@ -923,7 +925,7 @@ class BomEditDialog(QDialog):
 
             # _no_file 行（文件未保存到磁盘）：不锁定，但以淡黄背景和专属提示标识
             if no_file:
-                bg_unsaved = QColor(255, 245, 180)
+                bg_unsaved = ROW_UNSAVED_BG
                 no_file_tip = "该零件尚未保存到磁盘，可通过右键菜单「另存为」将其保存。"
                 for ci in range(len(self._columns)):
                     item.setBackground(ci, bg_unsaved)

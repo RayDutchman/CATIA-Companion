@@ -1,10 +1,11 @@
 """BOM 树控件：自定义委托与带连接线的 QTreeWidget。"""
 
 from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem, QStyledItemDelegate
-from PySide6.QtGui import QColor, QPen, QPainter
+from PySide6.QtGui import QPen, QPainter
 from PySide6.QtCore import Qt
 
 from catia_copilot.constants import BOM_READONLY_COLUMNS
+from catia_copilot.ui.ui_colors import WIDGET_LINE_COLOR
 
 # 自定义 UserRole 用于 QTreeWidgetItem：标记行为锁定（不可读/未找到）
 _ITEM_LOCKED_ROLE: int = Qt.ItemDataRole.UserRole + 1
@@ -61,7 +62,7 @@ class _BomTreeWidget(QTreeWidget):
     （基于绝对视口坐标，以确保垂直导向线在连续行之间保持相位一致）。
     """
 
-    _LINE_COLOR = QColor("#a0aab4")
+    _LINE_COLOR = WIDGET_LINE_COLOR
 
     def drawBranches(self, painter: QPainter, rect, index) -> None:
         # 首先调用父类的 drawBranches，让 Qt 绘制默认的展开/折叠箭头指示器。
