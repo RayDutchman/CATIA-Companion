@@ -1842,13 +1842,25 @@ class BomEditDialog(QDialog):
             if self._modified_keys:
                 return
 
-        # 根据源文件建议默认文件名
+        # 根据根产品零件编号建议默认文件名（格式：<零件编号>_BOM 或 <零件编号>_汇总BOM）
+        suffix_hint = "_汇总BOM" if self._summarize else "_BOM"
+        root_pn = str(self._rows[0].get("Part Number", "")).strip() if self._rows else ""
+        # 去除在各操作系统文件名中不合法的字符
+        _invalid_chars = r'\/:*?"<>|'
+        safe_stem = "".join(c if c not in _invalid_chars else "_" for c in root_pn)
+        base_name = (safe_stem + suffix_hint) if safe_stem else ""
+
         initial_name = ""
-        if not self._use_active_chk.isChecked():
-            fp_src = self._file_edit.text().strip()
-            if fp_src:
-                suffix_hint = "_汇总BOM" if self._summarize else "_BOM"
-                initial_name = str(Path(fp_src).with_name(Path(fp_src).stem + suffix_hint))
+        if base_name:
+            # 尝试沿用源文件所在目录（仅在使用文件模式时）
+            if not self._use_active_chk.isChecked():
+                fp_src = self._file_edit.text().strip()
+                if fp_src:
+                    initial_name = str(Path(fp_src).with_name(base_name))
+                else:
+                    initial_name = base_name
+            else:
+                initial_name = base_name
 
         dest, selected_filter = QFileDialog.getSaveFileName(
             self,
