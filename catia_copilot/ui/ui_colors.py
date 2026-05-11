@@ -10,8 +10,7 @@
   ──────────── ──────────────────── ─────────────────────────────────────────
   深橙（前景） MODIFIED_FG          字段已在 UI 中修改但尚未写回 CATIA
   中灰（前景） ROW_LOCKED_FG        行处于锁定状态（_not_found / _unreadable /
-                                   _meas_failed，或 BOM 中 not_found /
-                                   is_lightweight）时，叠加于行背景色之上
+                                   _meas_failed）时，叠加于行背景色之上
   红           ROW_NOT_FOUND_BG     row_data["_not_found"] = True
                                    （文件未被 CATIA 检索到）
   灰           ROW_LIGHTWEIGHT_BG   row_data["_unreadable"] = True
