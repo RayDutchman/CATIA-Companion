@@ -2555,11 +2555,17 @@ class MassPropsDialog(QDialog):
 
             menu.addSeparator()
             act_add_mirror = menu.addAction("增加对称件")
-            # 仅对单选非对称件的零件/产品/部件行有效；对称件自身不可再次对称
+            # 仅对单选非对称件的零件/产品/部件行有效；对称件自身不可再次对称；
+            # 同一行已有对称件（_mirror_child_id 已设置）时也不允许重复添加。
+            already_has_mirror = bool(
+                is_single
+                and self._rows[clicked_row_idx].get("_mirror_child_id")
+            )
             mirror_eligible = (
                 is_single
                 and (is_part or is_product or is_component)
                 and not is_mirror
+                and not already_has_mirror
             )
             act_add_mirror.setEnabled(mirror_eligible)
 
