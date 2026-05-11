@@ -16,9 +16,9 @@ from PySide6.QtWidgets import (
     QPushButton, QTreeWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QCheckBox, QGroupBox, QMessageBox, QApplication,
     QFileDialog, QProgressDialog, QRadioButton, QButtonGroup,
-    QMenu, QWidgetAction, QLineEdit, QGridLayout, QShortcut,
+    QMenu, QWidgetAction, QLineEdit, QGridLayout, 
 )
-from PySide6.QtGui import QPixmap, QColor, QKeySequence, QCloseEvent, QDesktopServices
+from PySide6.QtGui import QPixmap, QColor, QKeySequence, QCloseEvent, QDesktopServices, QShortcut
 from PySide6.QtCore import Qt, QSettings, QByteArray, QUrl
 
 from catia_copilot.constants import (
@@ -94,7 +94,7 @@ class BomEditDialog(QDialog):
             c for c in saved_visible if c in PRESET_USER_REF_PROPERTIES
         ]
 
-        # 可显示/隐藏的标准列（品名、版本、定义、来源）
+        # 可显示/隐藏的标准列（术语、版本、定义、来源）
         saved_hideable = self._edit_settings.value("visible_hideable_columns", BOM_HIDEABLE_COLUMNS)
         if isinstance(saved_hideable, str):
             saved_hideable = [saved_hideable]
@@ -275,7 +275,7 @@ class BomEditDialog(QDialog):
         grid_layout.addWidget(self._filepath_chk, 0, col)
         col += 1
 
-        # 可隐藏标准列（品名、版本、定义、来源）
+        # 可隐藏标准列（术语、版本、定义、来源）
         for col_name in BOM_HIDEABLE_COLUMNS:
             cb = QCheckBox(BOM_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
             cb.setChecked(col_name in self._visible_hideable_cols)
@@ -302,7 +302,7 @@ class BomEditDialog(QDialog):
         filter_row.setSpacing(6)
         filter_row.addWidget(QLabel("筛选:"))
         self._filter_edit = QLineEdit()
-        self._filter_edit.setPlaceholderText("按零件编号、品名、文件名等关键字搜索行…")
+        self._filter_edit.setPlaceholderText("按零件编号、术语、文件名等关键字搜索行…")
         self._filter_edit.setClearButtonEnabled(True)
         self._filter_edit.textChanged.connect(self._on_filter_changed)
         filter_row.addWidget(self._filter_edit)
@@ -641,7 +641,7 @@ class BomEditDialog(QDialog):
         self._rebuild_columns_and_repopulate()
 
     def _on_hideable_col_toggled(self) -> None:
-        """处理可隐藏列复选框切换（品名、版本、定义、来源）。"""
+        """处理可隐藏列复选框切换（术语、版本、定义、来源）。"""
         self._visible_hideable_cols = [
             name for name, cb in self._preset_checkboxes.items()
             if name in BOM_HIDEABLE_COLUMNS and cb.isChecked()
