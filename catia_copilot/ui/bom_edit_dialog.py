@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QPushButton, QTreeWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QCheckBox, QGroupBox, QMessageBox, QApplication,
     QFileDialog, QProgressDialog, QRadioButton, QButtonGroup,
-    QMenu, QWidgetAction, QLineEdit, QGridLayout, 
+    QMenu, QWidgetAction, QLineEdit, QGridLayout,
 )
 from PySide6.QtGui import QPixmap, QColor, QKeySequence, QCloseEvent, QDesktopServices, QShortcut
 from PySide6.QtCore import Qt, QSettings, QByteArray, QUrl
@@ -1846,8 +1846,8 @@ class BomEditDialog(QDialog):
         suffix_hint = "_汇总BOM" if self._summarize else "_BOM"
         root_pn = str(self._rows[0].get("Part Number", "")).strip() if self._rows else ""
         # 去除在各操作系统文件名中不合法的字符
-        _invalid_chars = r'\/:*?"<>|'
-        safe_stem = "".join(c if c not in _invalid_chars else "_" for c in root_pn)
+        invalid_chars = r'\/:*?"<>|'
+        safe_stem = "".join(c if c not in invalid_chars else "_" for c in root_pn)
         base_name = (safe_stem + suffix_hint) if safe_stem else ""
 
         initial_name = ""
