@@ -1155,7 +1155,15 @@ class BomEditDialog(QDialog):
                 if r_pn in self._canonical_data:
                     old_vals[r_pn] = self._canonical_data[r_pn].get(col_name, "")
                     self._canonical_data[r_pn][col_name] = new_value
-                    self._modified_keys.setdefault(r_pn, set()).add(col_name)
+                    # 若新值与快照（CATIA当前值）相同，则清除脏标记；否则标为已修改
+                    snap_val = self._snapshot_data.get(r_pn, {}).get(col_name, "")
+                    if new_value != snap_val:
+                        self._modified_keys.setdefault(r_pn, set()).add(col_name)
+                    else:
+                        if r_pn in self._modified_keys:
+                            self._modified_keys[r_pn].discard(col_name)
+                            if not self._modified_keys[r_pn]:
+                                del self._modified_keys[r_pn]
 
         # 性能优化：使用零件编号→树形项索引，避免全树遍历
         self._is_updating = True
