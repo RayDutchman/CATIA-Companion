@@ -984,7 +984,15 @@ class BomEditDialog(QDialog):
             if pn in self._canonical_data:
                 old_vals[pn] = self._canonical_data[pn].get("Source", "")
                 self._canonical_data[pn]["Source"] = text
-                self._modified_keys.setdefault(pn, set()).add("Source")
+                # 若新值与快照（CATIA当前值）相同，则清除脏标记；否则标为已修改
+                snap_val = self._snapshot_data.get(pn, {}).get("Source", "")
+                if text != snap_val:
+                    self._modified_keys.setdefault(pn, set()).add("Source")
+                else:
+                    if pn in self._modified_keys:
+                        self._modified_keys[pn].discard("Source")
+                        if not self._modified_keys[pn]:
+                            del self._modified_keys[pn]
 
         # 性能优化：使用零件编号→树形项索引，避免全树遍历
         self._is_updating = True
@@ -1036,7 +1044,15 @@ class BomEditDialog(QDialog):
             if pn in self._canonical_data:
                 old_vals[pn] = self._canonical_data[pn].get(col_name, "")
                 self._canonical_data[pn][col_name] = text
-                self._modified_keys.setdefault(pn, set()).add(col_name)
+                # 若新值与快照（CATIA当前值）相同，则清除脏标记；否则标为已修改
+                snap_val = self._snapshot_data.get(pn, {}).get(col_name, "")
+                if text != snap_val:
+                    self._modified_keys.setdefault(pn, set()).add(col_name)
+                else:
+                    if pn in self._modified_keys:
+                        self._modified_keys[pn].discard(col_name)
+                        if not self._modified_keys[pn]:
+                            del self._modified_keys[pn]
 
         # 性能优化：使用零件编号→树形项索引，避免全树遍历
         self._is_updating = True
