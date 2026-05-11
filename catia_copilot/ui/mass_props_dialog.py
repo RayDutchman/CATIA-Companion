@@ -2455,7 +2455,14 @@ class MassPropsDialog(QDialog):
                             vis_item.setText(ci, self._fmt_mass_val(mirror_row.get("Weight")))
                         elif col == "Density":
                             d_val = mirror_row.get("Density")
-                            vis_item.setText(ci, _fmt(d_val) if d_val is not None and d_val >= 0 else "—")
+                            src_type = str(src_row.get("Type", "零件"))
+                            if d_val is None:
+                                d_text = "" if src_type in ("产品", "部件") else "—"
+                            elif d_val < 0:
+                                d_text = "不统一"
+                            else:
+                                d_text = _fmt(d_val)
+                            vis_item.setText(ci, d_text)
                         elif col in _COG_IDX:
                             cog_i = _COG_IDX[col]
                             raw = rmp["cog"][cog_i] if rmp else mirror_row.get(col)
