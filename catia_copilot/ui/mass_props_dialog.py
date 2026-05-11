@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QPushButton, QTreeWidgetItem, QHeaderView, QAbstractItemView,
     QCheckBox, QGroupBox, QMessageBox, QApplication,
     QFileDialog, QProgressDialog, QLineEdit, QGridLayout, QFrame,
-    QRadioButton, QButtonGroup, QWidget, QComboBox,
+    QRadioButton, QButtonGroup, QWidget,
     QStyledItemDelegate, QMenu,
 )
 from PySide6.QtGui import QBrush, QColor, QFont
@@ -46,7 +46,7 @@ from catia_copilot.catia.mass_props_collect import (
     _compute_root_mp_from_placement, _rollup_one_product,
 )
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
-from catia_copilot.ui.bom_widgets import _BomTreeWidget
+from catia_copilot.ui.bom_widgets import _BomTreeWidget, _BomSortItem
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +70,6 @@ _COG_IDX: dict[str, int] = {"CogX": 0, "CogY": 1, "CogZ": 2}
 _UNIT_SENSITIVE_COLUMNS: tuple[str, ...] = (
     "Weight",
 ) + tuple(_INERTIA_IDX.keys()) + ("CogX", "CogY", "CogZ")
-_SUMMARY_SORT_COLUMNS: list[str] = [
-    "Part Number", "Nomenclature", "Revision", "Filename", "Quantity", "Weight",
-    "CogX", "CogY", "CogZ",
-]
 
 # 数值格式化：判断"接近整数"的绝对容差（用于 _fmt / _fmt_scaled）
 _INTEGER_ABS_TOL: float = 1e-9
@@ -196,11 +192,6 @@ class MassPropsDialog(QDialog):
 
         # ── 忽略隐藏节点 ──────────────────────────────────────────────────────
         self._skip_hidden: bool = self._settings.value("skip_hidden", False, type=bool)
-
-        # ── 汇总BOM专用选项 ───────────────────────────────────────────────────
-        self._summary_sort_column: str = self._settings.value(
-            "summary_sort_column", ""
-        )
 
         # ── 内部状态 ──────────────────────────────────────────────────────
         self._rows: list[dict] = []
@@ -405,7 +396,7 @@ class MassPropsDialog(QDialog):
         opts_main.setSpacing(4)
         opts_main.setContentsMargins(8, 6, 8, 6)
 
-        # ── 第一行：BOM类型 ｜ 读取模式 ｜ 显示列 ──────────────────────────
+        # ── 第一行：BOM类型 ｜ 读取模式 ｜ 忽略隐藏 ──────────────────────────
         row1 = QHBoxLayout()
         row1.setSpacing(6)
 
@@ -462,21 +453,6 @@ class MassPropsDialog(QDialog):
         _sep2.setFrameShadow(QFrame.Shadow.Sunken)
         row1.addSpacing(4); row1.addWidget(_sep2); row1.addSpacing(4)
 
-        # 显示列
-        row1.addWidget(QLabel("显示列:"))
-        self._hid_col_checks: dict[str, QCheckBox] = {}
-        for col_name in MASS_PROPS_HIDEABLE_COLUMNS:
-            cb = QCheckBox(MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
-            cb.setChecked(col_name in self._visible_hideable_cols)
-            cb.setProperty("col_name", col_name)
-            cb.toggled.connect(self._on_col_visibility_changed)
-            row1.addWidget(cb)
-            self._hid_col_checks[col_name] = cb
-
-        _sep3 = QFrame(); _sep3.setFrameShape(QFrame.Shape.VLine)
-        _sep3.setFrameShadow(QFrame.Shadow.Sunken)
-        row1.addSpacing(4); row1.addWidget(_sep3); row1.addSpacing(4)
-
         # 忽略隐藏节点
         self._skip_hidden_chk = QCheckBox("忽略隐藏的节点")
         self._skip_hidden_chk.setChecked(self._skip_hidden)
@@ -489,7 +465,7 @@ class MassPropsDialog(QDialog):
         row1.addStretch()
         opts_main.addLayout(row1)
 
-        # ── 第二行：重量单位 ｜ 长度单位 ｜ 惯量单位（4选1）｜ 汇总BOM排序列 ──
+        # ── 第二行：重量单位 ｜ 长度单位 ｜ 惯量单位（4选1）｜ 显示列 ──
         row2 = QHBoxLayout()
         row2.setSpacing(6)
 
@@ -547,27 +523,16 @@ class MassPropsDialog(QDialog):
         _sep5.setFrameShadow(QFrame.Shadow.Sunken)
         row2.addSpacing(4); row2.addWidget(_sep5); row2.addSpacing(4)
 
-        # 汇总BOM专用选项（排序列）
-        self._summary_opts_widget = QWidget()
-        summary_opts_layout = QHBoxLayout(self._summary_opts_widget)
-        summary_opts_layout.setContentsMargins(0, 0, 0, 0)
-        summary_opts_layout.setSpacing(6)
-        summary_opts_layout.addWidget(QLabel("排序列:"))
-        self._sort_col_combo = QComboBox()
-        self._sort_col_combo.addItem("（不排序）", "")
-        for col in _SUMMARY_SORT_COLUMNS:
-            # 排序列下拉框只显示列名，不含单位后缀（单位随用户设置变化，与排序无关）
-            display = MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col, col)
-            display = display.split(" (")[0]  # 去掉 " (单位)" 后缀
-            self._sort_col_combo.addItem(display, col)
-        saved_sort_idx = self._sort_col_combo.findData(self._summary_sort_column)
-        if saved_sort_idx >= 0:
-            self._sort_col_combo.setCurrentIndex(saved_sort_idx)
-        self._sort_col_combo.currentIndexChanged.connect(self._on_sort_col_changed)
-        self._sort_col_combo.setMaximumHeight(24)
-        summary_opts_layout.addWidget(self._sort_col_combo)
-        self._summary_opts_widget.setVisible(self._summarize)
-        row2.addWidget(self._summary_opts_widget)
+        # 显示列
+        row2.addWidget(QLabel("显示列:"))
+        self._hid_col_checks: dict[str, QCheckBox] = {}
+        for col_name in MASS_PROPS_HIDEABLE_COLUMNS:
+            cb = QCheckBox(MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
+            cb.setChecked(col_name in self._visible_hideable_cols)
+            cb.setProperty("col_name", col_name)
+            cb.toggled.connect(self._on_col_visibility_changed)
+            row2.addWidget(cb)
+            self._hid_col_checks[col_name] = cb
 
         row2.addStretch()
         opts_main.addLayout(row2)
@@ -779,7 +744,6 @@ class MassPropsDialog(QDialog):
     def _on_bom_type_changed(self, checked: bool) -> None:
         self._summarize = self._radio_summ.isChecked()
         self._settings.setValue("summarize", self._summarize)
-        self._summary_opts_widget.setVisible(self._summarize)
         self._bom_desc_lbl.setText(self._bom_desc_text())
         self._rebuild_columns_and_table()
 
@@ -826,13 +790,6 @@ class MassPropsDialog(QDialog):
         self._settings.setValue("visible_hideable_cols",
                                 list(self._visible_hideable_cols))
         self._rebuild_columns_and_table()
-
-    def _on_sort_col_changed(self, _index: int) -> None:
-        col = self._sort_col_combo.currentData()
-        self._summary_sort_column = col or ""
-        self._settings.setValue("summary_sort_column", self._summary_sort_column)
-        if self._summarize and self._rows:
-            self._populate_table()
 
     def _rebuild_columns_and_table(self) -> None:
         """重建列列表并重新填充表格（保留列宽）。"""
@@ -1225,17 +1182,6 @@ class MassPropsDialog(QDialog):
         # 类型过滤作为保险：上方循环已只处理零件/对称件行，此处过滤冗余但保留以防万一
         result = [r for r in result if r.get("Type") in ("零件", "对称件")]
 
-        # 按排序列排序（数值列按数值升序，字符串列按字典序升序）
-        if self._summary_sort_column:
-            col = self._summary_sort_column
-            result.sort(
-                key=lambda r: (
-                    (0, float(r.get(col, 0)), "")
-                    if isinstance(r.get(col), (int, float))
-                    else (1, 0.0, str(r.get(col, "") or "").lower())
-                )
-            )
-
         return result
 
     # ── 填充表格 ───────────────────────────────────────────────────────────
@@ -1262,12 +1208,15 @@ class MassPropsDialog(QDialog):
         self._table.blockSignals(False)
         self._is_updating = False
 
+        # 汇总模式：启用表头点击排序；层级模式：禁用（保持树结构）
+        self._table.setSortingEnabled(self._summarize)
+
     def _make_item(self, row_idx: int, row_data: dict) -> QTreeWidgetItem:
         """构建并填充一行的 QTreeWidgetItem。
 
         row_idx: 对应的 self._rows 索引（汇总模式用 _rows_idx 字段）。
         """
-        item = QTreeWidgetItem()
+        item = _BomSortItem()
         item.setData(0, _ROW_IDX_ROLE, row_idx)
 
         pn          = str(row_data.get("Part Number", ""))
