@@ -300,10 +300,8 @@ class MassPropsDialog(QDialog):
     def _fmt_scaled(value, factor: float) -> str:
         """将原始 SI 值乘以换算因子后格式化为字符串。
 
-        委托给模块级 _fmt()，乘以换算因子后的格式化规则与 _fmt() 完全一致。
-        None → '—'；整数值（误差 < _INTEGER_ABS_TOL）→ 无小数位；
-        |v| ≥ 1e5 或绝对值极小（0 < |v| < 0.001）→ 科学计数法；
-        其余 → 保留三位小数。
+        None → '—'；数值格式化规则与模块级 _fmt() 完全一致（委托调用）；
+        乘法本身若抛出 TypeError/ValueError 则回退为 str(value)。
         """
         if value is None:
             return "—"
