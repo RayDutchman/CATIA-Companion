@@ -25,11 +25,11 @@ from PySide6.QtWidgets import (
     QPushButton, QTreeWidgetItem, QHeaderView, QAbstractItemView,
     QCheckBox, QGroupBox, QMessageBox, QApplication,
     QFileDialog, QProgressDialog, QLineEdit, QGridLayout, QFrame,
-    QRadioButton, QButtonGroup, QWidget,
+    QRadioButton, QButtonGroup, QWidget, QComboBox,
     QStyledItemDelegate, QMenu,
 )
-from PySide6.QtGui import QBrush, QColor, QFont
-from PySide6.QtCore import Qt, QSettings, QByteArray
+from PySide6.QtGui import QBrush, QColor, QFont, QDesktopServices, QShortcut, QKeySequence
+from PySide6.QtCore import Qt, QSettings, QByteArray, QUrl
 
 from catia_copilot.constants import (
     MASS_PROPS_COLUMNS,
@@ -203,6 +203,10 @@ class MassPropsDialog(QDialog):
         self._rollup_result: dict | None = None
         self._loaded: bool = False
         self._col_widths: dict[str, int] = {}
+        # 未保存到磁盘的编辑标志（标题栏 * 指示符）
+        self._is_dirty: bool = False
+        # 筛选/搜索框当前文本（小写后的模式串）
+        self._filter_text: str = ""
 
         # 按钮引用（_build_ui 中赋值，此处声明以供类型提示）
         self._append_data_btn: QPushButton
@@ -519,18 +523,16 @@ class MassPropsDialog(QDialog):
         _sep4.setFrameShadow(QFrame.Shadow.Sunken)
         row2.addSpacing(4); row2.addWidget(_sep4); row2.addSpacing(4)
 
-        # 惯量单位（4 选 1，独立）
+        # 惯量单位（4 选 1，独立）— QComboBox 节省水平空间
         _IU = ("g\u00b7mm\u00b2", "g\u00b7m\u00b2", "kg\u00b7mm\u00b2", "kg\u00b7m\u00b2")
-        self._inertia_unit_group = QButtonGroup(self)
-        self._radio_inertia: dict[str, QRadioButton] = {}
-        row2.addWidget(QLabel("惯量:"))
+        self._inertia_combo = QComboBox()
         for iu in _IU:
-            rb = QRadioButton(iu)
-            rb.setChecked(self._inertia_unit == iu)
-            self._inertia_unit_group.addButton(rb)
-            rb.toggled.connect(self._on_inertia_unit_changed)
-            row2.addWidget(rb)
-            self._radio_inertia[iu] = rb
+            self._inertia_combo.addItem(iu)
+        self._inertia_combo.setCurrentText(self._inertia_unit)
+        self._inertia_combo.setToolTip("选择转动惯量的显示单位")
+        self._inertia_combo.currentTextChanged.connect(self._on_inertia_unit_changed)
+        row2.addWidget(QLabel("惯量:"))
+        row2.addWidget(self._inertia_combo)
 
         _sep5 = QFrame(); _sep5.setFrameShape(QFrame.Shape.VLine)
         _sep5.setFrameShadow(QFrame.Shadow.Sunken)
@@ -560,6 +562,18 @@ class MassPropsDialog(QDialog):
             " border-radius: 4px; padding: 4px 8px; color: #2B4C7E; font-size: 11px; }"
         )
         layout.addWidget(self._bom_desc_lbl)
+
+        # ── 搜索筛选框（Ctrl+F） ──────────────────────────────────────────────
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(6)
+        filter_row.addWidget(QLabel("筛选:"))
+        self._filter_edit = QLineEdit()
+        self._filter_edit.setPlaceholderText("按零件编号、文件名、术语等关键字搜索行… (Ctrl+F)")
+        self._filter_edit.setClearButtonEnabled(True)
+        self._filter_edit.textChanged.connect(self._on_filter_changed)
+        filter_row.addWidget(self._filter_edit)
+        layout.addLayout(filter_row)
+        QShortcut(QKeySequence("Ctrl+F"), self, self._focus_filter)
 
         # ── 树形表格 ────────────────────────────────────────────────────────
         self._table = _BomTreeWidget()
@@ -755,6 +769,58 @@ class MassPropsDialog(QDialog):
             self._last_browse_dir = str(Path(file).parent)
             self._settings.setValue("last_browse_dir", self._last_browse_dir)
 
+    # ── 标题栏脏标志 ────────────────────────────────────────────────────────
+
+    def _update_title(self) -> None:
+        """在标题栏末尾追加 ' *' 表示有未保存到磁盘的编辑；清除则恢复原标题。"""
+        base = "重量、重心、惯量统计"
+        self.setWindowTitle(f"{base} *" if self._is_dirty else base)
+
+    # ── 搜索筛选 ───────────────────────────────────────────────────────────
+
+    def _focus_filter(self) -> None:
+        """将输入焦点移至搜索框（Ctrl+F）。"""
+        self._filter_edit.setFocus()
+        self._filter_edit.selectAll()
+
+    def _on_filter_changed(self, text: str) -> None:
+        """搜索框文本变化时，重新过滤表格中的行。"""
+        self._filter_text = text.strip().lower()
+        self._apply_filter()
+
+    def _apply_filter(self) -> None:
+        """根据 _filter_text 显示/隐藏树形控件中的各行。"""
+        pattern = self._filter_text
+        root = self._table.invisibleRootItem()
+        for i in range(root.childCount()):
+            self._apply_filter_to_item(root.child(i), pattern)
+
+    def _apply_filter_to_item(self, item: QTreeWidgetItem, pattern: str) -> bool:
+        """递归地对 *item* 及其子项应用过滤。
+
+        返回 True 表示该项或其任意后代匹配 *pattern*，
+        同时设置 item.setHidden() 的可见性。
+        """
+        if not pattern:
+            item.setHidden(False)
+            for i in range(item.childCount()):
+                self._apply_filter_to_item(item.child(i), pattern)
+            return True
+        self_match = self._item_matches_filter(item, pattern)
+        child_match = False
+        for i in range(item.childCount()):
+            child_match |= self._apply_filter_to_item(item.child(i), pattern)
+        visible = self_match or child_match
+        item.setHidden(not visible)
+        return visible
+
+    def _item_matches_filter(self, item: QTreeWidgetItem, pattern: str) -> bool:
+        """判断 *item* 任意列的文本是否包含 *pattern*（大小写不敏感）。"""
+        for col_idx in range(len(self._columns)):
+            if pattern in item.text(col_idx).lower():
+                return True
+        return False
+
     # ── 显示选项响应 ───────────────────────────────────────────────────────
 
     def _on_bom_type_changed(self, checked: bool) -> None:
@@ -787,11 +853,8 @@ class MassPropsDialog(QDialog):
         if self._rows:
             self._refresh_unit_display()
 
-    def _on_inertia_unit_changed(self, checked: bool) -> None:
-        for iu, rb in self._radio_inertia.items():
-            if rb.isChecked():
-                self._inertia_unit = iu
-                break
+    def _on_inertia_unit_changed(self, text: str = "") -> None:
+        self._inertia_unit = self._inertia_combo.currentText()
         self._inertia_unit_factor = self._calc_inertia_factor(self._inertia_unit)
         self._settings.setValue("inertia_unit", self._inertia_unit)
         if self._rows:
@@ -975,6 +1038,9 @@ class MassPropsDialog(QDialog):
 
         # 加载完成后自动计算汇总结果
         self._calculate()
+        # 新数据加载后重置脏标志
+        self._is_dirty = False
+        self._update_title()
 
     def _save_data_to_json(self) -> None:
         """将当前行数据保存为压缩二进制数据文件（不包含 _root_mp，可重新计算）。"""
@@ -1005,6 +1071,9 @@ class MassPropsDialog(QDialog):
             save_rows(self._rows, dest)
             self._last_browse_dir = str(Path(dest).parent)
             self._settings.setValue("last_browse_dir", self._last_browse_dir)
+            # 保存成功后清除脏标志
+            self._is_dirty = False
+            self._update_title()
         except Exception as e:
             logger.error(f"保存质量特性数据失败: {e}")
             QMessageBox.critical(self, "保存失败", f"保存数据时出错：\n{e}")
@@ -1267,6 +1336,10 @@ class MassPropsDialog(QDialog):
 
         # 汇总模式：启用表头点击排序；层级模式：禁用（保持树结构）
         self._table.setSortingEnabled(self._summarize)
+
+        # 保持当前搜索筛选状态
+        if self._filter_text:
+            self._apply_filter()
 
     def _make_item(self, row_idx: int, row_data: dict) -> QTreeWidgetItem:
         """构建并填充一行的 QTreeWidgetItem。
@@ -1642,6 +1715,9 @@ class MassPropsDialog(QDialog):
         # 编辑密度/重量后立即重新计算汇总结果（无需手动点击"计算"）
         # 对称件同步在 _calculate() 内部进行（_sync_all_mirrors），支持任意 Type 原件
         self._calculate()
+        # 标记为有未保存的编辑
+        self._is_dirty = True
+        self._update_title()
 
     # ── 计算 ───────────────────────────────────────────────────────────────
 
@@ -1792,10 +1868,29 @@ class MassPropsDialog(QDialog):
                 self._do_export(str(dest_path))
             self._last_browse_dir = str(dest_path.parent)
             self._settings.setValue("last_browse_dir", self._last_browse_dir)
-            QMessageBox.information(self, "导出成功", f"文件已保存到：\n{dest_path}")
+            self._show_export_success(dest_path)
         except Exception as e:
             logger.error(f"导出失败: {e}")
             QMessageBox.critical(self, "导出失败", f"导出时出错：\n{e}")
+
+    def _show_export_success(self, dest_path: Path) -> None:
+        """导出成功后弹出含"打开文件"和"打开所在文件夹"按钮的提示框。"""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("导出成功")
+        msg.setText(f"文件已成功导出：\n{dest_path}")
+        msg.setIcon(QMessageBox.Icon.Information)
+        open_file_btn   = msg.addButton("打开文件", QMessageBox.ButtonRole.ActionRole)
+        open_folder_btn = msg.addButton("打开所在文件夹", QMessageBox.ButtonRole.ActionRole)
+        msg.addButton(QMessageBox.StandardButton.Ok)
+        msg.exec()
+        clicked = msg.clickedButton()
+        if clicked == open_file_btn:
+            try:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(dest_path)))
+            except Exception as exc:
+                logger.warning(f"Failed to open exported file: {exc}")
+        elif clicked == open_folder_btn:
+            self._open_path(str(dest_path))
 
     @staticmethod
     def _row_status(row_data: dict) -> str:
