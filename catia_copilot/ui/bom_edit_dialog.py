@@ -43,7 +43,7 @@ from catia_copilot.ui.bom_catia_helpers import (
     _is_catia_com_error,
     _find_catia_doc_by_path,
 )
-from catia_copilot.ui.bom_widgets import _BomTreeDelegate, _BomTreeWidget, _ITEM_LOCKED_ROLE
+from catia_copilot.ui.bom_widgets import _BomTreeDelegate, _BomTreeWidget, _ITEM_LOCKED_ROLE, _BomSortItem
 from catia_copilot.ui.bom_file_rename_dialog import _FileRenameDialog
 
 logger = logging.getLogger(__name__)
@@ -818,7 +818,7 @@ class BomEditDialog(QDialog):
                 parent_stack.pop()
 
             parent_item = parent_stack[-1][1]
-            item = QTreeWidgetItem()
+            item = _BomSortItem()
             # 将 row_idx 存入第0列的 UserRole，用于反向查找
             item.setData(0, Qt.ItemDataRole.UserRole, row_idx)
 
