@@ -16,10 +16,10 @@ from PySide6.QtWidgets import (
     QPushButton, QTreeWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QCheckBox, QGroupBox, QMessageBox, QApplication,
     QFileDialog, QProgressDialog, QRadioButton, QButtonGroup,
-    QMenu, QWidgetAction, QLineEdit, QGridLayout
+    QMenu, QWidgetAction, QLineEdit, QGridLayout, QShortcut,
 )
-from PySide6.QtGui import QPixmap, QColor, QKeySequence
-from PySide6.QtCore import Qt, QSettings
+from PySide6.QtGui import QPixmap, QColor, QKeySequence, QCloseEvent
+from PySide6.QtCore import Qt, QSettings, QByteArray
 
 from catia_copilot.constants import (
     PRESET_USER_REF_PROPERTIES,
@@ -148,6 +148,8 @@ class BomEditDialog(QDialog):
         # 撤销/重做历史栈（最多 _MAX_HISTORY 步）；每项为若干 (pn, col_name, old_val, new_val) 元组的列表
         self._undo_stack: list[list[tuple[str, str, str, str]]] = []
         self._redo_stack: list[list[tuple[str, str, str, str]]] = []
+        # 当前搜索过滤文本（全小写）；空字符串表示无过滤
+        self._filter_text: str = ""
 
         # ── 界面布局 ──────────────────────────────────────────────────────────
         layout = QVBoxLayout(self)
@@ -166,6 +168,7 @@ class BomEditDialog(QDialog):
         self._file_browse_btn = QPushButton("浏览...")
         self._file_browse_btn.clicked.connect(self._browse_file)
         self._load_btn        = QPushButton("加载BOM")
+        self._load_btn.setToolTip("从文件或当前活动文档加载BOM（F5）")
         self._load_btn.clicked.connect(self._load_bom)
         file_row.addWidget(self._file_edit)
         file_row.addWidget(self._file_browse_btn)
@@ -294,6 +297,17 @@ class BomEditDialog(QDialog):
         preset_main_layout.addLayout(grid_layout)
         layout.addWidget(preset_group)
 
+        # 搜索过滤行（表格上方）──────────────────────────────────────────────
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(6)
+        filter_row.addWidget(QLabel("筛选:"))
+        self._filter_edit = QLineEdit()
+        self._filter_edit.setPlaceholderText("按零件编号、品名、文件名等关键字搜索行…")
+        self._filter_edit.setClearButtonEnabled(True)
+        self._filter_edit.textChanged.connect(self._on_filter_changed)
+        filter_row.addWidget(self._filter_edit)
+        layout.addLayout(filter_row)
+
         # BOM树形控件（替代 QTableWidget，原生支持展开/折叠）
         self._table = _BomTreeWidget()
         _init_headers = self._display_headers()
@@ -365,30 +379,50 @@ class BomEditDialog(QDialog):
         self._redo_btn.clicked.connect(self._redo)
         btn_row.addWidget(self._redo_btn)
 
+        # 状态标签（显示行数及待写回修改数）
+        btn_row.addSpacing(8)
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet("color: gray; font-size: 11px;")
+        btn_row.addWidget(self._status_label)
+
         btn_row.addStretch()
 
         self._export_btn = QPushButton("导出表格")
-        self._export_btn.setToolTip("将当前表格导出为 Excel（.xlsx）或 CSV 文件")
+        self._export_btn.setToolTip("将当前表格导出为 Excel（.xlsx）或 CSV 文件（Ctrl+E）")
         self._export_btn.setEnabled(False)
+        self._export_btn.setShortcut(QKeySequence("Ctrl+E"))
         self._export_btn.clicked.connect(self._export_table)
         btn_row.addWidget(self._export_btn)
 
         self._save_btn   = QPushButton("应用")
         self._save_btn.setEnabled(False)
+        self._save_btn.setToolTip("将修改写回CATIA，保持对话框不关闭（Ctrl+S）")
+        self._save_btn.setShortcut(QKeySequence("Ctrl+S"))
         self._save_btn.clicked.connect(self._apply_changes)
 
         self._finish_btn = QPushButton("完成")
         self._finish_btn.setDefault(True)
         self._finish_btn.setEnabled(False)
+        self._finish_btn.setToolTip("将修改写回CATIA，然后关闭对话框（Ctrl+Enter）")
+        self._finish_btn.setShortcut(QKeySequence("Ctrl+Return"))
         self._finish_btn.clicked.connect(self._finish_and_close)
 
         cancel_btn = QPushButton("取消")
-        cancel_btn.clicked.connect(self.reject)
+        cancel_btn.clicked.connect(self._on_cancel)
 
         btn_row.addWidget(self._save_btn)
         btn_row.addWidget(self._finish_btn)
         btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
+
+        # ── 快捷键 ────────────────────────────────────────────────────────────
+        QShortcut(QKeySequence("F5"), self, self._load_bom)
+        QShortcut(QKeySequence("Ctrl+F"), self, self._focus_filter)
+
+        # ── 恢复窗口几何（位置与尺寸）────────────────────────────────────────
+        saved_geom = self._edit_settings.value("geometry")
+        if isinstance(saved_geom, QByteArray) and not saved_geom.isEmpty():
+            self.restoreGeometry(saved_geom)
 
     # ── 文件/活动文档切换 ─────────────────────────────────────────────────────
 
@@ -938,6 +972,15 @@ class BomEditDialog(QDialog):
         self._table.blockSignals(False)
         self._is_updating = False
 
+        # 汇总模式：启用表头点击排序；层级模式：禁用（保持树结构）
+        self._table.setSortingEnabled(self._summarize)
+
+        # 若当前有过滤文本，对重新填充的行重新应用过滤
+        if self._filter_text:
+            self._apply_filter()
+
+        self._update_status()
+
     # ── 树形遍历辅助 ──────────────────────────────────────────────────────────
 
     def _iter_all_items(self):
@@ -1290,11 +1333,101 @@ class BomEditDialog(QDialog):
                                 item.setData(col_idx, Qt.ItemDataRole.FontRole, None)
         finally:
             self._is_updating = False
+        self._update_status()
 
     def _update_undo_redo_buttons(self) -> None:
         """根据撤销/重做栈的状态启用或禁用对应按钮。"""
         self._undo_btn.setEnabled(bool(self._undo_stack))
         self._redo_btn.setEnabled(bool(self._redo_stack))
+
+    def _update_status(self) -> None:
+        """刷新底部状态标签，显示总行数和待写回修改数。"""
+        if not self._bom_loaded:
+            self._status_label.setText("")
+            return
+        total = len(self._rows)
+        mod_count = sum(len(cols) for cols in self._modified_keys.values())
+        text = f"共 {total} 行"
+        if mod_count:
+            text += f" | {mod_count} 处修改待写回"
+        self._status_label.setText(text)
+
+    # ── 搜索/过滤 ─────────────────────────────────────────────────────────────
+
+    def _focus_filter(self) -> None:
+        """将输入焦点移至搜索框（Ctrl+F）。"""
+        self._filter_edit.setFocus()
+        self._filter_edit.selectAll()
+
+    def _on_filter_changed(self, text: str) -> None:
+        """搜索框文本变化时，重新过滤表格中的行。"""
+        self._filter_text = text.strip().lower()
+        self._apply_filter()
+
+    def _apply_filter(self) -> None:
+        """根据 _filter_text 显示/隐藏树形控件中的各行。"""
+        pattern = self._filter_text
+        root = self._table.invisibleRootItem()
+        for i in range(root.childCount()):
+            self._apply_filter_to_item(root.child(i), pattern)
+
+    def _apply_filter_to_item(self, item: QTreeWidgetItem, pattern: str) -> bool:
+        """递归地对 *item* 及其子项应用过滤。
+
+        返回 True 表示该项或其任意后代匹配 *pattern*，
+        同时设置 item.setHidden() 的可见性。
+        """
+        if not pattern:
+            item.setHidden(False)
+            for i in range(item.childCount()):
+                self._apply_filter_to_item(item.child(i), pattern)
+            return True
+        self_match = self._item_matches_filter(item, pattern)
+        child_match = False
+        for i in range(item.childCount()):
+            child_match |= self._apply_filter_to_item(item.child(i), pattern)
+        visible = self_match or child_match
+        item.setHidden(not visible)
+        return visible
+
+    def _item_matches_filter(self, item: QTreeWidgetItem, pattern: str) -> bool:
+        """判断 *item* 任意列的文本是否包含 *pattern*（大小写不敏感）。"""
+        for col_idx in range(len(self._columns)):
+            if pattern in item.text(col_idx).lower():
+                return True
+        return False
+
+    # ── 取消确认 / 窗口关闭 ───────────────────────────────────────────────────
+
+    def _on_cancel(self) -> None:
+        """点击"取消"时，若存在未写回的修改则先弹出确认框。"""
+        if self._modified_keys:
+            ret = QMessageBox.question(
+                self, "放弃修改",
+                "存在未写回CATIA的修改，是否放弃并关闭？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return
+        self.reject()
+
+    def done(self, result: int) -> None:
+        """保存窗口几何后执行标准关闭流程。"""
+        self._edit_settings.setValue("geometry", self.saveGeometry())
+        super().done(result)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """处理系统窗口关闭按钮（×）：有未写回修改时弹出确认框。"""
+        if self._modified_keys:
+            ret = QMessageBox.question(
+                self, "放弃修改",
+                "存在未写回CATIA的修改，是否放弃并关闭？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+        super().closeEvent(event)
 
     # ── 写回CATIA ─────────────────────────────────────────────────────────────
 
