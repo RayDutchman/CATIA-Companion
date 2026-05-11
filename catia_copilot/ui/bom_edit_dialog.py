@@ -1809,7 +1809,7 @@ class BomEditDialog(QDialog):
         # 根据根产品零件编号建议默认文件名（格式：<零件编号>_BOM 或 <零件编号>_汇总BOM）
         suffix_hint = "_汇总BOM" if self._summarize else "_BOM"
         root_pn = str(self._rows[0].get("Part Number", "")).strip() if self._rows else ""
-        # 去除在各操作系统文件名中不合法的字符
+        # 去除 Windows 文件名中不合法的字符（本工具目标平台为 Windows）
         invalid_chars = r'\/:*?"<>|'
         safe_stem = "".join(c if c not in invalid_chars else "_" for c in root_pn)
         base_name = (safe_stem + suffix_hint) if safe_stem else ""
