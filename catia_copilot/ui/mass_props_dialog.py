@@ -404,6 +404,10 @@ class MassPropsDialog(QDialog):
         self._bom_type_group = QButtonGroup(self)
         self._radio_hier = QRadioButton("层级BOM")
         self._radio_summ = QRadioButton("汇总BOM")
+        self._radio_summ.setToolTip(
+            "汇总BOM：按零件编号合并同种零件，仅显示零件行。\n"
+            "产品、部件、对称件不在此视图中显示。"
+        )
         self._radio_summ.setMinimumHeight(24)
         self._radio_hier.setChecked(not self._summarize)
         self._radio_summ.setChecked(self._summarize)
@@ -693,7 +697,10 @@ class MassPropsDialog(QDialog):
         btn_row.addWidget(self._save_json_btn)
 
         self._export_btn = QPushButton("导出表格")
-        self._export_btn.setToolTip("将当前表格（含汇总行）导出为 Excel（.xlsx）文件")
+        self._export_btn.setToolTip(
+            "将层级BOM数据（含汇总行）导出为 Excel（.xlsx）或 CSV 文件。\n"
+            "无论当前显示层级BOM还是汇总BOM，导出内容始终为层级BOM。"
+        )
         self._export_btn.setEnabled(False)
         self._export_btn.clicked.connect(self._export_table)
         btn_row.addWidget(self._export_btn)
@@ -710,7 +717,7 @@ class MassPropsDialog(QDialog):
         """返回当前 BOM 模式对应的说明文字。"""
         if self._summarize:
             return (
-                "【汇总BOM】按零件编号合并，仅列出零件（不含产品和部件）。"
+                "【汇总BOM】按零件编号合并，仅列出零件（不含产品、部件和对称件）。"
                 "Weight / CogX / CogY / CogZ / Ixx–Iyz "
                 "在零件自身坐标系下显示，与装配位置无关。"
                 "底部「汇总结果」在根产品坐标系下计算。"
@@ -1141,6 +1148,44 @@ class MassPropsDialog(QDialog):
             result.append(r)
         return result
 
+    def _build_hierarchy_columns(self) -> list[str]:
+        """返回层级BOM的列名列表（导出时始终使用，与当前显示模式无关）。"""
+        base = ["Level", "#", "Type"]
+        for c in MASS_PROPS_HIDEABLE_COLUMNS:
+            if c in self._visible_hideable_cols:
+                base.append(c)
+        base += ["Density", "Weight", "CogX", "CogY", "CogZ",
+                 "Ixx", "Iyy", "Izz", "Ixy", "Ixz", "Iyz"]
+        return base
+
+    def _get_hierarchy_rows(self) -> list[dict]:
+        """返回层级BOM行列表（导出时始终使用，与当前显示模式无关）。
+
+        与 _get_display_rows() 的非汇总分支相同：包含所有节点（零件、产品、
+        部件、对称件），使用根产品坐标系下的 COG / 惯量值。
+        """
+        result = []
+        for i, row in enumerate(self._rows):
+            r = dict(row)
+            r["_rows_idx"] = i
+            if r.get("Type") in ("零件", "对称件"):
+                rmp = r.get("_root_mp")
+                if rmp:
+                    cog = rmp.get("cog", [None, None, None])
+                    r["CogX"] = cog[0]
+                    r["CogY"] = cog[1]
+                    r["CogZ"] = cog[2]
+                    I = rmp.get("inertia")
+                    if I:
+                        r["Ixx"] = I[0][0]
+                        r["Iyy"] = I[1][1]
+                        r["Izz"] = I[2][2]
+                        r["Ixy"] = I[0][1]
+                        r["Ixz"] = I[0][2]
+                        r["Iyz"] = I[1][2]
+            result.append(r)
+        return result
+
     def _build_summary_rows(self) -> list[dict]:
         """汇总模式：将相同零件编号的行合并，增加 Quantity 字段。
 
@@ -1148,6 +1193,8 @@ class MassPropsDialog(QDialog):
         Quantity = 该 PN 在 _rows 中未被排除的实例数量。
         被排除（_excluded=True）的实例不计入数量，
         若某 PN 的全部实例均被排除，则该 PN 不出现在汇总BOM中。
+        对称件的重心/惯量依赖根产品坐标系（位置相关），无法在汇总BOM中有意义地
+        合并展示，故汇总BOM仅包含零件行，不含对称件。
         """
         seen_pn: dict[str, dict] = {}    # pn → 首次出现的未排除规范行副本
         qty: dict[str, int] = {}
@@ -1156,10 +1203,11 @@ class MassPropsDialog(QDialog):
         for i, row in enumerate(self._rows):
             if row.get("_excluded"):
                 continue
-            # 汇总BOM仅统计零件/对称件行；产品/部件不计入数量，也不占用 PN 的 seen_pn 位置，
+            # 汇总BOM仅统计零件行；产品/部件/对称件不计入数量，也不占用 PN 的 seen_pn 位置，
             # 否则产品行会成为该 PN 的"规范行"，随后被类型过滤器删除，导致该 PN 的
             # 零件实例在汇总BOM中完全消失，且数量也会被错误地计入产品实例。
-            if row.get("Type") not in ("零件", "对称件"):
+            # 对称件：其重心/惯量是位置相关量（根坐标系），在汇总上下文中无意义，故排除。
+            if row.get("Type") != "零件":
                 continue
             pn = str(row.get("Part Number", ""))
             if not pn:
@@ -1179,8 +1227,8 @@ class MassPropsDialog(QDialog):
             r["Quantity"] = qty[pn]
             result.append(r)
 
-        # 类型过滤作为保险：上方循环已只处理零件/对称件行，此处过滤冗余但保留以防万一
-        result = [r for r in result if r.get("Type") in ("零件", "对称件")]
+        # 类型过滤作为保险：上方循环已只处理零件行，此处过滤冗余但保留以防万一
+        result = [r for r in result if r.get("Type") == "零件"]
 
         return result
 
@@ -1761,8 +1809,8 @@ class MassPropsDialog(QDialog):
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
         from catia_copilot.utils import estimate_column_width
 
-        # 导出列（排除内部序号列 "#"），末尾追加 Status 列
-        export_cols = [c for c in self._columns if c != "#"] + ["Status"]
+        # 导出始终使用层级BOM（含产品/部件/对称件），排除内部序号列 "#"，末尾追加 Status 列
+        export_cols = [c for c in self._build_hierarchy_columns() if c != "#"] + ["Status"]
 
         wb  = openpyxl.Workbook()
         ws  = wb.active
@@ -1787,8 +1835,8 @@ class MassPropsDialog(QDialog):
             cell.fill   = header_fill
             cell.border = thin_border
 
-        # 写入数据行（含所有特殊状态行）
-        display_rows = self._get_display_rows()
+        # 写入数据行（始终导出层级BOM，含所有特殊状态行）
+        display_rows = self._get_hierarchy_rows()
         for ri, row_data in enumerate(display_rows, start=2):
             status_val = self._row_status(row_data)
 
@@ -1887,9 +1935,9 @@ class MassPropsDialog(QDialog):
         """将当前表格数据（含汇总行）写入 UTF-8 with BOM 的 CSV 文件。"""
         import csv
 
-        # 导出列（排除内部序号列 "#"），末尾追加 Status 列
-        export_cols = [c for c in self._columns if c != "#"] + ["Status"]
-        display_rows = self._get_display_rows()
+        # 导出始终使用层级BOM（含产品/部件/对称件），排除内部序号列 "#"，末尾追加 Status 列
+        export_cols = [c for c in self._build_hierarchy_columns() if c != "#"] + ["Status"]
+        display_rows = self._get_hierarchy_rows()
 
         def _cell_value(col_name: str, row_data: dict) -> str:
             if col_name == "Status":
