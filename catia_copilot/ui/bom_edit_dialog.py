@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QPushButton, QTreeWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QCheckBox, QGroupBox, QMessageBox, QApplication,
     QFileDialog, QProgressDialog, QRadioButton, QButtonGroup,
-    QMenu, QWidgetAction, QLineEdit, QGridLayout,
+    QMenu, QWidgetAction, QLineEdit,
 )
 from PySide6.QtGui import QPixmap, QColor, QKeySequence, QCloseEvent, QDesktopServices, QShortcut
 from PySide6.QtCore import Qt, QSettings, QByteArray, QUrl
@@ -171,7 +171,11 @@ class BomEditDialog(QDialog):
         file_row.addWidget(self._load_btn)
         layout.addLayout(file_row)
 
-        # ── BOM类型与显示选项（紧凑分组）────────────────────────────────────
+        # ── BOM类型与显示选项 ╳ 属性列（左右并排）────────────────────────────
+        groups_row = QHBoxLayout()
+        groups_row.setSpacing(8)
+
+        # ── 左侧：BOM类型与显示选项（紧凑分组）──────────────────────────────
         display_group  = QGroupBox("BOM类型与显示选项")
         display_layout = QVBoxLayout(display_group)
         display_layout.setSpacing(4)
@@ -210,7 +214,68 @@ class BomEditDialog(QDialog):
         bom_type_row.addStretch()
         display_layout.addLayout(bom_type_row)
 
-        layout.addWidget(display_group)
+        # 第二行：筛选框
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(6)
+        filter_row.addWidget(QLabel("筛选:"))
+        self._filter_edit = QLineEdit()
+        self._filter_edit.setPlaceholderText("按零件编号、术语、文件名等关键字搜索行…")
+        self._filter_edit.setClearButtonEnabled(True)
+        self._filter_edit.textChanged.connect(self._on_filter_changed)
+        filter_row.addWidget(self._filter_edit)
+        display_layout.addLayout(filter_row)
+
+        groups_row.addWidget(display_group, 0)
+
+        # ── 右侧：属性列（勾选以显示）────────────────────────────────────────
+        preset_group  = QGroupBox("属性列（勾选以显示）")
+        preset_main_layout = QVBoxLayout(preset_group)
+        preset_main_layout.setSpacing(4)
+        preset_main_layout.setContentsMargins(8, 6, 8, 6)
+
+        self._preset_checkboxes: dict[str, QCheckBox] = {}
+
+        # 第一行：文件名 + 显示完整路径 + 可隐藏标准列
+        row0 = QHBoxLayout()
+        row0.setSpacing(12)
+
+        fn_cb = QCheckBox(BOM_COLUMN_DISPLAY_NAMES.get("Filename", "Filename"))
+        fn_cb.setChecked(self._show_filename_col)
+        fn_cb.toggled.connect(self._on_preset_col_toggled)
+        row0.addWidget(fn_cb)
+        self._preset_checkboxes["Filename"] = fn_cb
+
+        self._filepath_chk = QCheckBox("显示完整路径")
+        self._filepath_chk.setToolTip("勾选后文件名列将显示文件完整路径（含目录），而非仅文件名")
+        self._filepath_chk.setChecked(self._show_filepath_col)
+        self._filepath_chk.toggled.connect(self._on_show_filepath_toggled)
+        row0.addWidget(self._filepath_chk)
+
+        for col_name in BOM_HIDEABLE_COLUMNS:
+            cb = QCheckBox(BOM_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
+            cb.setChecked(col_name in self._visible_hideable_cols)
+            cb.toggled.connect(self._on_hideable_col_toggled)
+            row0.addWidget(cb)
+            self._preset_checkboxes[col_name] = cb
+
+        row0.addStretch()
+        preset_main_layout.addLayout(row0)
+
+        # 第二行：预设用户自定义属性（物料编码、物料名称等）
+        row1 = QHBoxLayout()
+        row1.setSpacing(12)
+        for col_name in PRESET_USER_REF_PROPERTIES:
+            cb = QCheckBox(col_name)
+            cb.setChecked(col_name in self._visible_preset_cols)
+            cb.toggled.connect(self._on_preset_col_toggled)
+            row1.addWidget(cb)
+            self._preset_checkboxes[col_name] = cb
+        row1.addStretch()
+        preset_main_layout.addLayout(row1)
+
+        groups_row.addWidget(preset_group, 1)
+
+        layout.addLayout(groups_row)
 
         hint = QLabel(
             "层级 / 类型 / 数量 为结构属性，不可编辑，"
@@ -220,71 +285,6 @@ class BomEditDialog(QDialog):
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(hint)
-
-        # 预设列可见性复选框（两行网格布局，对齐列）
-        preset_group  = QGroupBox("属性列（勾选以显示）")
-        preset_main_layout = QVBoxLayout(preset_group)
-        preset_main_layout.setSpacing(8)
-        preset_main_layout.setContentsMargins(8, 6, 8, 6)
-
-        # 使用 QGridLayout 实现对齐与均匀分布
-        grid_layout = QGridLayout()
-        grid_layout.setSpacing(12)
-        grid_layout.setColumnStretch(100, 1)  # 末尾添加弹性空间
-
-        self._preset_checkboxes: dict[str, QCheckBox] = {}
-
-        # 第0行：文件名复选框 + 显示完整路径 + 可隐藏标准列
-        col = 0
-
-        # "文件名"是内置列，但可像预设列一样切换可见性
-        fn_cb = QCheckBox(BOM_COLUMN_DISPLAY_NAMES.get("Filename", "Filename"))
-        fn_cb.setChecked(self._show_filename_col)
-        fn_cb.toggled.connect(self._on_preset_col_toggled)
-        grid_layout.addWidget(fn_cb, 0, col)
-        self._preset_checkboxes["Filename"] = fn_cb
-        col += 1
-
-        # "显示完整路径"复选框紧跟文件名复选框之后
-        self._filepath_chk = QCheckBox("显示完整路径")
-        self._filepath_chk.setToolTip("勾选后文件名列将显示文件完整路径（含目录），而非仅文件名")
-        self._filepath_chk.setChecked(self._show_filepath_col)
-        self._filepath_chk.toggled.connect(self._on_show_filepath_toggled)
-        grid_layout.addWidget(self._filepath_chk, 0, col)
-        col += 1
-
-        # 可隐藏标准列（术语、版本、定义、来源）
-        for col_name in BOM_HIDEABLE_COLUMNS:
-            cb = QCheckBox(BOM_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
-            cb.setChecked(col_name in self._visible_hideable_cols)
-            cb.toggled.connect(self._on_hideable_col_toggled)
-            grid_layout.addWidget(cb, 0, col)
-            self._preset_checkboxes[col_name] = cb
-            col += 1
-
-        # 第1行：预设用户自定义属性（物料编码、物料名称等）
-        col = 0
-        for col_name in PRESET_USER_REF_PROPERTIES:
-            cb = QCheckBox(col_name)
-            cb.setChecked(col_name in self._visible_preset_cols)
-            cb.toggled.connect(self._on_preset_col_toggled)
-            grid_layout.addWidget(cb, 1, col)
-            self._preset_checkboxes[col_name] = cb
-            col += 1
-
-        preset_main_layout.addLayout(grid_layout)
-        layout.addWidget(preset_group)
-
-        # 搜索过滤行（表格上方）──────────────────────────────────────────────
-        filter_row = QHBoxLayout()
-        filter_row.setSpacing(6)
-        filter_row.addWidget(QLabel("筛选:"))
-        self._filter_edit = QLineEdit()
-        self._filter_edit.setPlaceholderText("按零件编号、术语、文件名等关键字搜索行…")
-        self._filter_edit.setClearButtonEnabled(True)
-        self._filter_edit.textChanged.connect(self._on_filter_changed)
-        filter_row.addWidget(self._filter_edit)
-        layout.addLayout(filter_row)
 
         # BOM树形控件（替代 QTableWidget，原生支持展开/折叠）
         self._table = _BomTreeWidget()
@@ -1807,8 +1807,9 @@ class BomEditDialog(QDialog):
                 return
 
         # 根据根产品零件编号建议默认文件名（格式：<零件编号>_BOM 或 <零件编号>_汇总BOM）
+        # 始终从原始层级行的第一行取根产品零件编号，不受当前汇总/层级显示模式影响
         suffix_hint = "_汇总BOM" if self._summarize else "_BOM"
-        root_pn = str(self._rows[0].get("Part Number", "")).strip() if self._rows else ""
+        root_pn = str(self._raw_rows[0].get("Part Number", "")).strip() if self._raw_rows else ""
         # 去除 Windows 文件名中不合法的字符（本工具目标平台为 Windows）
         invalid_chars = r'\/:*?"<>|'
         safe_stem = "".join(c if c not in invalid_chars else "_" for c in root_pn)
