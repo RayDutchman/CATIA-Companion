@@ -2849,8 +2849,8 @@ class MassPropsDialog(QDialog):
             self._is_updating = False
 
         # ── 重新计算产品/部件汇总行并刷新底部计算结果 ──────────────────
-        recompute_product_rows(self._rows)
-        self._refresh_product_items()
+        # recompute_product_rows / _refresh_product_items 由 _calculate() 内部
+        # 在 _sync_all_mirrors() 之后统一调用，此处无需提前调用。
         self._rollup_result = None
         self._clear_summary_labels()
         self._calculate()
