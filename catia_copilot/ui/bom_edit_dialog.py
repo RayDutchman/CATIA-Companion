@@ -106,10 +106,6 @@ class BomEditDialog(QDialog):
         self._summary_include_assemblies: bool = self._edit_settings.value(
             "summary_include_assemblies", False, type=bool
         )
-        self._summary_sort_column: str = self._edit_settings.value(
-            "summary_sort_column", "Part Number"
-        )
-
         # 包含所有预设的完整自定义列列表；从CATIA预读时覆盖所有列，不受当前可见性限制
         self._all_custom_columns: list[str] = list(dict.fromkeys(
             self._custom_columns + list(PRESET_USER_REF_PROPERTIES)
@@ -209,24 +205,6 @@ class BomEditDialog(QDialog):
         self._include_assemblies_chk.setChecked(self._summary_include_assemblies)
         self._include_assemblies_chk.toggled.connect(self._on_include_assemblies_toggled)
         summary_opts_layout.addWidget(self._include_assemblies_chk)
-        summary_opts_layout.addSpacing(8)
-        summary_opts_layout.addWidget(QLabel("排序列:"))
-        self._sort_col_combo = QComboBox()
-        _sort_cols = list(BOM_EDIT_COLUMN_ORDER) + [
-            c for c in PRESET_USER_REF_PROPERTIES if c not in BOM_EDIT_COLUMN_ORDER
-        ] + [
-            c for c in self._custom_columns
-            if c not in BOM_EDIT_COLUMN_ORDER and c not in PRESET_USER_REF_PROPERTIES
-        ]
-        for col in _sort_cols:
-            self._sort_col_combo.addItem(BOM_COLUMN_DISPLAY_NAMES.get(col, col), col)
-        sort_saved_idx = self._sort_col_combo.findData(self._summary_sort_column)
-        if sort_saved_idx >= 0:
-            self._sort_col_combo.setCurrentIndex(sort_saved_idx)
-        self._sort_col_combo.currentIndexChanged.connect(self._on_sort_col_changed)
-        self._sort_col_combo.setMaximumHeight(24)
-        summary_opts_layout.addWidget(self._sort_col_combo)
-
         self._summary_opts_widget.setVisible(self._summarize)
         bom_type_row.addWidget(self._summary_opts_widget)
         bom_type_row.addStretch()
@@ -442,7 +420,7 @@ class BomEditDialog(QDialog):
                 flatten_bom_to_summary(
                     self._raw_rows,
                     include_assemblies=self._summary_include_assemblies,
-                    sort_column=self._summary_sort_column or None,
+                    sort_column=None,
                 )
                 if summary_checked else self._raw_rows
             )
@@ -456,24 +434,10 @@ class BomEditDialog(QDialog):
             self._rows = flatten_bom_to_summary(
                 self._raw_rows,
                 include_assemblies=checked,
-                sort_column=self._summary_sort_column or None,
+                sort_column=None,
             )
             # 包含装配体时显示"类型"列；否则隐藏
             self._rebuild_columns_and_repopulate()
-
-    def _on_sort_col_changed(self, _index: int) -> None:
-        col = self._sort_col_combo.currentData()
-        if col:
-            self._summary_sort_column = col
-            self._edit_settings.setValue("summary_sort_column", col)
-            # 如有必要，对当前显示的汇总行重新排序
-            if self._summarize and self._raw_rows:
-                self._rows = flatten_bom_to_summary(
-                    self._raw_rows,
-                    include_assemblies=self._summary_include_assemblies,
-                    sort_column=col,
-                )
-                self._populate_table()
 
     # ── 表格辅助方法 ──────────────────────────────────────────────────────────
 
@@ -729,7 +693,7 @@ class BomEditDialog(QDialog):
             flatten_bom_to_summary(
                 rows,
                 include_assemblies=self._summary_include_assemblies,
-                sort_column=self._summary_sort_column or None,
+                sort_column=None,
             )
             if self._summarize else rows
         )
