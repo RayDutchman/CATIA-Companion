@@ -16,10 +16,10 @@ from PySide6.QtWidgets import (
     QPushButton, QTreeWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QCheckBox, QGroupBox, QMessageBox, QApplication,
     QFileDialog, QProgressDialog, QRadioButton, QButtonGroup,
-    QMenu, QWidgetAction, QLineEdit, QGridLayout
+    QMenu, QWidgetAction, QLineEdit,
 )
-from PySide6.QtGui import QPixmap, QColor
-from PySide6.QtCore import Qt, QSettings
+from PySide6.QtGui import QPixmap, QColor, QKeySequence, QCloseEvent, QDesktopServices, QShortcut
+from PySide6.QtCore import Qt, QSettings, QByteArray, QUrl
 
 from catia_copilot.constants import (
     PRESET_USER_REF_PROPERTIES,
@@ -43,11 +43,15 @@ from catia_copilot.ui.bom_catia_helpers import (
     _is_catia_com_error,
     _find_catia_doc_by_path,
 )
-from catia_copilot.ui.bom_widgets import _BomTreeDelegate, _BomTreeWidget, _ITEM_LOCKED_ROLE
+from catia_copilot.ui.bom_widgets import _BomTreeDelegate, _BomTreeWidget, _ITEM_LOCKED_ROLE, _BomSortItem
 from catia_copilot.ui.bom_file_rename_dialog import _FileRenameDialog
 
 logger = logging.getLogger(__name__)
 
+# ── 已修改但未写回CATIA的字段视觉样式 ─────────────────────────────────────────
+_MODIFIED_FG         = QColor("#b85c00")                          # 深橙色前景（文本单元格）
+_MODIFIED_COMBO_STYLE = "QComboBox { font-weight: bold; color: #b85c00; }"  # 下拉框样式
+_MAX_HISTORY         = 10                                         # 撤销/重做最大步数
 
 
 class BomEditDialog(QDialog):
@@ -90,7 +94,7 @@ class BomEditDialog(QDialog):
             c for c in saved_visible if c in PRESET_USER_REF_PROPERTIES
         ]
 
-        # 可显示/隐藏的标准列（品名、版本、定义、来源）
+        # 可显示/隐藏的标准列（术语、版本、定义、来源）
         saved_hideable = self._edit_settings.value("visible_hideable_columns", BOM_HIDEABLE_COLUMNS)
         if isinstance(saved_hideable, str):
             saved_hideable = [saved_hideable]
@@ -102,10 +106,6 @@ class BomEditDialog(QDialog):
         self._summary_include_assemblies: bool = self._edit_settings.value(
             "summary_include_assemblies", False, type=bool
         )
-        self._summary_sort_column: str = self._edit_settings.value(
-            "summary_sort_column", "Part Number"
-        )
-
         # 包含所有预设的完整自定义列列表；从CATIA预读时覆盖所有列，不受当前可见性限制
         self._all_custom_columns: list[str] = list(dict.fromkeys(
             self._custom_columns + list(PRESET_USER_REF_PROPERTIES)
@@ -141,6 +141,11 @@ class BomEditDialog(QDialog):
         self._pn_to_items: dict[str, list[QTreeWidgetItem]] = {}
         # 列名→像素宽度缓存；在列可见性切换时保留用户调整的列宽
         self._col_widths: dict[str, int] = {}
+        # 撤销/重做历史栈（最多 _MAX_HISTORY 步）；每项为若干 (pn, col_name, old_val, new_val) 元组的列表
+        self._undo_stack: list[list[tuple[str, str, str, str]]] = []
+        self._redo_stack: list[list[tuple[str, str, str, str]]] = []
+        # 当前搜索过滤文本（全小写）；空字符串表示无过滤
+        self._filter_text: str = ""
 
         # ── 界面布局 ──────────────────────────────────────────────────────────
         layout = QVBoxLayout(self)
@@ -159,13 +164,18 @@ class BomEditDialog(QDialog):
         self._file_browse_btn = QPushButton("浏览...")
         self._file_browse_btn.clicked.connect(self._browse_file)
         self._load_btn        = QPushButton("加载BOM")
+        self._load_btn.setToolTip("从文件或当前活动文档加载BOM（F5）")
         self._load_btn.clicked.connect(self._load_bom)
         file_row.addWidget(self._file_edit)
         file_row.addWidget(self._file_browse_btn)
         file_row.addWidget(self._load_btn)
         layout.addLayout(file_row)
 
-        # ── BOM类型与显示选项（紧凑分组）────────────────────────────────────
+        # ── BOM类型与显示选项 ╳ 属性列（左右并排）────────────────────────────
+        groups_row = QHBoxLayout()
+        groups_row.setSpacing(8)
+
+        # ── 左侧：BOM类型与显示选项（紧凑分组）──────────────────────────────
         display_group  = QGroupBox("BOM类型与显示选项")
         display_layout = QVBoxLayout(display_group)
         display_layout.setSpacing(4)
@@ -199,30 +209,73 @@ class BomEditDialog(QDialog):
         self._include_assemblies_chk.setChecked(self._summary_include_assemblies)
         self._include_assemblies_chk.toggled.connect(self._on_include_assemblies_toggled)
         summary_opts_layout.addWidget(self._include_assemblies_chk)
-        summary_opts_layout.addSpacing(8)
-        summary_opts_layout.addWidget(QLabel("排序列:"))
-        self._sort_col_combo = QComboBox()
-        _sort_cols = list(BOM_EDIT_COLUMN_ORDER) + [
-            c for c in PRESET_USER_REF_PROPERTIES if c not in BOM_EDIT_COLUMN_ORDER
-        ] + [
-            c for c in self._custom_columns
-            if c not in BOM_EDIT_COLUMN_ORDER and c not in PRESET_USER_REF_PROPERTIES
-        ]
-        for col in _sort_cols:
-            self._sort_col_combo.addItem(BOM_COLUMN_DISPLAY_NAMES.get(col, col), col)
-        sort_saved_idx = self._sort_col_combo.findData(self._summary_sort_column)
-        if sort_saved_idx >= 0:
-            self._sort_col_combo.setCurrentIndex(sort_saved_idx)
-        self._sort_col_combo.currentIndexChanged.connect(self._on_sort_col_changed)
-        self._sort_col_combo.setMaximumHeight(24)
-        summary_opts_layout.addWidget(self._sort_col_combo)
-
         self._summary_opts_widget.setVisible(self._summarize)
         bom_type_row.addWidget(self._summary_opts_widget)
         bom_type_row.addStretch()
         display_layout.addLayout(bom_type_row)
 
-        layout.addWidget(display_group)
+        # 第二行：筛选框
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(6)
+        filter_row.addWidget(QLabel("筛选:"))
+        self._filter_edit = QLineEdit()
+        self._filter_edit.setPlaceholderText("按零件编号、术语、文件名等关键字搜索行…")
+        self._filter_edit.setClearButtonEnabled(True)
+        self._filter_edit.textChanged.connect(self._on_filter_changed)
+        filter_row.addWidget(self._filter_edit)
+        display_layout.addLayout(filter_row)
+
+        groups_row.addWidget(display_group, 0)
+
+        # ── 右侧：属性列（勾选以显示）────────────────────────────────────────
+        preset_group  = QGroupBox("属性列（勾选以显示）")
+        preset_main_layout = QVBoxLayout(preset_group)
+        preset_main_layout.setSpacing(4)
+        preset_main_layout.setContentsMargins(8, 6, 8, 6)
+
+        self._preset_checkboxes: dict[str, QCheckBox] = {}
+
+        # 第一行：文件名 + 显示完整路径 + 可隐藏标准列
+        row0 = QHBoxLayout()
+        row0.setSpacing(12)
+
+        fn_cb = QCheckBox(BOM_COLUMN_DISPLAY_NAMES.get("Filename", "Filename"))
+        fn_cb.setChecked(self._show_filename_col)
+        fn_cb.toggled.connect(self._on_preset_col_toggled)
+        row0.addWidget(fn_cb)
+        self._preset_checkboxes["Filename"] = fn_cb
+
+        self._filepath_chk = QCheckBox("显示完整路径")
+        self._filepath_chk.setToolTip("勾选后文件名列将显示文件完整路径（含目录），而非仅文件名")
+        self._filepath_chk.setChecked(self._show_filepath_col)
+        self._filepath_chk.toggled.connect(self._on_show_filepath_toggled)
+        row0.addWidget(self._filepath_chk)
+
+        for col_name in BOM_HIDEABLE_COLUMNS:
+            cb = QCheckBox(BOM_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
+            cb.setChecked(col_name in self._visible_hideable_cols)
+            cb.toggled.connect(self._on_hideable_col_toggled)
+            row0.addWidget(cb)
+            self._preset_checkboxes[col_name] = cb
+
+        row0.addStretch()
+        preset_main_layout.addLayout(row0)
+
+        # 第二行：预设用户自定义属性（物料编码、物料名称等）
+        row1 = QHBoxLayout()
+        row1.setSpacing(12)
+        for col_name in PRESET_USER_REF_PROPERTIES:
+            cb = QCheckBox(col_name)
+            cb.setChecked(col_name in self._visible_preset_cols)
+            cb.toggled.connect(self._on_preset_col_toggled)
+            row1.addWidget(cb)
+            self._preset_checkboxes[col_name] = cb
+        row1.addStretch()
+        preset_main_layout.addLayout(row1)
+
+        groups_row.addWidget(preset_group, 1)
+
+        layout.addLayout(groups_row)
 
         hint = QLabel(
             "层级 / 类型 / 数量 为结构属性，不可编辑，"
@@ -232,60 +285,6 @@ class BomEditDialog(QDialog):
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(hint)
-
-        # 预设列可见性复选框（两行网格布局，对齐列）
-        preset_group  = QGroupBox("属性列（勾选以显示）")
-        preset_main_layout = QVBoxLayout(preset_group)
-        preset_main_layout.setSpacing(8)
-        preset_main_layout.setContentsMargins(8, 6, 8, 6)
-
-        # 使用 QGridLayout 实现对齐与均匀分布
-        grid_layout = QGridLayout()
-        grid_layout.setSpacing(12)
-        grid_layout.setColumnStretch(100, 1)  # 末尾添加弹性空间
-
-        self._preset_checkboxes: dict[str, QCheckBox] = {}
-
-        # 第0行：文件名复选框 + 显示完整路径 + 可隐藏标准列
-        col = 0
-
-        # "文件名"是内置列，但可像预设列一样切换可见性
-        fn_cb = QCheckBox(BOM_COLUMN_DISPLAY_NAMES.get("Filename", "Filename"))
-        fn_cb.setChecked(self._show_filename_col)
-        fn_cb.toggled.connect(self._on_preset_col_toggled)
-        grid_layout.addWidget(fn_cb, 0, col)
-        self._preset_checkboxes["Filename"] = fn_cb
-        col += 1
-
-        # "显示完整路径"复选框紧跟文件名复选框之后
-        self._filepath_chk = QCheckBox("显示完整路径")
-        self._filepath_chk.setToolTip("勾选后文件名列将显示文件完整路径（含目录），而非仅文件名")
-        self._filepath_chk.setChecked(self._show_filepath_col)
-        self._filepath_chk.toggled.connect(self._on_show_filepath_toggled)
-        grid_layout.addWidget(self._filepath_chk, 0, col)
-        col += 1
-
-        # 可隐藏标准列（品名、版本、定义、来源）
-        for col_name in BOM_HIDEABLE_COLUMNS:
-            cb = QCheckBox(BOM_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
-            cb.setChecked(col_name in self._visible_hideable_cols)
-            cb.toggled.connect(self._on_hideable_col_toggled)
-            grid_layout.addWidget(cb, 0, col)
-            self._preset_checkboxes[col_name] = cb
-            col += 1
-
-        # 第1行：预设用户自定义属性（物料编码、物料名称等）
-        col = 0
-        for col_name in PRESET_USER_REF_PROPERTIES:
-            cb = QCheckBox(col_name)
-            cb.setChecked(col_name in self._visible_preset_cols)
-            cb.toggled.connect(self._on_preset_col_toggled)
-            grid_layout.addWidget(cb, 1, col)
-            self._preset_checkboxes[col_name] = cb
-            col += 1
-
-        preset_main_layout.addLayout(grid_layout)
-        layout.addWidget(preset_group)
 
         # BOM树形控件（替代 QTableWidget，原生支持展开/折叠）
         self._table = _BomTreeWidget()
@@ -341,30 +340,67 @@ class BomEditDialog(QDialog):
         self._rename_file_btn.setEnabled(False)
         self._rename_file_btn.clicked.connect(self._rename_selected_file)
         btn_row.addWidget(self._rename_file_btn)
+
+        self._undo_btn = QPushButton("↶")
+        self._undo_btn.setAccessibleName("撤销")
+        self._undo_btn.setToolTip("撤销上一步字段编辑（Ctrl+Z）")
+        self._undo_btn.setShortcut(QKeySequence("Ctrl+Z"))
+        self._undo_btn.setEnabled(False)
+        self._undo_btn.clicked.connect(self._undo)
+        btn_row.addWidget(self._undo_btn)
+
+        self._redo_btn = QPushButton("↷")
+        self._redo_btn.setAccessibleName("重做")
+        self._redo_btn.setToolTip("重做上一步撤销的编辑（Ctrl+Y）")
+        self._redo_btn.setShortcut(QKeySequence("Ctrl+Y"))
+        self._redo_btn.setEnabled(False)
+        self._redo_btn.clicked.connect(self._redo)
+        btn_row.addWidget(self._redo_btn)
+
+        # 状态标签（显示行数及待写回修改数）
+        btn_row.addSpacing(8)
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet("color: gray; font-size: 11px;")
+        btn_row.addWidget(self._status_label)
+
         btn_row.addStretch()
 
         self._export_btn = QPushButton("导出表格")
-        self._export_btn.setToolTip("将当前表格导出为 Excel（.xlsx）或 CSV 文件")
+        self._export_btn.setToolTip("将当前表格导出为 Excel（.xlsx）或 CSV 文件（Ctrl+E）")
         self._export_btn.setEnabled(False)
+        self._export_btn.setShortcut(QKeySequence("Ctrl+E"))
         self._export_btn.clicked.connect(self._export_table)
         btn_row.addWidget(self._export_btn)
 
         self._save_btn   = QPushButton("应用")
         self._save_btn.setEnabled(False)
+        self._save_btn.setToolTip("将修改写回CATIA，保持对话框不关闭（Ctrl+S）")
+        self._save_btn.setShortcut(QKeySequence("Ctrl+S"))
         self._save_btn.clicked.connect(self._apply_changes)
 
         self._finish_btn = QPushButton("完成")
         self._finish_btn.setDefault(True)
         self._finish_btn.setEnabled(False)
+        self._finish_btn.setToolTip("将修改写回CATIA，然后关闭对话框（Ctrl+Enter）")
+        self._finish_btn.setShortcut(QKeySequence("Ctrl+Return"))
         self._finish_btn.clicked.connect(self._finish_and_close)
 
         cancel_btn = QPushButton("取消")
-        cancel_btn.clicked.connect(self.reject)
+        cancel_btn.clicked.connect(self._on_cancel)
 
         btn_row.addWidget(self._save_btn)
         btn_row.addWidget(self._finish_btn)
         btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
+
+        # ── 快捷键 ────────────────────────────────────────────────────────────
+        QShortcut(QKeySequence("F5"), self, self._load_bom)
+        QShortcut(QKeySequence("Ctrl+F"), self, self._focus_filter)
+
+        # ── 恢复窗口几何（位置与尺寸）────────────────────────────────────────
+        saved_geom = self._edit_settings.value("geometry")
+        if isinstance(saved_geom, QByteArray) and not saved_geom.isEmpty():
+            self.restoreGeometry(saved_geom)
 
     # ── 文件/活动文档切换 ─────────────────────────────────────────────────────
 
@@ -384,7 +420,7 @@ class BomEditDialog(QDialog):
                 flatten_bom_to_summary(
                     self._raw_rows,
                     include_assemblies=self._summary_include_assemblies,
-                    sort_column=self._summary_sort_column or None,
+                    sort_column=None,
                 )
                 if summary_checked else self._raw_rows
             )
@@ -398,24 +434,10 @@ class BomEditDialog(QDialog):
             self._rows = flatten_bom_to_summary(
                 self._raw_rows,
                 include_assemblies=checked,
-                sort_column=self._summary_sort_column or None,
+                sort_column=None,
             )
             # 包含装配体时显示"类型"列；否则隐藏
             self._rebuild_columns_and_repopulate()
-
-    def _on_sort_col_changed(self, _index: int) -> None:
-        col = self._sort_col_combo.currentData()
-        if col:
-            self._summary_sort_column = col
-            self._edit_settings.setValue("summary_sort_column", col)
-            # 如有必要，对当前显示的汇总行重新排序
-            if self._summarize and self._raw_rows:
-                self._rows = flatten_bom_to_summary(
-                    self._raw_rows,
-                    include_assemblies=self._summary_include_assemblies,
-                    sort_column=col,
-                )
-                self._populate_table()
 
     # ── 表格辅助方法 ──────────────────────────────────────────────────────────
 
@@ -583,7 +605,7 @@ class BomEditDialog(QDialog):
         self._rebuild_columns_and_repopulate()
 
     def _on_hideable_col_toggled(self) -> None:
-        """处理可隐藏列复选框切换（品名、版本、定义、来源）。"""
+        """处理可隐藏列复选框切换（术语、版本、定义、来源）。"""
         self._visible_hideable_cols = [
             name for name, cb in self._preset_checkboxes.items()
             if name in BOM_HIDEABLE_COLUMNS and cb.isChecked()
@@ -671,7 +693,7 @@ class BomEditDialog(QDialog):
             flatten_bom_to_summary(
                 rows,
                 include_assemblies=self._summary_include_assemblies,
-                sort_column=self._summary_sort_column or None,
+                sort_column=None,
             )
             if self._summarize else rows
         )
@@ -698,6 +720,10 @@ class BomEditDialog(QDialog):
 
         self._snapshot_data  = copy.deepcopy(self._canonical_data)
         self._modified_keys.clear()
+        # 加载新BOM时清空撤销/重做历史
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        self._update_undo_redo_buttons()
 
         # 刷新前按列名保存当前列宽
         if self._bom_loaded:
@@ -756,7 +782,7 @@ class BomEditDialog(QDialog):
                 parent_stack.pop()
 
             parent_item = parent_stack[-1][1]
-            item = QTreeWidgetItem()
+            item = _BomSortItem()
             # 将 row_idx 存入第0列的 UserRole，用于反向查找
             item.setData(0, Qt.ItemDataRole.UserRole, row_idx)
 
@@ -887,27 +913,37 @@ class BomEditDialog(QDialog):
                 for ci in range(len(self._columns)):
                     item.setForeground(ci, grey)
                     item.setBackground(ci, bg)
-                fn_col = self._columns.index("Filename") if "Filename" in self._columns else -1
-                if fn_col >= 0:
-                    tip = (
-                        "该零件/装配体的文件未被CATIA检索到，行内容不可编辑。"
-                        if not_found else
-                        "该零件/装配体处于轻量化模式，无法读取属性。"
-                    )
-                    item.setToolTip(fn_col, tip)
+                tip = (
+                    "该零件/装配体的文件未被CATIA检索到，行内容不可编辑。"
+                    if not_found else
+                    "该零件/装配体处于轻量化模式，无法读取属性。"
+                )
+                for ci in range(len(self._columns)):
+                    item.setToolTip(ci, tip)
 
             # _no_file 行（文件未保存到磁盘）：不锁定，但以淡黄背景和专属提示标识
             if no_file:
-                fn_col = self._columns.index("Filename") if "Filename" in self._columns else -1
                 bg_unsaved = QColor(255, 245, 180)
+                no_file_tip = "该零件尚未保存到磁盘，可通过右键菜单「另存为」将其保存。"
                 for ci in range(len(self._columns)):
                     item.setBackground(ci, bg_unsaved)
-                if fn_col >= 0:
-                    item.setToolTip(fn_col, "该零件尚未保存到磁盘，可通过右键菜单「另存为」将其保存。")
+                    item.setToolTip(ci, no_file_tip)
 
         self._table.expandAll()
+        # 为已有修改的字段恢复视觉标记（例如重新填充表格后）
+        if self._modified_keys:
+            self._refresh_pns_appearance(set(self._modified_keys.keys()))
         self._table.blockSignals(False)
         self._is_updating = False
+
+        # 汇总模式：启用表头点击排序；层级模式：禁用（保持树结构）
+        self._table.setSortingEnabled(self._summarize)
+
+        # 若当前有过滤文本，对重新填充的行重新应用过滤
+        if self._filter_text:
+            self._apply_filter()
+
+        self._update_status()
 
     # ── 树形遍历辅助 ──────────────────────────────────────────────────────────
 
@@ -942,10 +978,21 @@ class BomEditDialog(QDialog):
             if pn:
                 pns_to_update.add(pn)
 
+        # 记录旧值以支持撤销
+        old_vals: dict[str, str] = {}
         for pn in pns_to_update:
             if pn in self._canonical_data:
+                old_vals[pn] = self._canonical_data[pn].get("Source", "")
                 self._canonical_data[pn]["Source"] = text
-                self._modified_keys.setdefault(pn, set()).add("Source")
+                # 若新值与快照（CATIA当前值）相同，则清除脏标记；否则标为已修改
+                snap_val = self._snapshot_data.get(pn, {}).get("Source", "")
+                if text != snap_val:
+                    self._modified_keys.setdefault(pn, set()).add("Source")
+                else:
+                    if pn in self._modified_keys:
+                        self._modified_keys[pn].discard("Source")
+                        if not self._modified_keys[pn]:
+                            del self._modified_keys[pn]
 
         # 性能优化：使用零件编号→树形项索引，避免全树遍历
         self._is_updating = True
@@ -958,6 +1005,16 @@ class BomEditDialog(QDialog):
                         combo.setCurrentText(text)
                         combo.blockSignals(False)
         self._is_updating = False
+
+        # 推入撤销栈并刷新视觉状态
+        undo_actions = [
+            (pn, "Source", old_vals[pn], text)
+            for pn in pns_to_update
+            if pn in old_vals and old_vals[pn] != text
+        ]
+        if undo_actions:
+            self._push_undo(undo_actions)
+        self._refresh_pns_appearance(pns_to_update)
 
     # ── 用户自定义选项列变更 ──────────────────────────────────────────────────
 
@@ -981,10 +1038,21 @@ class BomEditDialog(QDialog):
             if pn:
                 pns_to_update.add(pn)
 
+        # 记录旧值以支持撤销
+        old_vals: dict[str, str] = {}
         for pn in pns_to_update:
             if pn in self._canonical_data:
+                old_vals[pn] = self._canonical_data[pn].get(col_name, "")
                 self._canonical_data[pn][col_name] = text
-                self._modified_keys.setdefault(pn, set()).add(col_name)
+                # 若新值与快照（CATIA当前值）相同，则清除脏标记；否则标为已修改
+                snap_val = self._snapshot_data.get(pn, {}).get(col_name, "")
+                if text != snap_val:
+                    self._modified_keys.setdefault(pn, set()).add(col_name)
+                else:
+                    if pn in self._modified_keys:
+                        self._modified_keys[pn].discard(col_name)
+                        if not self._modified_keys[pn]:
+                            del self._modified_keys[pn]
 
         # 性能优化：使用零件编号→树形项索引，避免全树遍历
         self._is_updating = True
@@ -997,6 +1065,16 @@ class BomEditDialog(QDialog):
                         combo.setCurrentText(text)
                         combo.blockSignals(False)
         self._is_updating = False
+
+        # 推入撤销栈并刷新视觉状态
+        undo_actions = [
+            (pn, col_name, old_vals[pn], text)
+            for pn in pns_to_update
+            if pn in old_vals and old_vals[pn] != text
+        ]
+        if undo_actions:
+            self._push_undo(undo_actions)
+        self._refresh_pns_appearance(pns_to_update)
 
     # ── 普通单元格编辑 ────────────────────────────────────────────────────────
 
@@ -1083,14 +1161,25 @@ class BomEditDialog(QDialog):
         }
         direct_rows = selected_row_indices if row_idx in selected_row_indices else {row_idx}
 
+        # 记录旧值并应用变更
+        old_vals: dict[str, str] = {}
         pns_to_update: set[str] = set()
         for r in direct_rows:
             r_pn = str(self._rows[r].get("Part Number", ""))
             if r_pn:
                 pns_to_update.add(r_pn)
                 if r_pn in self._canonical_data:
+                    old_vals[r_pn] = self._canonical_data[r_pn].get(col_name, "")
                     self._canonical_data[r_pn][col_name] = new_value
-                    self._modified_keys.setdefault(r_pn, set()).add(col_name)
+                    # 若新值与快照（CATIA当前值）相同，则清除脏标记；否则标为已修改
+                    snap_val = self._snapshot_data.get(r_pn, {}).get(col_name, "")
+                    if new_value != snap_val:
+                        self._modified_keys.setdefault(r_pn, set()).add(col_name)
+                    else:
+                        if r_pn in self._modified_keys:
+                            self._modified_keys[r_pn].discard(col_name)
+                            if not self._modified_keys[r_pn]:
+                                del self._modified_keys[r_pn]
 
         # 性能优化：使用零件编号→树形项索引，避免全树遍历
         self._is_updating = True
@@ -1100,6 +1189,233 @@ class BomEditDialog(QDialog):
                     if other_item.text(col_idx) != new_value:
                         other_item.setText(col_idx, new_value)
         self._is_updating = False
+
+        # 推入撤销栈并刷新视觉状态
+        undo_actions = [
+            (r_pn, col_name, old_vals[r_pn], new_value)
+            for r_pn in pns_to_update
+            if r_pn in old_vals and old_vals[r_pn] != new_value
+        ]
+        if undo_actions:
+            self._push_undo(undo_actions)
+        self._refresh_pns_appearance(pns_to_update)
+
+    # ── 撤销/重做 ─────────────────────────────────────────────────────────────
+
+    def _push_undo(self, actions: list[tuple[str, str, str, str]]) -> None:
+        """将一组字段变更推入撤销栈（最多保留 _MAX_HISTORY 步）。
+
+        Args:
+            actions: 每项为 ``(pn, col_name, old_val, new_val)``。
+        """
+        if not actions:
+            return
+        self._undo_stack.append(actions)
+        if len(self._undo_stack) > _MAX_HISTORY:
+            self._undo_stack.pop(0)
+        self._redo_stack.clear()
+        self._update_undo_redo_buttons()
+
+    def _undo(self) -> None:
+        """撤销最近一步字段变更。"""
+        if not self._undo_stack:
+            return
+        actions = self._undo_stack.pop()
+        self._apply_field_changes(actions, forward=False)
+        self._redo_stack.append(actions)
+        self._update_undo_redo_buttons()
+
+    def _redo(self) -> None:
+        """重做最近一步撤销的字段变更。"""
+        if not self._redo_stack:
+            return
+        actions = self._redo_stack.pop()
+        self._apply_field_changes(actions, forward=True)
+        self._undo_stack.append(actions)
+        self._update_undo_redo_buttons()
+
+    def _apply_field_changes(self, actions: list[tuple[str, str, str, str]], *, forward: bool) -> None:
+        """将一组字段变更应用到规范数据和界面。
+
+        Args:
+            actions: 每项为 ``(pn, col_name, old_val, new_val)``。
+            forward: ``True`` 应用 new_val（重做），``False`` 应用 old_val（撤销）。
+        """
+        pns_affected: set[str] = set()
+        self._is_updating = True
+        try:
+            for pn, col_name, old_val, new_val in actions:
+                value = new_val if forward else old_val
+                if pn not in self._canonical_data:
+                    continue
+
+                self._canonical_data[pn][col_name] = value
+
+                # 根据快照决定字段是否仍为脏状态
+                snap_val = self._snapshot_data.get(pn, {}).get(col_name, "")
+                if value != snap_val:
+                    self._modified_keys.setdefault(pn, set()).add(col_name)
+                else:
+                    if pn in self._modified_keys:
+                        self._modified_keys[pn].discard(col_name)
+                        if not self._modified_keys[pn]:
+                            del self._modified_keys[pn]
+
+                # 更新界面中所有关联该零件编号的单元格
+                col_idx = self._columns.index(col_name) if col_name in self._columns else -1
+                if col_idx >= 0:
+                    for item in self._pn_to_items.get(pn, []):
+                        widget = self._table.itemWidget(item, col_idx)
+                        if isinstance(widget, QComboBox):
+                            widget.blockSignals(True)
+                            widget.setCurrentText(value)
+                            widget.blockSignals(False)
+                        else:
+                            item.setText(col_idx, value)
+
+                pns_affected.add(pn)
+        finally:
+            self._is_updating = False
+
+        if pns_affected:
+            self._refresh_pns_appearance(pns_affected)
+
+    def _refresh_pns_appearance(self, pns: set[str]) -> None:
+        """刷新指定零件编号对应所有行的已修改字段视觉标记。
+
+        已修改但未写回CATIA的字段：加粗 + 橙色前景（文本单元格）或橙色样式（下拉框）。
+        未修改字段：恢复默认外观。锁定行（文件未找到/轻量化）不受影响。
+        """
+        # 纯视觉更新（setFont/setForeground/setData role）会触发 itemChanged 信号，
+        # 进而回调 _on_item_changed 并错误地将字段重新标记为已修改。
+        # 用 _is_updating 标志屏蔽这些信号，避免循环触发。
+        self._is_updating = True
+        try:
+            for pn in pns:
+                items = self._pn_to_items.get(pn, [])
+                modified_cols = self._modified_keys.get(pn, set())
+                for item in items:
+                    if item.data(0, _ITEM_LOCKED_ROLE):
+                        continue  # 锁定行保持固定的灰色/红色样式
+                    for col_idx, col_name in enumerate(self._columns):
+                        if col_name in BOM_READONLY_COLUMNS or col_name == BOM_ROW_NUMBER_COLUMN:
+                            continue
+                        is_modified = col_name in modified_cols
+                        widget = self._table.itemWidget(item, col_idx)
+                        if isinstance(widget, QComboBox):
+                            widget.setStyleSheet(
+                                _MODIFIED_COMBO_STYLE if is_modified else ""
+                            )
+                        else:
+                            if is_modified:
+                                font = item.font(col_idx)
+                                font.setBold(True)
+                                item.setFont(col_idx, font)
+                                item.setForeground(col_idx, _MODIFIED_FG)
+                            else:
+                                # 清除 ForegroundRole 和 FontRole 的自定义数据，
+                                # 让 Qt 回退到默认外观（普通字重、默认文本色）。
+                                # 注意：setForeground(QColor()) 会存储一个无效画刷而非清除角色，
+                                # 必须用 setData(..., None) 才能真正恢复默认。
+                                item.setData(col_idx, Qt.ItemDataRole.ForegroundRole, None)
+                                item.setData(col_idx, Qt.ItemDataRole.FontRole, None)
+        finally:
+            self._is_updating = False
+        self._update_status()
+
+    def _update_undo_redo_buttons(self) -> None:
+        """根据撤销/重做栈的状态启用或禁用对应按钮。"""
+        self._undo_btn.setEnabled(bool(self._undo_stack))
+        self._redo_btn.setEnabled(bool(self._redo_stack))
+
+    def _update_status(self) -> None:
+        """刷新底部状态标签，显示总行数和待写回修改数。"""
+        if not self._bom_loaded:
+            self._status_label.setText("")
+            return
+        total = len(self._rows)
+        mod_count = sum(len(cols) for cols in self._modified_keys.values())
+        text = f"共 {total} 行"
+        if mod_count:
+            text += f" | {mod_count} 处修改待写回"
+        self._status_label.setText(text)
+
+    # ── 搜索/过滤 ─────────────────────────────────────────────────────────────
+
+    def _focus_filter(self) -> None:
+        """将输入焦点移至搜索框（Ctrl+F）。"""
+        self._filter_edit.setFocus()
+        self._filter_edit.selectAll()
+
+    def _on_filter_changed(self, text: str) -> None:
+        """搜索框文本变化时，重新过滤表格中的行。"""
+        self._filter_text = text.strip().lower()
+        self._apply_filter()
+
+    def _apply_filter(self) -> None:
+        """根据 _filter_text 显示/隐藏树形控件中的各行。"""
+        pattern = self._filter_text
+        root = self._table.invisibleRootItem()
+        for i in range(root.childCount()):
+            self._apply_filter_to_item(root.child(i), pattern)
+
+    def _apply_filter_to_item(self, item: QTreeWidgetItem, pattern: str) -> bool:
+        """递归地对 *item* 及其子项应用过滤。
+
+        返回 True 表示该项或其任意后代匹配 *pattern*，
+        同时设置 item.setHidden() 的可见性。
+        """
+        if not pattern:
+            item.setHidden(False)
+            for i in range(item.childCount()):
+                self._apply_filter_to_item(item.child(i), pattern)
+            return True
+        self_match = self._item_matches_filter(item, pattern)
+        child_match = False
+        for i in range(item.childCount()):
+            child_match |= self._apply_filter_to_item(item.child(i), pattern)
+        visible = self_match or child_match
+        item.setHidden(not visible)
+        return visible
+
+    def _item_matches_filter(self, item: QTreeWidgetItem, pattern: str) -> bool:
+        """判断 *item* 任意列的文本是否包含 *pattern*（大小写不敏感）。"""
+        for col_idx in range(len(self._columns)):
+            if pattern in item.text(col_idx).lower():
+                return True
+        return False
+
+    # ── 取消确认 / 窗口关闭 ───────────────────────────────────────────────────
+
+    def _on_cancel(self) -> None:
+        """点击"取消"时，若存在未写回的修改则先弹出确认框。"""
+        if self._modified_keys:
+            ret = QMessageBox.question(
+                self, "放弃修改",
+                "存在未写回CATIA的修改，是否放弃并关闭？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return
+        self.reject()
+
+    def done(self, result: int) -> None:
+        """保存窗口几何后执行标准关闭流程。"""
+        self._edit_settings.setValue("geometry", self.saveGeometry())
+        super().done(result)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """处理系统窗口关闭按钮（×）：有未写回修改时弹出确认框。"""
+        if self._modified_keys:
+            ret = QMessageBox.question(
+                self, "放弃修改",
+                "存在未写回CATIA的修改，是否放弃并关闭？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+        super().closeEvent(event)
 
     # ── 写回CATIA ─────────────────────────────────────────────────────────────
 
@@ -1472,6 +1788,10 @@ class BomEditDialog(QDialog):
                 if not self._modified_keys[pn]:
                     del self._modified_keys[pn]
 
+        # 刷新已写回字段的视觉标记（清除橙色高亮）
+        pns_written = {pn_remap.get(cp, cp) for cp in dirty_data.keys()}
+        self._refresh_pns_appearance(pns_written)
+
         self._save_btn.setEnabled(True)
         self._finish_btn.setEnabled(True)
 
@@ -1510,13 +1830,26 @@ class BomEditDialog(QDialog):
             if self._modified_keys:
                 return
 
-        # 根据源文件建议默认文件名
+        # 根据根产品零件编号建议默认文件名（格式：<零件编号>_BOM 或 <零件编号>_汇总BOM）
+        # 始终从原始层级行的第一行取根产品零件编号，不受当前汇总/层级显示模式影响
+        suffix_hint = "_汇总BOM" if self._summarize else "_BOM"
+        root_pn = str(self._raw_rows[0].get("Part Number", "")).strip() if self._raw_rows else ""
+        # 去除 Windows 文件名中不合法的字符（本工具目标平台为 Windows）
+        invalid_chars = r'\/:*?"<>|'
+        safe_stem = "".join(c if c not in invalid_chars else "_" for c in root_pn)
+        base_name = (safe_stem + suffix_hint) if safe_stem else ""
+
         initial_name = ""
-        if not self._use_active_chk.isChecked():
-            fp_src = self._file_edit.text().strip()
-            if fp_src:
-                suffix_hint = "_汇总BOM" if self._summarize else "_BOM"
-                initial_name = str(Path(fp_src).with_name(Path(fp_src).stem + suffix_hint))
+        if base_name:
+            # 尝试沿用源文件所在目录（仅在使用文件模式时）
+            if not self._use_active_chk.isChecked():
+                fp_src = self._file_edit.text().strip()
+                if fp_src:
+                    initial_name = str(Path(fp_src).with_name(base_name))
+                else:
+                    initial_name = base_name
+            else:
+                initial_name = base_name
 
         dest, selected_filter = QFileDialog.getSaveFileName(
             self,
@@ -1592,7 +1925,26 @@ class BomEditDialog(QDialog):
             QMessageBox.critical(self, "导出失败", f"导出时出错：\n{e}")
             return
 
-        QMessageBox.information(self, "导出成功", f"BOM已成功导出：\n{dest_path}")
+        self._show_export_success(dest_path)
+
+    def _show_export_success(self, dest_path: Path) -> None:
+        """导出成功后弹出含"打开文件"和"打开所在文件夹"按钮的提示框。"""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("导出成功")
+        msg.setText(f"BOM已成功导出：\n{dest_path}")
+        msg.setIcon(QMessageBox.Icon.Information)
+        open_file_btn   = msg.addButton("打开文件", QMessageBox.ButtonRole.ActionRole)
+        open_folder_btn = msg.addButton("打开所在文件夹", QMessageBox.ButtonRole.ActionRole)
+        msg.addButton(QMessageBox.StandardButton.Ok)
+        msg.exec()
+        clicked = msg.clickedButton()
+        if clicked == open_file_btn:
+            try:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(dest_path)))
+            except Exception as exc:
+                logger.warning(f"Failed to open exported file: {exc}")
+        elif clicked == open_folder_btn:
+            self._open_path(str(dest_path))
 
     def _export_header(self, col_name: str) -> str:
         """返回列的显示表头字符串，与当前表格保持一致。"""
@@ -1758,6 +2110,19 @@ class BomEditDialog(QDialog):
         act_copy_path = menu.addAction("复制路径")
         act_copy_path.setEnabled(bool(fp) and not no_file)
 
+        # ── 复制单元格内容 ────────────────────────────────────────────────────
+        # 根据鼠标所在列动态获取单元格文本
+        clicked_col_idx = self._table.columnAt(pos.x())
+        cell_text: str = ""
+        if 0 <= clicked_col_idx < len(self._columns):
+            widget = self._table.itemWidget(item, clicked_col_idx)
+            if isinstance(widget, QComboBox):
+                cell_text = widget.currentText()
+            else:
+                cell_text = item.text(clicked_col_idx)
+        act_copy_cell = menu.addAction("复制单元格内容")
+        act_copy_cell.setEnabled(bool(cell_text))
+
         # ── 在CATIA中打开 ─────────────────────────────────────────────────────
         # 仅当文件在磁盘上存在且不是损坏/轻量化引用时启用。
         # 部件行共享父产品的文件路径，因此也排除在外。
@@ -1782,6 +2147,8 @@ class BomEditDialog(QDialog):
             self._open_path(fp)
         elif action == act_copy_path:
             QApplication.clipboard().setText(fp)
+        elif action == act_copy_cell:
+            QApplication.clipboard().setText(cell_text)
         elif action == act_open_catia:
             self._open_in_catia(fp)
         elif action == act_edit_path:

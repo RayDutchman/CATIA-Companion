@@ -28,8 +28,8 @@ from PySide6.QtWidgets import (
     QRadioButton, QButtonGroup, QWidget, QComboBox,
     QStyledItemDelegate, QMenu,
 )
-from PySide6.QtGui import QBrush, QColor, QFont
-from PySide6.QtCore import Qt, QSettings
+from PySide6.QtGui import QBrush, QColor, QFont, QDesktopServices, QShortcut, QKeySequence
+from PySide6.QtCore import Qt, QSettings, QByteArray, QUrl
 
 from catia_copilot.constants import (
     MASS_PROPS_COLUMNS,
@@ -46,7 +46,7 @@ from catia_copilot.catia.mass_props_collect import (
     _compute_root_mp_from_placement, _rollup_one_product,
 )
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
-from catia_copilot.ui.bom_widgets import _BomTreeWidget
+from catia_copilot.ui.bom_widgets import _BomTreeWidget, _BomSortItem
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +70,6 @@ _COG_IDX: dict[str, int] = {"CogX": 0, "CogY": 1, "CogZ": 2}
 _UNIT_SENSITIVE_COLUMNS: tuple[str, ...] = (
     "Weight",
 ) + tuple(_INERTIA_IDX.keys()) + ("CogX", "CogY", "CogZ")
-_SUMMARY_SORT_COLUMNS: list[str] = [
-    "Part Number", "Nomenclature", "Revision", "Filename", "Quantity", "Weight",
-    "CogX", "CogY", "CogZ",
-]
 
 # 数值格式化：判断"接近整数"的绝对容差（用于 _fmt / _fmt_scaled）
 _INTEGER_ABS_TOL: float = 1e-9
@@ -197,11 +193,6 @@ class MassPropsDialog(QDialog):
         # ── 忽略隐藏节点 ──────────────────────────────────────────────────────
         self._skip_hidden: bool = self._settings.value("skip_hidden", False, type=bool)
 
-        # ── 汇总BOM专用选项 ───────────────────────────────────────────────────
-        self._summary_sort_column: str = self._settings.value(
-            "summary_sort_column", ""
-        )
-
         # ── 内部状态 ──────────────────────────────────────────────────────
         self._rows: list[dict] = []
         # display_row_idx → QTreeWidgetItem
@@ -212,6 +203,10 @@ class MassPropsDialog(QDialog):
         self._rollup_result: dict | None = None
         self._loaded: bool = False
         self._col_widths: dict[str, int] = {}
+        # 未保存到磁盘的编辑标志（标题栏 * 指示符）
+        self._is_dirty: bool = False
+        # 筛选/搜索框当前文本（小写后的模式串）
+        self._filter_text: str = ""
 
         # 按钮引用（_build_ui 中赋值，此处声明以供类型提示）
         self._append_data_btn: QPushButton
@@ -221,6 +216,16 @@ class MassPropsDialog(QDialog):
         self._columns: list[str] = self._build_columns()
 
         self._build_ui()
+
+        # ── 恢复窗口几何（位置与尺寸）────────────────────────────────────────
+        saved_geom = self._settings.value("geometry")
+        if isinstance(saved_geom, QByteArray) and not saved_geom.isEmpty():
+            self.restoreGeometry(saved_geom)
+
+    def done(self, result: int) -> None:
+        """保存窗口几何后执行标准关闭流程。"""
+        self._settings.setValue("geometry", self.saveGeometry())
+        super().done(result)
 
     # ── 列管理 ──────────────────────────────────────────────────────────────
 
@@ -354,7 +359,6 @@ class MassPropsDialog(QDialog):
             "支持一个零件具有多个惯量包络体，产品的惯量包络体将不被读取。"
         )
         prereq_lbl.setWordWrap(True)
-        prereq_lbl.setMaximumHeight(46)
         prereq_lbl.setStyleSheet(
             "QLabel { background-color: #FFF8E1; border: 1px solid #F9A825;"
             " border-radius: 4px; padding: 4px 8px; color: #5D4037; font-size: 11px; }"
@@ -405,7 +409,7 @@ class MassPropsDialog(QDialog):
         opts_main.setSpacing(4)
         opts_main.setContentsMargins(8, 6, 8, 6)
 
-        # ── 第一行：BOM类型 ｜ 读取模式 ｜ 显示列 ──────────────────────────
+        # ── 第一行：BOM类型 ｜ 读取模式 ｜ 忽略隐藏 ──────────────────────────
         row1 = QHBoxLayout()
         row1.setSpacing(6)
 
@@ -413,6 +417,10 @@ class MassPropsDialog(QDialog):
         self._bom_type_group = QButtonGroup(self)
         self._radio_hier = QRadioButton("层级BOM")
         self._radio_summ = QRadioButton("汇总BOM")
+        self._radio_summ.setToolTip(
+            "汇总BOM：按零件编号合并同种零件，仅显示零件行。\n"
+            "产品、部件、对称件不在此视图中显示。"
+        )
         self._radio_summ.setMinimumHeight(24)
         self._radio_hier.setChecked(not self._summarize)
         self._radio_summ.setChecked(self._summarize)
@@ -462,21 +470,6 @@ class MassPropsDialog(QDialog):
         _sep2.setFrameShadow(QFrame.Shadow.Sunken)
         row1.addSpacing(4); row1.addWidget(_sep2); row1.addSpacing(4)
 
-        # 显示列
-        row1.addWidget(QLabel("显示列:"))
-        self._hid_col_checks: dict[str, QCheckBox] = {}
-        for col_name in MASS_PROPS_HIDEABLE_COLUMNS:
-            cb = QCheckBox(MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
-            cb.setChecked(col_name in self._visible_hideable_cols)
-            cb.setProperty("col_name", col_name)
-            cb.toggled.connect(self._on_col_visibility_changed)
-            row1.addWidget(cb)
-            self._hid_col_checks[col_name] = cb
-
-        _sep3 = QFrame(); _sep3.setFrameShape(QFrame.Shape.VLine)
-        _sep3.setFrameShadow(QFrame.Shadow.Sunken)
-        row1.addSpacing(4); row1.addWidget(_sep3); row1.addSpacing(4)
-
         # 忽略隐藏节点
         self._skip_hidden_chk = QCheckBox("忽略隐藏的节点")
         self._skip_hidden_chk.setChecked(self._skip_hidden)
@@ -489,7 +482,7 @@ class MassPropsDialog(QDialog):
         row1.addStretch()
         opts_main.addLayout(row1)
 
-        # ── 第二行：重量单位 ｜ 长度单位 ｜ 惯量单位（4选1）｜ 汇总BOM排序列 ──
+        # ── 第二行：重量单位 ｜ 长度单位 ｜ 惯量单位（4选1）｜ 显示列 ──
         row2 = QHBoxLayout()
         row2.setSpacing(6)
 
@@ -530,44 +523,31 @@ class MassPropsDialog(QDialog):
         _sep4.setFrameShadow(QFrame.Shadow.Sunken)
         row2.addSpacing(4); row2.addWidget(_sep4); row2.addSpacing(4)
 
-        # 惯量单位（4 选 1，独立）
+        # 惯量单位（4 选 1，独立）— QComboBox 节省水平空间
         _IU = ("g\u00b7mm\u00b2", "g\u00b7m\u00b2", "kg\u00b7mm\u00b2", "kg\u00b7m\u00b2")
-        self._inertia_unit_group = QButtonGroup(self)
-        self._radio_inertia: dict[str, QRadioButton] = {}
-        row2.addWidget(QLabel("惯量:"))
+        self._inertia_combo = QComboBox()
         for iu in _IU:
-            rb = QRadioButton(iu)
-            rb.setChecked(self._inertia_unit == iu)
-            self._inertia_unit_group.addButton(rb)
-            rb.toggled.connect(self._on_inertia_unit_changed)
-            row2.addWidget(rb)
-            self._radio_inertia[iu] = rb
+            self._inertia_combo.addItem(iu)
+        self._inertia_combo.setCurrentText(self._inertia_unit)
+        self._inertia_combo.setToolTip("选择转动惯量的显示单位")
+        self._inertia_combo.currentTextChanged.connect(self._on_inertia_unit_changed)
+        row2.addWidget(QLabel("惯量:"))
+        row2.addWidget(self._inertia_combo)
 
         _sep5 = QFrame(); _sep5.setFrameShape(QFrame.Shape.VLine)
         _sep5.setFrameShadow(QFrame.Shadow.Sunken)
         row2.addSpacing(4); row2.addWidget(_sep5); row2.addSpacing(4)
 
-        # 汇总BOM专用选项（排序列）
-        self._summary_opts_widget = QWidget()
-        summary_opts_layout = QHBoxLayout(self._summary_opts_widget)
-        summary_opts_layout.setContentsMargins(0, 0, 0, 0)
-        summary_opts_layout.setSpacing(6)
-        summary_opts_layout.addWidget(QLabel("排序列:"))
-        self._sort_col_combo = QComboBox()
-        self._sort_col_combo.addItem("（不排序）", "")
-        for col in _SUMMARY_SORT_COLUMNS:
-            # 排序列下拉框只显示列名，不含单位后缀（单位随用户设置变化，与排序无关）
-            display = MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col, col)
-            display = display.split(" (")[0]  # 去掉 " (单位)" 后缀
-            self._sort_col_combo.addItem(display, col)
-        saved_sort_idx = self._sort_col_combo.findData(self._summary_sort_column)
-        if saved_sort_idx >= 0:
-            self._sort_col_combo.setCurrentIndex(saved_sort_idx)
-        self._sort_col_combo.currentIndexChanged.connect(self._on_sort_col_changed)
-        self._sort_col_combo.setMaximumHeight(24)
-        summary_opts_layout.addWidget(self._sort_col_combo)
-        self._summary_opts_widget.setVisible(self._summarize)
-        row2.addWidget(self._summary_opts_widget)
+        # 显示列
+        row2.addWidget(QLabel("显示列:"))
+        self._hid_col_checks: dict[str, QCheckBox] = {}
+        for col_name in MASS_PROPS_HIDEABLE_COLUMNS:
+            cb = QCheckBox(MASS_PROPS_COLUMN_DISPLAY_NAMES.get(col_name, col_name))
+            cb.setChecked(col_name in self._visible_hideable_cols)
+            cb.setProperty("col_name", col_name)
+            cb.toggled.connect(self._on_col_visibility_changed)
+            row2.addWidget(cb)
+            self._hid_col_checks[col_name] = cb
 
         row2.addStretch()
         opts_main.addLayout(row2)
@@ -582,6 +562,18 @@ class MassPropsDialog(QDialog):
             " border-radius: 4px; padding: 4px 8px; color: #2B4C7E; font-size: 11px; }"
         )
         layout.addWidget(self._bom_desc_lbl)
+
+        # ── 搜索筛选框（Ctrl+F） ──────────────────────────────────────────────
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(6)
+        filter_row.addWidget(QLabel("筛选:"))
+        self._filter_edit = QLineEdit()
+        self._filter_edit.setPlaceholderText("按零件编号、文件名、术语等关键字搜索行… (Ctrl+F)")
+        self._filter_edit.setClearButtonEnabled(True)
+        self._filter_edit.textChanged.connect(self._on_filter_changed)
+        filter_row.addWidget(self._filter_edit)
+        layout.addLayout(filter_row)
+        QShortcut(QKeySequence("Ctrl+F"), self, self._focus_filter)
 
         # ── 树形表格 ────────────────────────────────────────────────────────
         self._table = _BomTreeWidget()
@@ -728,7 +720,10 @@ class MassPropsDialog(QDialog):
         btn_row.addWidget(self._save_json_btn)
 
         self._export_btn = QPushButton("导出表格")
-        self._export_btn.setToolTip("将当前表格（含汇总行）导出为 Excel（.xlsx）文件")
+        self._export_btn.setToolTip(
+            "将层级BOM数据（含汇总行）导出为 Excel（.xlsx）或 CSV 文件。\n"
+            "无论当前显示层级BOM还是汇总BOM，导出内容始终为层级BOM。"
+        )
         self._export_btn.setEnabled(False)
         self._export_btn.clicked.connect(self._export_table)
         btn_row.addWidget(self._export_btn)
@@ -745,7 +740,7 @@ class MassPropsDialog(QDialog):
         """返回当前 BOM 模式对应的说明文字。"""
         if self._summarize:
             return (
-                "【汇总BOM】按零件编号合并，仅列出零件（不含产品和部件）。"
+                "【汇总BOM】按零件编号合并，仅列出零件（不含产品、部件和对称件）。"
                 "Weight / CogX / CogY / CogZ / Ixx–Iyz "
                 "在零件自身坐标系下显示，与装配位置无关。"
                 "底部「汇总结果」在根产品坐标系下计算。"
@@ -774,12 +769,63 @@ class MassPropsDialog(QDialog):
             self._last_browse_dir = str(Path(file).parent)
             self._settings.setValue("last_browse_dir", self._last_browse_dir)
 
+    # ── 标题栏脏标志 ────────────────────────────────────────────────────────
+
+    def _update_title(self) -> None:
+        """在标题栏末尾追加 ' *' 表示有未保存到磁盘的编辑；清除则恢复原标题。"""
+        base = "重量、重心、惯量统计"
+        self.setWindowTitle(f"{base} *" if self._is_dirty else base)
+
+    # ── 搜索筛选 ───────────────────────────────────────────────────────────
+
+    def _focus_filter(self) -> None:
+        """将输入焦点移至搜索框（Ctrl+F）。"""
+        self._filter_edit.setFocus()
+        self._filter_edit.selectAll()
+
+    def _on_filter_changed(self, text: str) -> None:
+        """搜索框文本变化时，重新过滤表格中的行。"""
+        self._filter_text = text.strip().lower()
+        self._apply_filter()
+
+    def _apply_filter(self) -> None:
+        """根据 _filter_text 显示/隐藏树形控件中的各行。"""
+        pattern = self._filter_text
+        root = self._table.invisibleRootItem()
+        for i in range(root.childCount()):
+            self._apply_filter_to_item(root.child(i), pattern)
+
+    def _apply_filter_to_item(self, item: QTreeWidgetItem, pattern: str) -> bool:
+        """递归地对 *item* 及其子项应用过滤。
+
+        返回 True 表示该项或其任意后代匹配 *pattern*，
+        同时设置 item.setHidden() 的可见性。
+        """
+        if not pattern:
+            item.setHidden(False)
+            for i in range(item.childCount()):
+                self._apply_filter_to_item(item.child(i), pattern)
+            return True
+        self_match = self._item_matches_filter(item, pattern)
+        child_match = False
+        for i in range(item.childCount()):
+            child_match |= self._apply_filter_to_item(item.child(i), pattern)
+        visible = self_match or child_match
+        item.setHidden(not visible)
+        return visible
+
+    def _item_matches_filter(self, item: QTreeWidgetItem, pattern: str) -> bool:
+        """判断 *item* 任意列的文本是否包含 *pattern*（大小写不敏感）。"""
+        for col_idx in range(len(self._columns)):
+            if pattern in item.text(col_idx).lower():
+                return True
+        return False
+
     # ── 显示选项响应 ───────────────────────────────────────────────────────
 
     def _on_bom_type_changed(self, checked: bool) -> None:
         self._summarize = self._radio_summ.isChecked()
         self._settings.setValue("summarize", self._summarize)
-        self._summary_opts_widget.setVisible(self._summarize)
         self._bom_desc_lbl.setText(self._bom_desc_text())
         self._rebuild_columns_and_table()
 
@@ -807,11 +853,8 @@ class MassPropsDialog(QDialog):
         if self._rows:
             self._refresh_unit_display()
 
-    def _on_inertia_unit_changed(self, checked: bool) -> None:
-        for iu, rb in self._radio_inertia.items():
-            if rb.isChecked():
-                self._inertia_unit = iu
-                break
+    def _on_inertia_unit_changed(self, text: str = "") -> None:
+        self._inertia_unit = self._inertia_combo.currentText()
         self._inertia_unit_factor = self._calc_inertia_factor(self._inertia_unit)
         self._settings.setValue("inertia_unit", self._inertia_unit)
         if self._rows:
@@ -826,13 +869,6 @@ class MassPropsDialog(QDialog):
         self._settings.setValue("visible_hideable_cols",
                                 list(self._visible_hideable_cols))
         self._rebuild_columns_and_table()
-
-    def _on_sort_col_changed(self, _index: int) -> None:
-        col = self._sort_col_combo.currentData()
-        self._summary_sort_column = col or ""
-        self._settings.setValue("summary_sort_column", self._summary_sort_column)
-        if self._summarize and self._rows:
-            self._populate_table()
 
     def _rebuild_columns_and_table(self) -> None:
         """重建列列表并重新填充表格（保留列宽）。"""
@@ -1002,6 +1038,9 @@ class MassPropsDialog(QDialog):
 
         # 加载完成后自动计算汇总结果
         self._calculate()
+        # 新数据加载后重置脏标志
+        self._is_dirty = False
+        self._update_title()
 
     def _save_data_to_json(self) -> None:
         """将当前行数据保存为压缩二进制数据文件（不包含 _root_mp，可重新计算）。"""
@@ -1032,6 +1071,9 @@ class MassPropsDialog(QDialog):
             save_rows(self._rows, dest)
             self._last_browse_dir = str(Path(dest).parent)
             self._settings.setValue("last_browse_dir", self._last_browse_dir)
+            # 保存成功后清除脏标志
+            self._is_dirty = False
+            self._update_title()
         except Exception as e:
             logger.error(f"保存质量特性数据失败: {e}")
             QMessageBox.critical(self, "保存失败", f"保存数据时出错：\n{e}")
@@ -1184,6 +1226,44 @@ class MassPropsDialog(QDialog):
             result.append(r)
         return result
 
+    def _build_hierarchy_columns(self) -> list[str]:
+        """返回层级BOM的列名列表（导出时始终使用，与当前显示模式无关）。"""
+        base = ["Level", "#", "Type"]
+        for c in MASS_PROPS_HIDEABLE_COLUMNS:
+            if c in self._visible_hideable_cols:
+                base.append(c)
+        base += ["Density", "Weight", "CogX", "CogY", "CogZ",
+                 "Ixx", "Iyy", "Izz", "Ixy", "Ixz", "Iyz"]
+        return base
+
+    def _get_hierarchy_rows(self) -> list[dict]:
+        """返回层级BOM行列表（导出时始终使用，与当前显示模式无关）。
+
+        与 _get_display_rows() 的非汇总分支相同：包含所有节点（零件、产品、
+        部件、对称件），使用根产品坐标系下的 COG / 惯量值。
+        """
+        result = []
+        for i, row in enumerate(self._rows):
+            r = dict(row)
+            r["_rows_idx"] = i
+            if r.get("Type") in ("零件", "对称件"):
+                rmp = r.get("_root_mp")
+                if rmp:
+                    cog = rmp.get("cog", [None, None, None])
+                    r["CogX"] = cog[0]
+                    r["CogY"] = cog[1]
+                    r["CogZ"] = cog[2]
+                    I = rmp.get("inertia")
+                    if I:
+                        r["Ixx"] = I[0][0]
+                        r["Iyy"] = I[1][1]
+                        r["Izz"] = I[2][2]
+                        r["Ixy"] = I[0][1]
+                        r["Ixz"] = I[0][2]
+                        r["Iyz"] = I[1][2]
+            result.append(r)
+        return result
+
     def _build_summary_rows(self) -> list[dict]:
         """汇总模式：将相同零件编号的行合并，增加 Quantity 字段。
 
@@ -1191,6 +1271,8 @@ class MassPropsDialog(QDialog):
         Quantity = 该 PN 在 _rows 中未被排除的实例数量。
         被排除（_excluded=True）的实例不计入数量，
         若某 PN 的全部实例均被排除，则该 PN 不出现在汇总BOM中。
+        对称件的重心/惯量依赖根产品坐标系（位置相关），无法在汇总BOM中有意义地
+        合并展示，故汇总BOM仅包含零件行，不含对称件。
         """
         seen_pn: dict[str, dict] = {}    # pn → 首次出现的未排除规范行副本
         qty: dict[str, int] = {}
@@ -1199,10 +1281,11 @@ class MassPropsDialog(QDialog):
         for i, row in enumerate(self._rows):
             if row.get("_excluded"):
                 continue
-            # 汇总BOM仅统计零件/对称件行；产品/部件不计入数量，也不占用 PN 的 seen_pn 位置，
+            # 汇总BOM仅统计零件行；产品/部件/对称件不计入数量，也不占用 PN 的 seen_pn 位置，
             # 否则产品行会成为该 PN 的"规范行"，随后被类型过滤器删除，导致该 PN 的
             # 零件实例在汇总BOM中完全消失，且数量也会被错误地计入产品实例。
-            if row.get("Type") not in ("零件", "对称件"):
+            # 对称件：其重心/惯量是位置相关量（根坐标系），在汇总上下文中无意义，故排除。
+            if row.get("Type") != "零件":
                 continue
             pn = str(row.get("Part Number", ""))
             if not pn:
@@ -1222,19 +1305,8 @@ class MassPropsDialog(QDialog):
             r["Quantity"] = qty[pn]
             result.append(r)
 
-        # 类型过滤作为保险：上方循环已只处理零件/对称件行，此处过滤冗余但保留以防万一
-        result = [r for r in result if r.get("Type") in ("零件", "对称件")]
-
-        # 按排序列排序（数值列按数值升序，字符串列按字典序升序）
-        if self._summary_sort_column:
-            col = self._summary_sort_column
-            result.sort(
-                key=lambda r: (
-                    (0, float(r.get(col, 0)), "")
-                    if isinstance(r.get(col), (int, float))
-                    else (1, 0.0, str(r.get(col, "") or "").lower())
-                )
-            )
+        # 类型过滤作为保险：上方循环已只处理零件行，此处过滤冗余但保留以防万一
+        result = [r for r in result if r.get("Type") == "零件"]
 
         return result
 
@@ -1262,12 +1334,19 @@ class MassPropsDialog(QDialog):
         self._table.blockSignals(False)
         self._is_updating = False
 
+        # 汇总模式：启用表头点击排序；层级模式：禁用（保持树结构）
+        self._table.setSortingEnabled(self._summarize)
+
+        # 保持当前搜索筛选状态
+        if self._filter_text:
+            self._apply_filter()
+
     def _make_item(self, row_idx: int, row_data: dict) -> QTreeWidgetItem:
         """构建并填充一行的 QTreeWidgetItem。
 
         row_idx: 对应的 self._rows 索引（汇总模式用 _rows_idx 字段）。
         """
-        item = QTreeWidgetItem()
+        item = _BomSortItem()
         item.setData(0, _ROW_IDX_ROLE, row_idx)
 
         pn          = str(row_data.get("Part Number", ""))
@@ -1307,7 +1386,9 @@ class MassPropsDialog(QDialog):
             elif col_name == "Density":
                 density = row_data.get("Density")
                 if density is None:
-                    item.setText(col_idx, "—" if node_type in ("零件", "对称件") else "")
+                    # 对称件：按原件类型决定空显示（产品/部件→""，零件→"—"）
+                    effective_type = row_data.get("_mirror_src_type") if node_type == "对称件" else node_type
+                    item.setText(col_idx, "" if (effective_type if effective_type is not None else node_type) in ("产品", "部件") else "—")
                 elif density < 0:
                     item.setText(col_idx, "不统一")
                 else:
@@ -1315,13 +1396,15 @@ class MassPropsDialog(QDialog):
             elif col_name == "Weight":
                 raw = row_data.get("Weight")
                 if raw is None:
-                    item.setText(col_idx, "—" if node_type in ("零件", "对称件") else "")
+                    effective_type = row_data.get("_mirror_src_type") if node_type == "对称件" else node_type
+                    item.setText(col_idx, "" if (effective_type if effective_type is not None else node_type) in ("产品", "部件") else "—")
                 else:
                     item.setText(col_idx, self._fmt_mass_val(raw))
             elif col_name in _INERTIA_IDX or col_name in ("CogX", "CogY", "CogZ"):
                 raw = row_data.get(col_name)
                 if raw is None:
-                    item.setText(col_idx, "—" if node_type in ("零件", "对称件") else "")
+                    effective_type = row_data.get("_mirror_src_type") if node_type == "对称件" else node_type
+                    item.setText(col_idx, "" if (effective_type if effective_type is not None else node_type) in ("产品", "部件") else "—")
                 else:
                     if col_name in _INERTIA_IDX:
                         item.setText(col_idx, self._fmt_inertia_val(raw))
@@ -1636,6 +1719,9 @@ class MassPropsDialog(QDialog):
         # 编辑密度/重量后立即重新计算汇总结果（无需手动点击"计算"）
         # 对称件同步在 _calculate() 内部进行（_sync_all_mirrors），支持任意 Type 原件
         self._calculate()
+        # 标记为有未保存的编辑
+        self._is_dirty = True
+        self._update_title()
 
     # ── 计算 ───────────────────────────────────────────────────────────────
 
@@ -1786,10 +1872,29 @@ class MassPropsDialog(QDialog):
                 self._do_export(str(dest_path))
             self._last_browse_dir = str(dest_path.parent)
             self._settings.setValue("last_browse_dir", self._last_browse_dir)
-            QMessageBox.information(self, "导出成功", f"文件已保存到：\n{dest_path}")
+            self._show_export_success(dest_path)
         except Exception as e:
             logger.error(f"导出失败: {e}")
             QMessageBox.critical(self, "导出失败", f"导出时出错：\n{e}")
+
+    def _show_export_success(self, dest_path: Path) -> None:
+        """导出成功后弹出含"打开文件"和"打开所在文件夹"按钮的提示框。"""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("导出成功")
+        msg.setText(f"文件已成功导出：\n{dest_path}")
+        msg.setIcon(QMessageBox.Icon.Information)
+        open_file_btn   = msg.addButton("打开文件", QMessageBox.ButtonRole.ActionRole)
+        open_folder_btn = msg.addButton("打开所在文件夹", QMessageBox.ButtonRole.ActionRole)
+        msg.addButton(QMessageBox.StandardButton.Ok)
+        msg.exec()
+        clicked = msg.clickedButton()
+        if clicked == open_file_btn:
+            try:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(dest_path)))
+            except Exception as exc:
+                logger.warning(f"Failed to open exported file: {exc}")
+        elif clicked == open_folder_btn:
+            self._open_path(str(dest_path))
 
     @staticmethod
     def _row_status(row_data: dict) -> str:
@@ -1812,8 +1917,8 @@ class MassPropsDialog(QDialog):
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
         from catia_copilot.utils import estimate_column_width
 
-        # 导出列（排除内部序号列 "#"），末尾追加 Status 列
-        export_cols = [c for c in self._columns if c != "#"] + ["Status"]
+        # 导出始终使用层级BOM（含产品/部件/对称件），排除内部序号列 "#"，末尾追加 Status 列
+        export_cols = [c for c in self._build_hierarchy_columns() if c != "#"] + ["Status"]
 
         wb  = openpyxl.Workbook()
         ws  = wb.active
@@ -1838,8 +1943,8 @@ class MassPropsDialog(QDialog):
             cell.fill   = header_fill
             cell.border = thin_border
 
-        # 写入数据行（含所有特殊状态行）
-        display_rows = self._get_display_rows()
+        # 写入数据行（始终导出层级BOM，含所有特殊状态行）
+        display_rows = self._get_hierarchy_rows()
         for ri, row_data in enumerate(display_rows, start=2):
             status_val = self._row_status(row_data)
 
@@ -1938,9 +2043,9 @@ class MassPropsDialog(QDialog):
         """将当前表格数据（含汇总行）写入 UTF-8 with BOM 的 CSV 文件。"""
         import csv
 
-        # 导出列（排除内部序号列 "#"），末尾追加 Status 列
-        export_cols = [c for c in self._columns if c != "#"] + ["Status"]
-        display_rows = self._get_display_rows()
+        # 导出始终使用层级BOM（含产品/部件/对称件），排除内部序号列 "#"，末尾追加 Status 列
+        export_cols = [c for c in self._build_hierarchy_columns() if c != "#"] + ["Status"]
+        display_rows = self._get_hierarchy_rows()
 
         def _cell_value(col_name: str, row_data: dict) -> str:
             if col_name == "Status":
@@ -2068,6 +2173,18 @@ class MassPropsDialog(QDialog):
                 ):
                     indices.add(i)
 
+        # 反向关联清理：若被删除的行中包含对称件行，将对应源行的
+        # _mirror_child_id 清除，使源行可以再次添加对称件。
+        deleted_mirror_ids: set[str] = {
+            self._rows[i]["_mirror_id"]
+            for i in indices
+            if self._rows[i].get("_is_mirror") and self._rows[i].get("_mirror_id")
+        }
+        if deleted_mirror_ids:
+            for i, row in enumerate(self._rows):
+                if i not in indices and row.get("_mirror_child_id") in deleted_mirror_ids:
+                    row.pop("_mirror_child_id", None)
+
         self._rows = [r for i, r in enumerate(self._rows) if i not in indices]
 
         if not self._rows:
@@ -2161,15 +2278,24 @@ class MassPropsDialog(QDialog):
             ]
             density = None
 
+        # ── 无有效数据检测 ────────────────────────────────────────────────
+        # 当 weight <= 0.0 时视为"无测量数据"，COG/惯量全部置 None，
+        # 保留原件的空值语义（零件显示"—"，产品/部件显示""）。
+        has_data = weight > 0.0
+
         # ── ZX 平面对称变换：Y 分量取反 ──────────────────────────────────
         # 使用 (0.0 - x) 代替 (-x)，避免对 0.0 取负产生 IEEE 754 负零（-0.0），
         # 防止负零进入导出文件（CSV/xlsx）或引发下游比较歧义。
-        cog_mirror = [cog_root[0], 0.0 - cog_root[1], cog_root[2]]
-        I_mirror = [
-            [ I_root[0][0], 0.0 - I_root[0][1],  I_root[0][2]],
-            [0.0 - I_root[1][0],  I_root[1][1], 0.0 - I_root[1][2]],
-            [ I_root[2][0], 0.0 - I_root[2][1],  I_root[2][2]],
-        ]
+        if has_data:
+            cog_mirror = [cog_root[0], 0.0 - cog_root[1], cog_root[2]]
+            I_mirror = [
+                [ I_root[0][0], 0.0 - I_root[0][1],  I_root[0][2]],
+                [0.0 - I_root[1][0],  I_root[1][1], 0.0 - I_root[1][2]],
+                [ I_root[2][0], 0.0 - I_root[2][1],  I_root[2][2]],
+            ]
+        else:
+            cog_mirror = None
+            I_mirror   = None
 
         # 单位矩阵 placement：对称件的"局部坐标系"等于根坐标系
         identity_placement = [
@@ -2180,8 +2306,8 @@ class MassPropsDialog(QDialog):
         ]
         mirror_mp = {
             "weight":  weight,
-            "cog":     cog_mirror,
-            "inertia": I_mirror,
+            "cog":     cog_mirror if cog_mirror is not None else [0.0, 0.0, 0.0],
+            "inertia": I_mirror if I_mirror is not None else [[0.0] * 3 for _ in range(3)],
             "density": density,
         }
 
@@ -2195,16 +2321,16 @@ class MassPropsDialog(QDialog):
             "Nomenclature": source_row.get("Nomenclature", ""),
             "Revision":     source_row.get("Revision", ""),
             "Density":      density,
-            "Weight":       weight if weight > 0.0 else None,
-            "CogX":         cog_mirror[0],
-            "CogY":         cog_mirror[1],
-            "CogZ":         cog_mirror[2],
-            "Ixx":          I_mirror[0][0],
-            "Iyy":          I_mirror[1][1],
-            "Izz":          I_mirror[2][2],
-            "Ixy":          I_mirror[0][1],
-            "Ixz":          I_mirror[0][2],
-            "Iyz":          I_mirror[1][2],
+            "Weight":       weight if has_data else None,
+            "CogX":         cog_mirror[0] if cog_mirror is not None else None,
+            "CogY":         cog_mirror[1] if cog_mirror is not None else None,
+            "CogZ":         cog_mirror[2] if cog_mirror is not None else None,
+            "Ixx":          I_mirror[0][0] if I_mirror is not None else None,
+            "Iyy":          I_mirror[1][1] if I_mirror is not None else None,
+            "Izz":          I_mirror[2][2] if I_mirror is not None else None,
+            "Ixy":          I_mirror[0][1] if I_mirror is not None else None,
+            "Ixz":          I_mirror[0][2] if I_mirror is not None else None,
+            "Iyz":          I_mirror[1][2] if I_mirror is not None else None,
             "_filepath":    "",
             "_placement":   identity_placement,
             "_not_found":   False,
@@ -2216,9 +2342,10 @@ class MassPropsDialog(QDialog):
                 "weight":  weight,
                 "cog":     cog_mirror,
                 "inertia": I_mirror,
-            },
+            } if has_data else None,
             "_is_mirror":        True,
             "_mirror_source_pn": source_pn,
+            "_mirror_src_type":  node_type,  # 原件类型，用于 None 值的空白/破折号显示判断
         }
 
     def _add_mirror_row(self, row_idx: int) -> None:
@@ -2336,25 +2463,40 @@ class MassPropsDialog(QDialog):
                 for vis_item in self._item_by_row:
                     if vis_item.data(0, _ROW_IDX_ROLE) != mi:
                         continue
-                    rmp = mirror_row.get("_root_mp")
+                    src_type = str(src_row.get("Type", "零件"))
+                    # 原件为产品/部件时，None 值显示空字符串；原件为零件时显示"—"
+                    empty_text = "" if src_type in ("产品", "部件") else "—"
                     for ci, col in enumerate(self._columns):
                         if col == "Weight":
-                            vis_item.setText(ci, self._fmt_mass_val(mirror_row.get("Weight")))
+                            raw = mirror_row.get("Weight")
+                            if raw is None:
+                                vis_item.setText(ci, empty_text)
+                            else:
+                                vis_item.setText(ci, self._fmt_mass_val(raw))
                         elif col == "Density":
                             d_val = mirror_row.get("Density")
-                            vis_item.setText(ci, _fmt(d_val) if d_val is not None and d_val >= 0 else "—")
+                            if d_val is None:
+                                d_text = empty_text
+                            elif d_val < 0:
+                                d_text = "不统一"
+                            else:
+                                d_text = _fmt(d_val)
+                            vis_item.setText(ci, d_text)
                         elif col in _COG_IDX:
-                            cog_i = _COG_IDX[col]
-                            raw = rmp["cog"][cog_i] if rmp else mirror_row.get(col)
-                            vis_item.setText(ci, self._fmt_cog_val(raw) if raw is not None else "—")
+                            # mirror_row 中的 CogX/Y/Z 已在 _make_mirror_row() 中
+                            # 保留了 None 语义（原件无数据时为 None）
+                            raw = mirror_row.get(col)
+                            if raw is None:
+                                vis_item.setText(ci, empty_text)
+                            else:
+                                vis_item.setText(ci, self._fmt_cog_val(raw))
                         elif col in _INERTIA_IDX:
-                            ir, ic = _INERTIA_IDX[col]
-                            raw = (
-                                rmp["inertia"][ir][ic]
-                                if rmp and rmp.get("inertia")
-                                else mirror_row.get(col)
-                            )
-                            vis_item.setText(ci, self._fmt_inertia_val(raw) if raw is not None else "—")
+                            # 同上，Ixx/Ixy/… 亦保留 None 语义
+                            raw = mirror_row.get(col)
+                            if raw is None:
+                                vis_item.setText(ci, empty_text)
+                            else:
+                                vis_item.setText(ci, self._fmt_inertia_val(raw))
                     break
         finally:
             self._is_updating = False
@@ -2558,11 +2700,17 @@ class MassPropsDialog(QDialog):
 
             menu.addSeparator()
             act_add_mirror = menu.addAction("增加对称件")
-            # 仅对单选非对称件的零件/产品/部件行有效；对称件自身不可再次对称
+            # 仅对单选非对称件的零件/产品/部件行有效；对称件自身不可再次对称；
+            # 同一行已有对称件（_mirror_child_id 已设置）时也不允许重复添加。
+            already_has_mirror = bool(
+                is_single
+                and self._rows[clicked_row_idx].get("_mirror_child_id")
+            )
             mirror_eligible = (
                 is_single
                 and (is_part or is_product or is_component)
                 and not is_mirror
+                and not already_has_mirror
             )
             act_add_mirror.setEnabled(mirror_eligible)
 

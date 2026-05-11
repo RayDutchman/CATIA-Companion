@@ -1,6 +1,6 @@
 """BOM 树控件：自定义委托与带连接线的 QTreeWidget。"""
 
-from PySide6.QtWidgets import QTreeWidget, QStyledItemDelegate
+from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem, QStyledItemDelegate
 from PySide6.QtGui import QColor, QPen, QPainter
 from PySide6.QtCore import Qt
 
@@ -8,6 +8,25 @@ from catia_copilot.constants import BOM_READONLY_COLUMNS
 
 # 自定义 UserRole 用于 QTreeWidgetItem：标记行为锁定（不可读/未找到）
 _ITEM_LOCKED_ROLE: int = Qt.ItemDataRole.UserRole + 1
+
+
+class _BomSortItem(QTreeWidgetItem):
+    """QTreeWidgetItem，排序时对纯数字列执行数值比较，其余列保持字符串比较。
+
+    Qt 内置的 QTreeWidgetItem.__lt__ 始终按文本字符串排序，导致 "#" 行号列和
+    "数量" 列出现 "10" < "2" 的问题。重写 __lt__ 以先尝试浮点数转换，失败时
+    回退到字符串比较，兼容文本列。
+    """
+
+    def __lt__(self, other: "QTreeWidgetItem") -> bool:  # type: ignore[override]
+        tree = self.treeWidget()
+        col = tree.sortColumn() if tree is not None else 0
+        a = self.text(col)
+        b = other.text(col)
+        try:
+            return float(a) < float(b)
+        except (ValueError, TypeError):
+            return a < b
 
 
 class _BomTreeDelegate(QStyledItemDelegate):
