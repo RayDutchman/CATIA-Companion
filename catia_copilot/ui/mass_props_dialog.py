@@ -58,6 +58,9 @@ _ITEM_LOCKED_ROLE = Qt.ItemDataRole.UserRole + 1
 _DENSITY_LOCKED_ROLE = Qt.ItemDataRole.UserRole + 2
 # UserRole+3：该行已被用户排除（不参与计算）
 _EXCLUDED_ROLE = Qt.ItemDataRole.UserRole + 3
+# UserRole+4/5：该行的原始重量（kg，SI）和原始密度（kg/m³），用于检测用户修改
+_ORIG_WEIGHT_ROLE = Qt.ItemDataRole.UserRole + 4
+_ORIG_DENSITY_ROLE = Qt.ItemDataRole.UserRole + 5
 
 # 惯量列名 → (行索引, 列索引)，对应 3×3 张量位置
 _INERTIA_IDX: dict[str, tuple[int, int]] = {
@@ -83,6 +86,55 @@ _EXCL_FONT.setItalic(True)
 # 对称件（虚拟行）视觉样式
 _MIRROR_BG_COLOR: QColor = QColor(230, 240, 255)  # 浅蓝色，标识对称件虚拟行
 _MIRROR_TOOLTIP: str = "对称件（虚拟行），相对 ZX 平面与原件对称，不可直接编辑。"
+
+_MODIFIED_FG: QColor = QColor("#b85c00")           # 深橙色：用户已修改的 Weight/Density 列
+
+
+def _apply_modified_style(item: "QTreeWidgetItem", w_idx: int, d_idx: int,
+                           new_weight: "float | None", new_density: "float | None") -> None:
+    """对 Weight/Density 列应用或清除"已修改"样式（粗体 + 深橙色）。
+
+    对比 item 中存储的原始 SI 值（_ORIG_WEIGHT_ROLE / _ORIG_DENSITY_ROLE）与当前值；
+    若不同则标记粗体橙色，若与原始相同则恢复默认字体和颜色。
+    """
+    _EPS = 1e-12  # 浮点容差：SI 单位（kg / kg·m⁻³），1e-12 远小于任何实际差异
+
+    def _set_col_modified(col_i: int, modified: bool) -> None:
+        if col_i < 0:
+            return
+        if modified:
+            font = item.font(col_i)
+            font.setBold(True)
+            item.setFont(col_i, font)
+            item.setForeground(col_i, _MODIFIED_FG)
+        else:
+            item.setData(col_i, Qt.ItemDataRole.FontRole, None)
+            item.setData(col_i, Qt.ItemDataRole.ForegroundRole, None)
+
+    if w_idx >= 0:
+        orig_w = item.data(0, _ORIG_WEIGHT_ROLE)
+        try:
+            w_modified = (
+                new_weight is not None
+                and orig_w is not None
+                and abs(float(new_weight) - float(orig_w)) > _EPS
+            )
+        except (ValueError, TypeError):
+            w_modified = False
+        _set_col_modified(w_idx, w_modified)
+
+    if d_idx >= 0:
+        orig_d = item.data(0, _ORIG_DENSITY_ROLE)
+        try:
+            d_modified = (
+                new_density is not None
+                and orig_d is not None
+                and orig_d >= 0
+                and abs(float(new_density) - float(orig_d)) > _EPS
+            )
+        except (ValueError, TypeError):
+            d_modified = False
+        _set_col_modified(d_idx, d_modified)
 
 
 class _MassPropsDelegate(QStyledItemDelegate):
@@ -1421,6 +1473,10 @@ class MassPropsDialog(QDialog):
         density_locked = (density_val is None) or (density_val < 0)
         item.setData(0, _DENSITY_LOCKED_ROLE, density_locked)
 
+        # 保存原始 Weight（kg，SI）和 Density（kg/m³），用于检测用户是否修改过
+        item.setData(0, _ORIG_WEIGHT_ROLE, row_data.get("Weight"))
+        item.setData(0, _ORIG_DENSITY_ROLE, row_data.get("Density"))
+
         # 行背景色设置
         if is_mirror:
             # 对称件（虚拟行）：浅蓝背景，不显示错误色
@@ -1694,6 +1750,9 @@ class MassPropsDialog(QDialog):
                     d_val = vis_row.get("Density")
                     if d_val is not None and d_val >= 0:
                         vis_item.setText(d_idx, _fmt(d_val))
+                # 对比原始值，标记/清除已修改列的粗体橙色样式
+                _apply_modified_style(vis_item, w_idx, d_idx,
+                                      new_weight_stored, new_density_stored)
                 for ic_name, (ir, ic) in _INERTIA_IDX.items():
                     if ic_name in self._columns:
                         ic_idx = self._columns.index(ic_name)
