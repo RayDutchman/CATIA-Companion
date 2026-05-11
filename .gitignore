@@ -24,7 +24,11 @@ MANIFEST
 !build.spec
 
 # ── IDEs ─────────────────────────────────────────────────────────────────────
-.vscode/
+# Allow committed VS Code workspace config; ignore only personal/machine-specific files
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/extensions.json
 .idea/
 *.suo
 *.user

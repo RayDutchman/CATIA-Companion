@@ -1,0 +1,34 @@
+{
+    // Python 解释器：项目虚拟环境（本项目仅支持 Windows，路径使用 Scripts/python.exe）
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+
+    // 使用 Pylance 进行语言服务（类型检查）
+    "python.languageServer": "Pylance",
+    "python.analysis.typeCheckingMode": "basic",
+
+    // 格式化：使用 Black
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.formatOnSave": true
+    },
+
+    // 测试框架
+    "python.testing.pytestEnabled": true,
+    "python.testing.pytestArgs": ["tests"],
+    "python.testing.unittestEnabled": false,
+
+    // 文件显示优化
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true,
+        ".venv": true,
+        "dist": true,
+        "build": true
+    },
+
+    // 编辑器基本设置
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true,
+    "files.encoding": "utf8",
+    "files.eol": "\n"
+}

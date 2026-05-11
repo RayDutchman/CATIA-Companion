@@ -1,0 +1,14 @@
+{
+    "recommendations": [
+        // Python 核心支持（语法高亮、智能补全、调试）
+        "ms-python.python",
+        // Pylance 语言服务器（更快的类型推断与自动补全）
+        "ms-python.vscode-pylance",
+        // Black 代码格式化
+        "ms-python.black-formatter",
+        // 调试适配器
+        "ms-python.debugpy",
+        // 中文语言包（可选）
+        "ms-ceintl.vscode-language-pack-zh-hans"
+    ]
+}
