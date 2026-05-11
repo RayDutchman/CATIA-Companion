@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QRadioButton, QButtonGroup, QWidget, QComboBox,
     QStyledItemDelegate, QMenu,
 )
-from PySide6.QtGui import QBrush, QColor, QFont, QDesktopServices, QShortcut, QKeySequence
+from PySide6.QtGui import QBrush, QFont, QDesktopServices, QShortcut, QKeySequence
 from PySide6.QtCore import Qt, QSettings, QByteArray, QUrl
 
 from catia_copilot.constants import (
@@ -46,6 +46,13 @@ from catia_copilot.catia.mass_props_collect import (
     _compute_root_mp_from_placement, _rollup_one_product,
 )
 from catia_copilot.catia.mass_props_calc import rollup_mass_properties
+from catia_copilot.ui.ui_colors import (
+    EXCL_BG   as _EXCL_BG_COLOR,
+    EXCL_FG   as _EXCL_FG_COLOR,
+    MIRROR_BG as _MIRROR_BG_COLOR,
+    ROW_LOCKED_FG, ROW_NOT_FOUND_BG, ROW_MEAS_FAILED_BG,
+    ROW_LIGHTWEIGHT_BG, ROW_UNSAVED_BG, ROW_PRODUCT_BG,
+)
 from catia_copilot.ui.bom_widgets import _BomTreeWidget, _BomSortItem
 
 logger = logging.getLogger(__name__)
@@ -74,14 +81,11 @@ _UNIT_SENSITIVE_COLUMNS: tuple[str, ...] = (
 # 数值格式化：判断"接近整数"的绝对容差（用于 _fmt / _fmt_scaled）
 _INTEGER_ABS_TOL: float = 1e-9
 
-# 排除行视觉样式（背景色 / 前景色 / 斜体字体）
-_EXCL_BG_COLOR: QColor = QColor(216, 216, 232)   # 浅灰紫，区别于红/橙/黄等异常色
-_EXCL_FG_COLOR: QColor = QColor(130, 130, 150)
+# 排除行视觉样式（斜体字体；背景/前景色已移至 ui_colors.py）
 _EXCL_FONT: QFont = QFont()
 _EXCL_FONT.setItalic(True)
 
 # 对称件（虚拟行）视觉样式
-_MIRROR_BG_COLOR: QColor = QColor(230, 240, 255)  # 浅蓝色，标识对称件虚拟行
 _MIRROR_TOOLTIP: str = "对称件（虚拟行），相对 ZX 平面与原件对称，不可直接编辑。"
 
 
@@ -2507,28 +2511,28 @@ class MassPropsDialog(QDialog):
                 item.setBackground(ci, _MIRROR_BG_COLOR)
                 item.setToolTip(ci, _MIRROR_TOOLTIP)
         elif row_locked:
-            grey = QColor(160, 160, 160)
+            grey = ROW_LOCKED_FG
             if not_found:
-                bg  = QColor(255, 205, 205)
+                bg  = ROW_NOT_FOUND_BG
                 tip = "该零件/装配体的文件未被CATIA检索到，行内容不可编辑。"
             elif meas_failed:
-                bg  = QColor(255, 210, 160)
+                bg  = ROW_MEAS_FAILED_BG
                 tip = "该零件的质量特性测量失败，行内容不可编辑。"
             else:
-                bg  = QColor(245, 245, 245)
+                bg  = ROW_LIGHTWEIGHT_BG
                 tip = "该零件/装配体处于轻量化模式，无法读取属性。"
             for ci in range(col_count):
                 item.setForeground(ci, grey)
                 item.setBackground(ci, bg)
                 item.setToolTip(ci, tip)
         elif no_file:
-            bg_unsaved = QColor(255, 245, 180)
+            bg_unsaved = ROW_UNSAVED_BG
             no_file_tip = "该零件尚未保存到磁盘，质量特性数据可能不完整。"
             for ci in range(col_count):
                 item.setBackground(ci, bg_unsaved)
                 item.setToolTip(ci, no_file_tip)
         elif node_type in ("产品", "部件"):
-            bg = QColor(240, 242, 245)
+            bg = ROW_PRODUCT_BG
             for ci in range(col_count):
                 item.setBackground(ci, bg)
 
