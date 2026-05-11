@@ -1388,7 +1388,7 @@ class MassPropsDialog(QDialog):
                 if density is None:
                     # 对称件：按原件类型决定空显示（产品/部件→""，零件→"—"）
                     effective_type = row_data.get("_mirror_src_type") if node_type == "对称件" else node_type
-                    item.setText(col_idx, "" if (effective_type or node_type) in ("产品", "部件") else "—")
+                    item.setText(col_idx, "" if (effective_type if effective_type is not None else node_type) in ("产品", "部件") else "—")
                 elif density < 0:
                     item.setText(col_idx, "不统一")
                 else:
@@ -1397,14 +1397,14 @@ class MassPropsDialog(QDialog):
                 raw = row_data.get("Weight")
                 if raw is None:
                     effective_type = row_data.get("_mirror_src_type") if node_type == "对称件" else node_type
-                    item.setText(col_idx, "" if (effective_type or node_type) in ("产品", "部件") else "—")
+                    item.setText(col_idx, "" if (effective_type if effective_type is not None else node_type) in ("产品", "部件") else "—")
                 else:
                     item.setText(col_idx, self._fmt_mass_val(raw))
             elif col_name in _INERTIA_IDX or col_name in ("CogX", "CogY", "CogZ"):
                 raw = row_data.get(col_name)
                 if raw is None:
                     effective_type = row_data.get("_mirror_src_type") if node_type == "对称件" else node_type
-                    item.setText(col_idx, "" if (effective_type or node_type) in ("产品", "部件") else "—")
+                    item.setText(col_idx, "" if (effective_type if effective_type is not None else node_type) in ("产品", "部件") else "—")
                 else:
                     if col_name in _INERTIA_IDX:
                         item.setText(col_idx, self._fmt_inertia_val(raw))
@@ -2287,8 +2287,8 @@ class MassPropsDialog(QDialog):
         # 使用 (0.0 - x) 代替 (-x)，避免对 0.0 取负产生 IEEE 754 负零（-0.0），
         # 防止负零进入导出文件（CSV/xlsx）或引发下游比较歧义。
         if has_data:
-            cog_mirror: list | None = [cog_root[0], 0.0 - cog_root[1], cog_root[2]]
-            I_mirror: list | None = [
+            cog_mirror = [cog_root[0], 0.0 - cog_root[1], cog_root[2]]
+            I_mirror = [
                 [ I_root[0][0], 0.0 - I_root[0][1],  I_root[0][2]],
                 [0.0 - I_root[1][0],  I_root[1][1], 0.0 - I_root[1][2]],
                 [ I_root[2][0], 0.0 - I_root[2][1],  I_root[2][2]],
