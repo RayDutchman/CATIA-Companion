@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate, QMenu,
 )
 from PySide6.QtGui import QBrush, QColor, QFont
-from PySide6.QtCore import Qt, QSettings
+from PySide6.QtCore import Qt, QSettings, QByteArray
 
 from catia_copilot.constants import (
     MASS_PROPS_COLUMNS,
@@ -212,6 +212,16 @@ class MassPropsDialog(QDialog):
         self._columns: list[str] = self._build_columns()
 
         self._build_ui()
+
+        # ── 恢复窗口几何（位置与尺寸）────────────────────────────────────────
+        saved_geom = self._settings.value("geometry")
+        if isinstance(saved_geom, QByteArray) and not saved_geom.isEmpty():
+            self.restoreGeometry(saved_geom)
+
+    def done(self, result: int) -> None:
+        """保存窗口几何后执行标准关闭流程。"""
+        self._settings.setValue("geometry", self.saveGeometry())
+        super().done(result)
 
     # ── 列管理 ──────────────────────────────────────────────────────────────
 
