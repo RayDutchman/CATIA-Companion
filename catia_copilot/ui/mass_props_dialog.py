@@ -355,7 +355,6 @@ class MassPropsDialog(QDialog):
             "支持一个零件具有多个惯量包络体，产品的惯量包络体将不被读取。"
         )
         prereq_lbl.setWordWrap(True)
-        prereq_lbl.setMaximumHeight(46)
         prereq_lbl.setStyleSheet(
             "QLabel { background-color: #FFF8E1; border: 1px solid #F9A825;"
             " border-radius: 4px; padding: 4px 8px; color: #5D4037; font-size: 11px; }"
