@@ -131,14 +131,14 @@ def _get_v5_com_object():
         return None
 
     # ── 方式 1：标准 GetActiveObject（强制晚绑定，绕过 gen_py 缓存）────────
-    # pywintypes.IID(progid) 是 win32com.client.GetActiveObject 内部使用的同一
-    # 方式，通过 Windows CoClsidFromProgID 解析 ProgID → CLSID，在所有版本的
-    # pywin32 中均可用（不依赖 pythoncom.CLSIDFromProgID，该函数在旧版本中不存在）。
+    # win32com.client.GetActiveObject 内部自动完成 ProgID→CLSID→QI(IDispatch)
+    # 的全套流程，在所有 pywin32 版本中均可靠工作。
+    # app._oleobj_ 取出底层 PyIDispatch，再交给 dynamic.Dispatch 包装为晚绑定
+    # 代理，避免 gen_py 早绑定缓存（如 3DEXPERIENCE 写入的 typelib 缓存）干扰。
     try:
-        import pywintypes as _pywt
-        clsid = _pywt.IID("CATIA.Application")
-        raw = pythoncom.GetActiveObject(clsid)
-        app = _wcc_dynamic.Dispatch(raw)
+        import win32com.client as _wcc
+        _raw_app = _wcc.GetActiveObject("CATIA.Application")
+        app = _wcc_dynamic.Dispatch(_raw_app._oleobj_)
         _ = app.Name        # 功能性测试
         if _is_catia_v5_dispatch(app):
             return app

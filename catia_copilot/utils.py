@@ -241,17 +241,16 @@ def check_catia_connection() -> str:
         return "disconnected"
 
     # ── 方式 1：标准 GetActiveObject（强制晚绑定，绕过 gen_py 缓存）────────
-    # pywintypes.IID(progid) 是 win32com.client.GetActiveObject 内部使用的同一
-    # 方式，通过 Windows CoClsidFromProgID 解析 ProgID → CLSID。在所有版本的
-    # pywin32 中均可用，不依赖 pythoncom.CLSIDFromProgID（旧版本中不存在）。
+    # win32com.client.GetActiveObject 内部自动完成 ProgID→CLSID→QI(IDispatch)
+    # 的全套流程，在所有 pywin32 版本中均可靠工作。
+    # app._oleobj_ 取出底层 PyIDispatch，再交给 dynamic.Dispatch 包装为晚绑定
+    # 代理，避免 gen_py 早绑定缓存干扰 .Version 等属性的读取。
     _broken = False
     try:
-        import pywintypes as _pywt
-        import pythoncom as _pc
+        import win32com.client as _wcc
         from win32com.client import dynamic as _dyn
-        clsid = _pywt.IID("CATIA.Application")
-        raw = _pc.GetActiveObject(clsid)
-        app = _dyn.Dispatch(raw)
+        _raw_app = _wcc.GetActiveObject("CATIA.Application")
+        app = _dyn.Dispatch(_raw_app._oleobj_)
         try:
             _ = app.Name  # 功能性测试
             if _is_catia_v5_dispatch(app):
@@ -323,17 +322,15 @@ def diagnose_catia_connection() -> dict:
         return result
 
     # 方式 1：标准 GetActiveObject（强制晚绑定，绕过 gen_py 缓存）
-    # pywintypes.IID(progid) 是 win32com.client.GetActiveObject 内部使用的同一
-    # 方式，通过 Windows CoClsidFromProgID 解析 ProgID → CLSID。在所有版本的
-    # pywin32 中均可用，不依赖 pythoncom.CLSIDFromProgID（旧版本中不存在）。
+    # win32com.client.GetActiveObject 内部自动完成 ProgID→CLSID→QI(IDispatch)
+    # 的全套流程，在所有 pywin32 版本中均可靠工作。
+    # app._oleobj_ 取出底层 PyIDispatch，再交给 dynamic.Dispatch 包装为晚绑定代理。
     app = None
     try:
-        import pywintypes as _pywt
-        import pythoncom as _pc
+        import win32com.client as _wcc
         from win32com.client import dynamic as _dyn
-        clsid = _pywt.IID("CATIA.Application")
-        raw = _pc.GetActiveObject(clsid)
-        app = _dyn.Dispatch(raw)
+        _raw_app = _wcc.GetActiveObject("CATIA.Application")
+        app = _dyn.Dispatch(_raw_app._oleobj_)
     except Exception as exc:
         result["error"] = str(exc)
 

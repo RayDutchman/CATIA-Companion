@@ -112,36 +112,45 @@ raw   = pythoncom.GetActiveObject(clsid)
 2. 进入 ROT 枚举降级路径 → CATIA IS in ROT，但之前 `_is_catia_v5_dispatch` 也是坏的 → 也返回 None
 3. 最终 `status="disconnected"`，但 `error` 字段里保留了步骤 1 的异常 → 显示 `MK_E_SYNTAX`
 
-修复 `CLSIDFromProgID` 后，步骤 1 会成功找到 CATIA，步骤 2 用 `.Name` 识别为 V5，连接成功。
-
-> **但**：`pythoncom.CLSIDFromProgID` 在旧版本 pywin32 中不存在，导致出现下一个错误。
+> 后续修复依次引入了更多 API 错误：`pythoncom.CLSIDFromProgID`（旧版 pywin32 无此属性），再到
+> `pywintypes.IID + pythoncom.GetActiveObject` 组合（GetActiveObject 返回 `PyIUnknown`，而
+> `dynamic.Dispatch` 需要 `PyIDispatch`，导致 `'PyIUnknown' object has no attribute 'GetTypeInfo'`）。
 
 ---
 
-## 第三次错误（当前）：`module 'pythoncom' has no attribute 'CLSIDFromProgID'`
+## 第四次错误（当前）：`'PyIUnknown' object has no attribute 'GetTypeInfo'`
 
-`CLSIDFromProgID` 是 `pythoncom` 扩展模块中后来才添加的方法，在用户安装的 pywin32 版本中不存在。
+### 根因：GetActiveObject 返回 PyIUnknown，非 PyIDispatch
 
-### 正确的 API：`pywintypes.IID(progid)`
+`pythoncom.GetActiveObject(clsid)` 返回的是原始 `PyIUnknown`（未经 QI 的 COM 指针）。
+`win32com.client.dynamic.Dispatch()` 接受 `PyIDispatch`，调用 `GetTypeInfo()` 方法来建立晚绑定代理。
+向它传入 `PyIUnknown` 时，直接尝试调用 `.GetTypeInfo()` → 属性不存在 → 报错。
 
-`win32com.client.GetActiveObject` 内部用的就是这个：
+### 本质问题：本 session 手动拆解了 win32com.client.GetActiveObject，却漏掉了 QI
+
+`win32com.client.GetActiveObject` 内部做了三步：
+1. `pywintypes.IID(progid)` → CLSID
+2. `pythoncom.GetActiveObject(clsid)` → PyIUnknown  
+3. `PyIUnknown.QueryInterface(pythoncom.IID_IDispatch)` → PyIDispatch  
+4. `Dispatch(PyIDispatch)` → CDispatch 对象
+
+本 session 的前几次修复只做了 1-2 步，跳过了第 3 步 QI，直接把 PyIUnknown 传给 dynamic.Dispatch。
+
+### 修复：回归 win32com.client.GetActiveObject，再用 ._oleobj_ 强制晚绑定
 
 ```python
-# win32com/client/__init__.py 源码
-def GetActiveObject(progid, clsctx=None):
-    clsid = pywintypes.IID(progid)   # ← 解析 ProgID → CLSID
-    ...
-    interface = pythoncom.GetActiveObject(clsid)
+import win32com.client as _wcc
+from win32com.client import dynamic as _dyn
+
+raw_app = _wcc.GetActiveObject("CATIA.Application")  # 内部已完成 QI，返回 CDispatch
+app = _dyn.Dispatch(raw_app._oleobj_)                # 用 PyIDispatch 创建晚绑定代理
 ```
 
-`pywintypes.IID(string)` 构造函数：
-- 若传入 `"{XXXXXXXX-...}"` 形式的 CLSID 字符串 → 直接解析
-- 若传入 `"CATIA.Application"` 这样的 ProgID → 调用 Windows `CoClsidFromProgID` API 解析
-- 在所有 pywin32 版本中均存在（pywintypes 是 pywin32 最基础的模块）
+- `_wcc.GetActiveObject` 是 main 分支一直在用的方式，在所有 pywin32 版本中可靠工作
+- `raw_app._oleobj_` 取出底层 `PyIDispatch`（非 PyIUnknown），dynamic.Dispatch 能正确包装
+- 晚绑定代理确保 gen_py 早绑定缓存（如 3DEXPERIENCE 写入的 typelib）不干扰属性访问
 
 ### 本次修复范围
-
-所有三处 `CLSIDFromProgID` 改为 `pywintypes.IID`：
 
 | 文件 | 函数 |
 |---|---|
@@ -151,11 +160,22 @@ def GetActiveObject(progid, clsctx=None):
 
 ### 修复后的完整连接流程（纯 V5）
 
-1. `pywintypes.IID("CATIA.Application")` → 调用 Windows CoClsidFromProgID → 得到 CLSID ✅
-2. `pythoncom.GetActiveObject(clsid)` → 在 Windows ROT 中找到正在运行的 CATIA V5 ✅
-3. `dynamic.Dispatch(raw)` → 强制晚绑定包装 ✅
-4. `app.Name` → 功能性测试，CATIA V5 返回 `"CATIA"` ✅
-5. `_is_catia_v5_dispatch(app)` → `.Version` 抛异常 → `.Name`=`"CATIA"` → **True ✅**
-6. 返回连接对象 ✅
+1. `win32com.client.GetActiveObject("CATIA.Application")` → 内部完成 ProgID→CLSID→QI→CDispatch ✅
+2. `dynamic.Dispatch(app._oleobj_)` → 从 PyIDispatch 创建晚绑定代理，跳过 gen_py 缓存 ✅
+3. `app.Name` → 功能性测试，CATIA V5 返回 `"CATIA"` ✅
+4. `_is_catia_v5_dispatch(app)` → `.Version` 抛异常（V5 无此属性）→ `.Name`=`"CATIA"` → **True ✅**
+5. 返回连接对象 ✅
 
 **修复后，诊断对话框和主界面均应显示"已连接"。**
+
+---
+
+## 本 session 错误演变总结
+
+| 版本 | 错误 | 根因 |
+|---|---|---|
+| main 之前 | 连接正常，但无法区分 V5/3DE | 未加 V5 识别逻辑 |
+| cb01aa1 | 新增 ROT 枚举 + V5 识别，但用了 `MkParseDisplayName` | 错误 API（不接受裸 ProgID）|
+| 5647ce1 | `pythoncom.CLSIDFromProgID` | 旧 pywin32 无此属性 |
+| b14ccb3 | `pywintypes.IID` + `pythoncom.GetActiveObject` | 返回 PyIUnknown，非 PyIDispatch |
+| 当前修复 | `win32com.client.GetActiveObject` + `dynamic.Dispatch(_oleobj_)` | ✅ 正确 |
