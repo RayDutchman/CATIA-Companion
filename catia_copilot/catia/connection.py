@@ -131,9 +131,10 @@ def _get_v5_com_object():
         return None
 
     # ── 方式 1：标准 GetActiveObject（强制晚绑定，绕过 gen_py 缓存）────────
+    # 注意：必须用 CLSIDFromProgID 而非 MkParseDisplayName；后者不接受裸 ProgID
+    # 字符串（会以 MK_E_SYNTAX / 0x800401E4 "无效的语法" 失败）。
     try:
-        # pythoncom.connect 绕过 win32com.client.GetActiveObject 的 Dispatch() 包装
-        clsid = pythoncom.MkParseDisplayName("CATIA.Application")[0]
+        clsid = pythoncom.CLSIDFromProgID("CATIA.Application")
         raw = pythoncom.GetActiveObject(clsid)
         app = _wcc_dynamic.Dispatch(raw)
         _ = app.Name        # 功能性测试

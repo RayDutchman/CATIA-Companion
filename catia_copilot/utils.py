@@ -241,11 +241,13 @@ def check_catia_connection() -> str:
         return "disconnected"
 
     # ── 方式 1：标准 GetActiveObject（强制晚绑定，绕过 gen_py 缓存）────────
+    # 注意：必须用 CLSIDFromProgID，不能用 MkParseDisplayName —— 后者不解析裸
+    # ProgID 字符串，会以 MK_E_SYNTAX (0x800401E4 "无效的语法") 抛出异常。
     _broken = False
     try:
         import pythoncom as _pc
         from win32com.client import dynamic as _dyn
-        clsid = _pc.MkParseDisplayName("CATIA.Application")[0]
+        clsid = _pc.CLSIDFromProgID("CATIA.Application")
         raw = _pc.GetActiveObject(clsid)
         app = _dyn.Dispatch(raw)
         try:
@@ -319,11 +321,13 @@ def diagnose_catia_connection() -> dict:
         return result
 
     # 方式 1：标准 GetActiveObject（强制晚绑定，绕过 gen_py 缓存）
+    # 注意：必须用 CLSIDFromProgID，不能用 MkParseDisplayName（后者不解析裸 ProgID，
+    # 会以 MK_E_SYNTAX / 0x800401E4 "无效的语法" 抛出异常）。
     app = None
     try:
         import pythoncom as _pc
         from win32com.client import dynamic as _dyn
-        clsid = _pc.MkParseDisplayName("CATIA.Application")[0]
+        clsid = _pc.CLSIDFromProgID("CATIA.Application")
         raw = _pc.GetActiveObject(clsid)
         app = _dyn.Dispatch(raw)
     except Exception as exc:
