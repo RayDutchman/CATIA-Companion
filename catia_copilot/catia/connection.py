@@ -20,8 +20,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # CATIA V5 启动等待超时（秒）和轮询间隔（秒）
-_CATIA_V5_STARTUP_TIMEOUT  = 60
-_CATIA_V5_POLL_INTERVAL    = 2
+_CATIA_V5_STARTUP_TIMEOUT = 60
+_CATIA_V5_POLL_INTERVAL = 2
 
 
 # ---------------------------------------------------------------------------

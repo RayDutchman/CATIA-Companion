@@ -129,6 +129,16 @@ def detect_catia_root() -> str | None:
         r"SOFTWARE\WOW6432Node\Dassault Systemes",
     ]
 
+    def _release_number(release_key_name: str) -> int | None:
+        """Return the numeric part of a 'B<n>' release key, or None if not applicable."""
+        name = release_key_name.upper()
+        if name.startswith("B"):
+            try:
+                return int(name[1:])
+            except ValueError:
+                pass
+        return None
+
     def _release_is_v5(release_key_name: str) -> bool:
         """启发式：判断 release key 名称是否属于 CATIA V5（而非 3DE）。"""
         name = release_key_name.upper()
@@ -136,15 +146,12 @@ def detect_catia_root() -> str | None:
             return True
         # "B28", "B29" etc. (B + small number ≤ 99) are CATIA V5 releases;
         # 3DE releases use large numbers like B421, B422 …
-        if name.startswith("B"):
-            try:
-                num = int(name[1:])
-                return num <= 99
-            except ValueError:
-                pass
+        num = _release_number(release_key_name)
+        if num is not None:
+            return num <= 99
         return False
 
-    v5_candidates:  list[tuple[int, str]] = []   # (release_number, path)
+    v5_candidates: list[tuple[int, str]] = []   # (release_number, path)
     other_candidates: list[str] = []
 
     for reg_path in registry_paths:
@@ -170,14 +177,7 @@ def detect_catia_root() -> str | None:
                                             f"    -> Valid installation found: {candidate}"
                                         )
                                         if _release_is_v5(release):
-                                            # Extract release number for sorting
-                                            name = release.upper()
-                                            num = 0
-                                            if name.startswith("B"):
-                                                try:
-                                                    num = int(name[1:])
-                                                except ValueError:
-                                                    pass
+                                            num = _release_number(release) or 0
                                             v5_candidates.append((num, str(candidate)))
                                         else:
                                             other_candidates.append(str(candidate))

@@ -644,6 +644,7 @@ _HELP_HTML = f"""\
     </td>
   </tr>
   <tr>
+    <td><b>Q: 复制文件提示权限不足？</b></td>
     <td>
       A: CATIA 通常安装在 Program Files 目录，需要管理员权限才能写入。
       请右键以管理员身份运行本程序。
