@@ -42,6 +42,8 @@ def _is_catia_v5_dispatch(dispatch) -> bool:
     - 版本字符串中含 "V5" → V5，返回 True
     - 版本号是 < 100 的纯数字（如 "28" 代表 R28）→ V5，返回 True
     - 其余情况默认视为 V5（保持向后兼容）
+    - 若 .Version 访问抛出异常（可能由 gen_py 早绑定缓存污染引起），
+      则回退至 .Name 检查：Name 为 "CNEXT"/"CATIA" 时视为 V5
     """
     try:
         version = str(dispatch.Version)
@@ -56,7 +58,14 @@ def _is_catia_v5_dispatch(dispatch) -> bool:
             pass
         return True
     except Exception:
-        return False
+        # .Version 访问失败（例如 gen_py 早绑定缓存与实际对象接口不兼容）。
+        # 回退策略：用 .Name 属性判断——CATIA V5 和 3DEXPERIENCE 均使用 "CNEXT"
+        # 作为 Application.Name；如果 .Name 也不可读，则跳过此对象。
+        try:
+            name = str(dispatch.Name).upper()
+            return name in ("CNEXT", "CATIA")
+        except Exception:
+            return False
 
 
 def _find_catia_v5_in_rot():
@@ -65,11 +74,16 @@ def _find_catia_v5_in_rot():
     当 "CATIA.Application" ProgID 在注册表中已被 3DEXPERIENCE 覆盖时，
     GetActiveObject("CATIA.Application") 无法找到 V5；此函数通过直接枚举 ROT
     来绕过 ProgID→CLSID 映射。找到返回 dispatch 对象，否则返回 None。
+
+    使用 win32com.client.dynamic.Dispatch 而非普通的 Dispatch，强制晚绑定以
+    避免 gen_py 早绑定缓存干扰（早绑定缓存可能来自 3DEXPERIENCE，导致用其
+    接口描述调用 V5 对象时抛出异常）。
     """
     if _win32com_client is None:
         return None
     try:
         import pythoncom
+        from win32com.client import dynamic as _wcc_dynamic
         rot = pythoncom.GetRunningObjectTable()
         enum = rot.EnumRunning()
         while True:
@@ -79,7 +93,8 @@ def _find_catia_v5_in_rot():
             moniker = monikers[0]
             try:
                 obj = rot.GetObject(moniker)
-                dispatch = _win32com_client.Dispatch(obj)
+                # 强制使用晚绑定（绕过 gen_py 缓存）
+                dispatch = _wcc_dynamic.Dispatch(obj)
                 _ = dispatch.Name   # 功能性测试
                 if _is_catia_v5_dispatch(dispatch):
                     logger.debug("通过 ROT 枚举找到 CATIA V5 COM 对象")
@@ -218,14 +233,21 @@ def check_catia_connection() -> str:
 
     当 "CATIA.Application" ProgID 在注册表中被 3DEXPERIENCE 覆盖时，此函数
     会自动通过 ROT 枚举查找运行中的 CATIA V5 实例，确保状态正确显示。
+
+    所有 COM 包装均强制使用晚绑定（dynamic.Dispatch），避免 gen_py 早绑定
+    缓存污染干扰 .Version 等属性的读取。
     """
     if _win32com_client is None:
         return "disconnected"
 
-    # ── 方式 1：标准 GetActiveObject ──────────────────────────────────────
+    # ── 方式 1：标准 GetActiveObject（强制晚绑定，绕过 gen_py 缓存）────────
     _broken = False
     try:
-        app = _win32com_client.GetActiveObject("CATIA.Application")
+        import pythoncom as _pc
+        from win32com.client import dynamic as _dyn
+        clsid = _pc.MkParseDisplayName("CATIA.Application")[0]
+        raw = _pc.GetActiveObject(clsid)
+        app = _dyn.Dispatch(raw)
         try:
             _ = app.Name  # 功能性测试
             if _is_catia_v5_dispatch(app):
@@ -296,10 +318,14 @@ def diagnose_catia_connection() -> dict:
         result["error"] = "win32com 未安装，无法进行 COM 调用"
         return result
 
-    # 方式 1：标准 GetActiveObject
+    # 方式 1：标准 GetActiveObject（强制晚绑定，绕过 gen_py 缓存）
     app = None
     try:
-        app = _win32com_client.GetActiveObject("CATIA.Application")
+        import pythoncom as _pc
+        from win32com.client import dynamic as _dyn
+        clsid = _pc.MkParseDisplayName("CATIA.Application")[0]
+        raw = _pc.GetActiveObject(clsid)
+        app = _dyn.Dispatch(raw)
     except Exception as exc:
         result["error"] = str(exc)
 
