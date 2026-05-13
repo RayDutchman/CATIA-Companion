@@ -107,7 +107,7 @@ class MainWindow(QMainWindow):
         status_text = {
             "connected":    "✅ 已连接（功能测试通过）",
             "broken":       "⚠️ 连接异常（COM 对象存在但功能测试失败）",
-            "disconnected": "❌ 未连接（CATIA 未运行或 COM 不可用）",
+            "disconnected": "❌ 未连接（CATIA V5 未运行或 COM 不可用）",
         }.get(info["status"], info["status"])
 
         lines = [
@@ -117,6 +117,16 @@ class MainWindow(QMainWindow):
             lines.append(f"<b>错误详情：</b><code>{info['error']}</code>")
         if info["app_name"]:
             lines.append(f"<b>应用名称：</b>{info['app_name']}")
+        if info.get("app_version"):
+            lines.append(f"<b>版本：</b>{info['app_version']}")
+        if info.get("is_v5") is not None:
+            if info["is_v5"]:
+                lines.append("<b>产品类型：</b>CATIA V5 ✅")
+            else:
+                lines.append(
+                    "<b>产品类型：</b>3DEXPERIENCE ⚠️ "
+                    "（检测到已连接到 3DEXPERIENCE 而非 CATIA V5）"
+                )
         if info["doc_count"] is not None:
             lines.append(f"<b>已打开文档数：</b>{info['doc_count']}")
         if info["active_doc"]:
@@ -128,6 +138,12 @@ class MainWindow(QMainWindow):
             lines.append(
                 "<br/><b>建议：</b>检测到 COM 对象异常。可能原因为早绑定缓存（gen_py）污染。"
                 "请重启本程序（启动时会自动清理缓存），或参阅帮助文档中的手动修复步骤。"
+            )
+        if info.get("is_v5") is False:
+            lines.append(
+                "<br/><b>建议：</b>已检测到 3DEXPERIENCE 连接，而非 CATIA V5。"
+                "本程序会自动通过 ROT 枚举查找 CATIA V5 实例。"
+                "如问题持续，请手动启动 CATIA V5 R28 后重试。"
             )
 
         html = "<br/>".join(lines)
@@ -489,7 +505,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "文件不存在", f"宏文件不存在：\n{macro_path}")
             return
         try:
-            from pycatia import catia as _catia
+            from catia_copilot.catia.connection import get_catia_v5_application as _catia
             caa = _catia()
             app = caa.application
             if macro_path.suffix.lower() == ".catvba":
@@ -709,7 +725,7 @@ class MainWindow(QMainWindow):
         并将模板文件路径作为参数传入，宏内可通过 iParameters 直接获取。
         """
         try:
-            from pycatia import catia as _catia
+            from catia_copilot.catia.connection import get_catia_v5_application as _catia
             caa = _catia()
             app = caa.application
             # 将模板路径作为单一字符串参数传递给宏的 CATMain 函数

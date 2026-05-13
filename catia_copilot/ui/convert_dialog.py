@@ -336,7 +336,7 @@ class FileConvertDialog(QDialog):
         if use_active:
             # Resolve the path of the current CATIA active document
             try:
-                from pycatia import catia as _catia
+                from catia_copilot.catia.connection import get_catia_v5_application as _catia
                 _caa = _catia()
                 active_path = _caa.application.active_document.full_name
             except Exception as e:

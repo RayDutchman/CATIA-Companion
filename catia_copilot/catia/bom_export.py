@@ -67,8 +67,8 @@ def export_bom_to_excel(
     """
     import openpyxl
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-    from pycatia import catia
     from pycatia.product_structure_interfaces.product_document import ProductDocument
+    from catia_copilot.catia.connection import get_catia_v5_application
 
     if columns is None:
         columns = BOM_DEFAULT_COLUMNS
@@ -82,7 +82,7 @@ def export_bom_to_excel(
     bom_suffix = "_汇总BOM" if summarize else "_BOM"
     use_csv = output_format.lower() == "csv"
 
-    caa         = catia()
+    caa         = get_catia_v5_application()
     application = caa.application
     application.visible = True
     documents   = application.documents

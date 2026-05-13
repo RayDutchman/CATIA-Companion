@@ -1468,7 +1468,7 @@ class BomEditDialog(QDialog):
         renamed_count = 0
 
         # 性能优化：一次性构建文档缓存，避免重复扫描
-        from pycatia import catia as _pycatia
+        from catia_copilot.catia.connection import get_catia_v5_application as _pycatia
         caa         = _pycatia()
         application = caa.application
         application.visible = True
@@ -1638,7 +1638,7 @@ class BomEditDialog(QDialog):
         QMessageBox.information(self, "请在CATIA中继续操作", "准备就绪，请在CATIA中确认后续操作。")
 
         try:
-            from pycatia import catia as _pycatia
+            from catia_copilot.catia.connection import get_catia_v5_application as _pycatia
             caa         = _pycatia()
             application = caa.application
             application.visible = True
@@ -2174,7 +2174,7 @@ class BomEditDialog(QDialog):
         打开后，若 ``win32gui`` 可用，则将CATIA V5主窗口置于Windows前台。
         """
         try:
-            from pycatia import catia as _pycatia  # noqa: PLC0415
+            from catia_copilot.catia.connection import get_catia_v5_application as _pycatia  # noqa: PLC0415
             caa         = _pycatia()
             application = caa.application
             application.visible = True

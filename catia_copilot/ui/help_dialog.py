@@ -568,7 +568,11 @@ _HELP_HTML = f"""\
   </tr>
   <tr>
     <td><span style="color: #cc2222">● CATIA 未连接</span></td>
-    <td>CATIA 未运行或 COM 完全不可用。请先打开 CATIA。</td>
+    <td>
+      CATIA V5 未运行或 COM 完全不可用。请先打开 CATIA V5 R28。<br />
+      <b>注意：</b>若同时安装了 3DEXPERIENCE，程序会自动通过枚举 ROT 查找 CATIA V5，
+      无需手动干预。如仍提示未连接，请手动启动 CATIA V5 R28 后再操作。
+    </td>
   </tr>
 </table>
 <p>
@@ -611,7 +615,35 @@ _HELP_HTML = f"""\
     </td>
   </tr>
   <tr>
-    <td><b>Q: 复制文件提示权限不足？</b></td>
+    <td><b>Q: 同时安装了 CATIA V5 和 3DEXPERIENCE，程序显示"CATIA 未连接"或执行命令时打开了 3DEXPERIENCE？</b></td>
+    <td>
+      A: 这是 Windows COM 注册表被 3DEXPERIENCE 覆盖导致的冲突问题。<br />
+      <b>原因：</b>两套产品均使用 "CATIA.Application" COM ProgID；后安装的版本会覆盖注册表中该 ProgID
+      的 CLSID 映射，导致 COM 调用找不到 V5 实例，转而启动 3DEXPERIENCE。<br />
+      <b>本程序已内置自动解决方案：</b>
+      <ol>
+        <li>优先通过枚举 Windows ROT（Running Object Table）直接查找 CATIA V5 实例，绕过 ProgID→CLSID 注册表映射。</li>
+        <li>若 CATIA V5 未运行，程序会自动从注册表检测 CATIA V5 安装路径（优先选择 V5 而非 3DE），
+            并启动 CNEXT.exe。</li>
+      </ol>
+      <b>若仍出现问题：</b>请确保先手动启动 CATIA V5 R28，再使用本程序。
+    </td>
+  </tr>
+  <tr>
+    <td><b>Q: 程序放在 D 盘（非 C 盘）时无法连接 CATIA，但放 C 盘正常？</b></td>
+    <td>
+      A: 此问题通常由 win32com 早绑定缓存（gen_py）路径差异造成：
+      <ul>
+        <li>当程序位于不同盘符时，gen_py 缓存的实际写入路径可能与清理路径不一致（PyInstaller 打包环境特有问题）。</li>
+        <li>若同时安装了 3DEXPERIENCE，gen_py 中可能存有 3DE 的早绑定缓存，
+            导致即使 CATIA V5 在运行也无法正确连接。</li>
+      </ul>
+      <b>本程序已在启动时同时清理所有已知 gen_py 候选路径</b>（包括 tempfile、%LOCALAPPDATA% 等），
+      确保在任意盘符下都能彻底清除缓存。<br />
+      若问题仍然存在，请手动删除 <code>%LOCALAPPDATA%\\Temp\\gen_py\\</code> 文件夹后重启程序。
+    </td>
+  </tr>
+  <tr>
     <td>
       A: CATIA 通常安装在 Program Files 目录，需要管理员权限才能写入。
       请右键以管理员身份运行本程序。

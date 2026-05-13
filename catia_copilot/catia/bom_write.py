@@ -35,8 +35,9 @@ def write_bom_to_catia(
                           可抛出异常以中止。遍历顺序为后序（子节点在父节点之前），
                           因此较深层级在父级之前写入 CATIA。
     """
-    from pycatia import catia, CatWorkModeType
+    from pycatia import CatWorkModeType
     from pycatia.product_structure_interfaces.product_document import ProductDocument
+    from catia_copilot.catia.connection import get_catia_v5_application
 
     WRITABLE_DIRECT: dict[str, str] = {
         "Nomenclature": "nomenclature",
@@ -198,7 +199,7 @@ def write_bom_to_catia(
             _written_fps.add(filepath)
 
     # ── CATIA connection ────────────────────────────────────────────────────
-    caa         = catia()
+    caa         = get_catia_v5_application()
     application = caa.application
     application.visible = True
     documents   = application.documents
