@@ -1,64 +1,79 @@
 # 关于 `dispatch.Version` 抛出异常的问题
 
-## 问题
+---
 
-> 以前尝试过 `dispatch.Version`，确实会抛出 exception，所以本 session 所做的工作还有用吗？
+## 补充信息（纯 V5 环境，无 3DE）
 
-## 结论：有用，而且修复方向完全正确
+> 我的电脑只有V5没有3DE，`.Version` 仍然一定会抛出异常。
 
-`dispatch.Version` 抛出异常，**正是**本 session 修复所针对的核心问题。修复逻辑分两层：
+这是关键新信息，修正了之前的根因分析：
+
+### 真正的根因
+
+**`.Version` 不是因为 gen_py 缓存污染才抛异常，而是在 CATIA V5 Application 的 COM IDispatch 接口中根本不暴露这个属性。**
+
+- 使用 `dynamic.Dispatch`（晚绑定）时，win32com 通过 `IDispatch::GetIDsOfNames("Version")` 查询属性的 DispID
+- CATIA V5 Application 对象的 IDispatch **不返回** "Version" 的 DispID，导致 `AttributeError`/`com_error`
+- 这与 gen_py 缓存完全无关，纯 V5 环境下也必然抛异常
+
+### 修正后的分析
+
+| 场景 | `.Version` | `.Name` |
+|---|---|---|
+| 纯 V5（任何环境） | **始终抛异常** | 返回 `"CATIA"` 或 `"CNEXT"` ✅ |
+| 3DE | 返回 `"3DEXPERIENCE..."` ✅ | 返回 `"CNEXT"` （与V5相同，无法区分） |
+
+这说明：
+- **`.Name` 是唯一可靠的 V5 识别方式**（对于纯 V5 场景）
+- **`.Version` 的作用是识别 3DE**（当 `.Version` 成功且包含 "3DEXPERIENCE" → 排除 3DE）
+- 在 V5+3DE 共存时：先用 `.Version` 排除 3DE，再用 `.Name` 确认 V5 —— 两步缺一不可
 
 ---
 
-## 第一层：`.Version` 异常时回退到 `.Name` 检查
+## 本次修复的逻辑（完整版）
 
-**旧代码（有 bug）：**
+**旧代码（根本性 bug）：**
 ```python
 def _is_catia_v5_dispatch(dispatch):
     try:
         return "V5" in str(dispatch.Version)
     except Exception:
-        return False   # ← 抛异常时直接返回 False，误判为"不是 V5"
+        return False   # ← 纯 V5 时始终执行此行，始终返回 False！
 ```
 
 **新代码（修复后）：**
 ```python
 def _is_catia_v5_dispatch(dispatch):
     try:
-        return "V5" in str(dispatch.Version)
+        version = str(dispatch.Version)          # V5 下始终抛异常，直接进 except
+        if "3DEXPERIENCE" in version.upper():
+            return False                          # 排除 3DE
+        ...
+        return True
     except Exception:
         try:
-            return str(dispatch.Name).upper() in ("CNEXT", "CATIA")  # ← 回退检查
+            name = str(dispatch.Name).upper()    # V5 的主要识别路径
+            return name in ("CNEXT", "CATIA")    # 纯 V5 → True ✅
         except Exception:
             return False
 ```
 
-CATIA V5 的进程名是 `CNEXT`，`dispatch.Name` 在 V5 环境下**不会**抛异常，可以可靠地区分 V5 与 3DE。
-
 ---
 
-## 第二层：用 `dynamic.Dispatch` 绕过 gen_py 缓存
+## 完整场景矩阵
 
-`.Version` 抛异常的**根本原因**是 gen_py 早绑定缓存污染。当 3DEXPERIENCE 安装后，它的 typelib 写入了 gen_py 缓存，导致 win32com 用 3DE 的接口定义去调用 V5 对象，`.Version` 访问失败。
-
-修复方法：所有 ROT 枚举和 `GetActiveObject` 调用改用 `win32com.client.dynamic.Dispatch`（晚绑定），完全绕过 gen_py 缓存。这样 `.Version` 有机会正常工作；即使仍然失败，第一层 `.Name` 回退也能兜底。
-
----
-
-## 完整调用链对比
-
-| 场景 | 旧代码结果 | 新代码结果 |
+| 场景 | 旧代码 | 新代码 |
 |---|---|---|
-| 纯 V5 环境，gen_py 干净 | `.Version` 成功 → True ✅ | `.Version` 成功 → True ✅ |
-| 纯 V5 环境，gen_py 被 3DE 污染 | `.Version` 抛异常 → **False ❌**（误判！） | `.Version` 抛异常 → `.Name`="CNEXT" → **True ✅** |
-| 纯 V5 + dynamic.Dispatch | `.Version` 抛异常 → **False ❌** | `.Version` 可能成功 → True ✅；失败则回退 `.Name` ✅ |
-| 3DE 环境 | `.Version` 返回非"V5"字符串 → False ✅ | 同左 ✅ |
+| 纯 V5（无 3DE） | `.Version` 抛异常 → **False ❌**（始终断连！） | `.Version` 抛 → `.Name`="CATIA" → **True ✅** |
+| V5 + 3DE 共存，连接 V5 对象 | `.Version` 抛异常 → **False ❌** | `.Version` 抛 → `.Name`="CNEXT" → **True ✅** |
+| V5 + 3DE 共存，连接 3DE 对象 | `.Version` 返回 "3DEXPERIENCE..." → False ✅ | 同左，`.Version` 成功 → **False ✅**（正确排除） |
+| 3DE 也不暴露 `.Version`（极端情况） | `.Version` 抛 → **False ✅**（巧合正确） | `.Version` 抛 → `.Name`="CNEXT" → **True ❌**（无法区分） |
 
 ---
 
 ## 总结
 
-- `dispatch.Version` 抛异常不是偶发问题，而是"V5 + 3DE 共存"场景下的**必然现象**。
-- 旧代码把这个异常当作"不是 V5"处理，导致状态栏显示"CATIA 未连接"。
-- 本 session 的修复**专门针对这个异常场景**，通过 `.Name` 回退 + `dynamic.Dispatch` 双重保护，确保 V5 能被正确识别。
-- **本 session 所做的工作完全有用，且是必要的修复。**
+1. **旧代码在纯 V5 环境下就是坏的** —— 不需要 3DE，`dispatch.Version` 就始终抛异常，连接始终失败。
+2. **新代码的 `.Name` 回退是正确且必要的** —— 这是 V5 对象的唯一可靠识别方式。
+3. `dynamic.Dispatch` 的修改仍然有价值 —— 防止 3DE 的 gen_py 缓存干扰获取 dispatch 对象本身的过程（影响的是能否拿到对象，而非 `.Version` 是否工作）。
+4. **当前修复对纯 V5 场景完全有效**：`.Version` 抛异常 → `.Name`="CATIA"/"CNEXT" → 返回 True → 连接成功。
