@@ -241,13 +241,15 @@ def check_catia_connection() -> str:
         return "disconnected"
 
     # ── 方式 1：标准 GetActiveObject（强制晚绑定，绕过 gen_py 缓存）────────
-    # 注意：必须用 CLSIDFromProgID，不能用 MkParseDisplayName —— 后者不解析裸
-    # ProgID 字符串，会以 MK_E_SYNTAX (0x800401E4 "无效的语法") 抛出异常。
+    # pywintypes.IID(progid) 是 win32com.client.GetActiveObject 内部使用的同一
+    # 方式，通过 Windows CoClsidFromProgID 解析 ProgID → CLSID。在所有版本的
+    # pywin32 中均可用，不依赖 pythoncom.CLSIDFromProgID（旧版本中不存在）。
     _broken = False
     try:
+        import pywintypes as _pywt
         import pythoncom as _pc
         from win32com.client import dynamic as _dyn
-        clsid = _pc.CLSIDFromProgID("CATIA.Application")
+        clsid = _pywt.IID("CATIA.Application")
         raw = _pc.GetActiveObject(clsid)
         app = _dyn.Dispatch(raw)
         try:
@@ -321,13 +323,15 @@ def diagnose_catia_connection() -> dict:
         return result
 
     # 方式 1：标准 GetActiveObject（强制晚绑定，绕过 gen_py 缓存）
-    # 注意：必须用 CLSIDFromProgID，不能用 MkParseDisplayName（后者不解析裸 ProgID，
-    # 会以 MK_E_SYNTAX / 0x800401E4 "无效的语法" 抛出异常）。
+    # pywintypes.IID(progid) 是 win32com.client.GetActiveObject 内部使用的同一
+    # 方式，通过 Windows CoClsidFromProgID 解析 ProgID → CLSID。在所有版本的
+    # pywin32 中均可用，不依赖 pythoncom.CLSIDFromProgID（旧版本中不存在）。
     app = None
     try:
+        import pywintypes as _pywt
         import pythoncom as _pc
         from win32com.client import dynamic as _dyn
-        clsid = _pc.CLSIDFromProgID("CATIA.Application")
+        clsid = _pywt.IID("CATIA.Application")
         raw = _pc.GetActiveObject(clsid)
         app = _dyn.Dispatch(raw)
     except Exception as exc:

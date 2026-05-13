@@ -114,9 +114,34 @@ raw   = pythoncom.GetActiveObject(clsid)
 
 修复 `CLSIDFromProgID` 后，步骤 1 会成功找到 CATIA，步骤 2 用 `.Name` 识别为 V5，连接成功。
 
-### 修复范围
+> **但**：`pythoncom.CLSIDFromProgID` 在旧版本 pywin32 中不存在，导致出现下一个错误。
 
-三处代码都用了同一个错误的 `MkParseDisplayName`，全部已修复为 `CLSIDFromProgID`：
+---
+
+## 第三次错误（当前）：`module 'pythoncom' has no attribute 'CLSIDFromProgID'`
+
+`CLSIDFromProgID` 是 `pythoncom` 扩展模块中后来才添加的方法，在用户安装的 pywin32 版本中不存在。
+
+### 正确的 API：`pywintypes.IID(progid)`
+
+`win32com.client.GetActiveObject` 内部用的就是这个：
+
+```python
+# win32com/client/__init__.py 源码
+def GetActiveObject(progid, clsctx=None):
+    clsid = pywintypes.IID(progid)   # ← 解析 ProgID → CLSID
+    ...
+    interface = pythoncom.GetActiveObject(clsid)
+```
+
+`pywintypes.IID(string)` 构造函数：
+- 若传入 `"{XXXXXXXX-...}"` 形式的 CLSID 字符串 → 直接解析
+- 若传入 `"CATIA.Application"` 这样的 ProgID → 调用 Windows `CoClsidFromProgID` API 解析
+- 在所有 pywin32 版本中均存在（pywintypes 是 pywin32 最基础的模块）
+
+### 本次修复范围
+
+所有三处 `CLSIDFromProgID` 改为 `pywintypes.IID`：
 
 | 文件 | 函数 |
 |---|---|
@@ -126,8 +151,8 @@ raw   = pythoncom.GetActiveObject(clsid)
 
 ### 修复后的完整连接流程（纯 V5）
 
-1. `CLSIDFromProgID("CATIA.Application")` → 查注册表，得到 CLSID ✅
-2. `GetActiveObject(clsid)` → 在 Windows ROT 中找到正在运行的 CATIA V5 ✅
+1. `pywintypes.IID("CATIA.Application")` → 调用 Windows CoClsidFromProgID → 得到 CLSID ✅
+2. `pythoncom.GetActiveObject(clsid)` → 在 Windows ROT 中找到正在运行的 CATIA V5 ✅
 3. `dynamic.Dispatch(raw)` → 强制晚绑定包装 ✅
 4. `app.Name` → 功能性测试，CATIA V5 返回 `"CATIA"` ✅
 5. `_is_catia_v5_dispatch(app)` → `.Version` 抛异常 → `.Name`=`"CATIA"` → **True ✅**
