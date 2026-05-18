@@ -109,18 +109,30 @@ def get_catia_v5_application():
     行为：
     1. 若 CATIA V5 已在运行，直接连接并返回（不新建实例）。
     2. 若 "CATIA.Application" ProgID 不存在，则依次尝试 CLSID 直连和 ROT 枚举。
-    3. 若 CATIA V5 未运行，自动通过注册表找到并启动 CNEXT.exe，然后连接。
+    3. 若 CATIA V5 未运行（进程不存在），自动通过注册表找到并启动 CNEXT.exe，然后连接。
+    4. 若 CATIA V5 进程存在但 COM 连接失败（例如权限不匹配），直接报错，
+       不尝试启动新实例。
 
     返回：
         pycatia Application 对象（已连接到 CATIA V5）。
 
     抛出：
-        RuntimeError：无法连接到 CATIA V5（未安装或启动失败）时。
+        RuntimeError：无法连接到 CATIA V5（未安装、启动失败或 COM 连接被拒绝）时。
     """
     from pycatia.in_interfaces.application import Application
+    from catia_copilot.utils import _is_catia_process_running
 
     com_obj = _get_v5_com_object()
     if com_obj is None:
+        if _is_catia_process_running():
+            # 进程存在但 COM 连不上（通常是权限不匹配），不要新建实例
+            raise RuntimeError(
+                "检测到 CATIA V5 正在运行，但无法通过 COM 连接。\n\n"
+                "最常见原因：CATIA 以管理员权限运行，而本程序以普通用户权限运行。\n"
+                "解决方法：将 CATIA 改为普通用户权限运行（取消「以管理员身份运行」），"
+                "使两侧权限级别一致。"
+            )
+        # 进程不存在，尝试自动启动
         logger.info("CATIA V5 未运行，尝试自动启动……")
         success = _launch_catia_v5()
         if success:

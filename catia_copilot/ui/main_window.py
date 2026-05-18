@@ -7,6 +7,7 @@
 
 import sys
 import os
+import re
 import shutil
 import subprocess
 import logging
@@ -41,6 +42,7 @@ from catia_copilot.ui.find_deps_dialog import FindDependenciesDialog
 from catia_copilot.ui.bom_edit_dialog import BomEditDialog
 from catia_copilot.ui.mass_props_dialog import MassPropsDialog
 from catia_copilot.ui.help_dialog import HelpDialog
+from catia_copilot.ui.plm_sync_dialog import PlmSyncDialog
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +74,7 @@ class MainWindow(QMainWindow):
         self._catia_status_label.setObjectName("catiaStatusLabel")
         self._catia_status_label.setToolTip(
             "CATIA V5 COM 连接状态（每 5 秒自动刷新）\n"
-            "橙色表示 COM 对象可获取但功能测试失败（如早绑定缓存污染），\n"
+            "橙色表示 COM 对象可获取但功能测试失败，\n"
             "可通过菜单「帮助 -> CATIA 连接诊断」查看详情"
         )
         self.statusBar().addPermanentWidget(self._catia_status_label)
@@ -93,9 +95,6 @@ class MainWindow(QMainWindow):
         elif status == "broken":
             self._catia_status_label.setText("⚠ CATIA 连接异常")
             self._catia_status_label.setProperty("catiaConnected", "broken")
-        elif status == "access_denied":
-            self._catia_status_label.setText("⚠ 权限不足（点击诊断）")
-            self._catia_status_label.setProperty("catiaConnected", "broken")
         else:
             self._catia_status_label.setText("● CATIA 未连接")
             self._catia_status_label.setProperty("catiaConnected", "false")
@@ -106,147 +105,184 @@ class MainWindow(QMainWindow):
     def _show_catia_diagnostics(self) -> None:
         """运行 CATIA COM 详细诊断并以对话框形式呈现结果。"""
         info = diagnose_catia_connection()
+        status = info["status"]
+        is_elevated = bool(info.get("is_elevated"))
+        catia_running = bool(info.get("catia_process_running"))
 
-        # broken 状态根据是否已提权细分描述
-        _broken_admin = (
-            info["status"] == "broken"
-            and info.get("is_elevated")
-            and info.get("catia_process_running")
-        )
         status_text = {
             "connected":    "✅ 已连接（功能测试通过）",
-            "broken":       "⚠️ 连接异常（COM 对象存在但功能测试失败，或 COM 注册异常）",
-            "access_denied":"⚠️ 权限不足（CATIA 以管理员运行，本程序未提权）",
-            "disconnected": "❌ 未连接（CATIA V5 未运行或 COM 不可用）",
-        }.get(info["status"], info["status"])
+            "broken":       "⚠️ 连接异常",
+            "disconnected": "❌ 未连接",
+        }.get(status, status)
+
+        elevated_text = "是（管理员）" if is_elevated else "否（普通用户）"
+        process_text  = "运行中" if catia_running else "未检测到"
 
         lines = [
             f"<b>连接状态：</b>{status_text}",
+            f"<b>本程序权限：</b>{elevated_text}",
+            f"<b>CNEXT.exe 进程：</b>{process_text}",
         ]
 
-        # 权限与进程状态（始终显示，帮助排查 UAC / COM 问题）
-        elevated_text = "是（管理员）" if info.get("is_elevated") else "否（普通用户）"
-        process_text  = "运行中" if info.get("catia_process_running") else "未检测到"
-        lines.append(f"<b>本程序权限：</b>{elevated_text}")
-        lines.append(f"<b>CNEXT.exe 进程：</b>{process_text}")
-
-        if info["error"]:
-            lines.append(f"<b>错误详情：</b><code>{info['error']}</code>")
-        # 若 error 已被替换为高层描述，再单独展示 GetActiveObject 原始错误
-        if info.get("get_active_error") and info.get("get_active_error") != info["error"]:
-            lines.append(
-                f"<b>GetActiveObject 原始错误：</b><code>{info['get_active_error']}</code>"
-            )
-        if info["app_name"]:
-            lines.append(f"<b>应用名称：</b>{info['app_name']}")
-        if info.get("app_version"):
-            lines.append(f"<b>版本：</b>{info['app_version']}")
-        if info.get("is_v5") is not None:
-            if info["is_v5"]:
-                lines.append("<b>产品类型：</b>CATIA V5 ✅")
-            else:
+        # ── 已连接：显示连接细节 ─────────────────────────────────────────
+        if status == "connected":
+            if info["app_name"]:
+                lines.append(f"<b>应用名称：</b>{info['app_name']}")
+            if info.get("is_v5") is not None:
                 lines.append(
-                    "<b>产品类型：</b>3DEXPERIENCE ⚠️ "
-                    "（检测到已连接到 3DEXPERIENCE 而非 CATIA V5）"
+                    "<b>产品类型：</b>CATIA V5 ✅"
+                    if info["is_v5"]
+                    else "<b>产品类型：</b>3DEXPERIENCE ⚠️"
                 )
-        if info["doc_count"] is not None:
-            lines.append(f"<b>已打开文档数：</b>{info['doc_count']}")
-        if info["active_doc"]:
-            lines.append(f"<b>当前活动文档：</b>{info['active_doc']}")
-        elif info["status"] == "connected":
-            lines.append("<b>当前活动文档：</b>（无）")
+            if info["doc_count"] is not None:
+                lines.append(f"<b>已打开文档数：</b>{info['doc_count']}")
+            if info["active_doc"]:
+                lines.append(f"<b>当前活动文档：</b>{info['active_doc']}")
+            else:
+                lines.append("<b>当前活动文档：</b>（无）")
 
-        # ── 建议区 ──────────────────────────────────────────────────────
-        if _broken_admin:
-            # 注册表 ProgID 列表
-            reg_progids = info.get("registry_catia_progids") or []
-            reg_str = "、".join(reg_progids) if reg_progids else "（未找到）"
-            # ROT 条目（仅展示前 10 条，防止对话框过长）
-            rot_entries = info.get("rot_monikers") or []
-            rot_preview = rot_entries[:10]
-            rot_str = "<br/>　　".join(rot_preview) if rot_preview else "（无条目或枚举失败）"
-            lines.append(
-                "<br/><b>分析：</b>本程序已以管理员身份运行，CATIA 进程也在运行，"
-                "但所有 COM 连接方式均失败。<br/>"
-                "<b style='color:red'>⚠️ 重要提示：</b>"
-                "ROT 为空，强烈提示 CATIA 是以<b>普通用户（非管理员）</b>身份运行的。"
-                "以管理员身份运行的本程序无法访问普通用户的 COM 对象。<br/>"
-                "<b>首选解决方案：</b>请改为以<b>普通用户身份（不提权）</b>直接运行本程序。<br/>"
-                "其他可能原因：<br/>"
-                "① HKCR 中无 CATIA ProgID（CO_E_CLASSSTRING），已知 CLSID 直连也失败；<br/>"
-                "② gen_py 早绑定缓存（版本不匹配）干扰了 COM 调用；<br/>"
-                "③ CATIA 正在初始化中，尚未完成 COM 注册（等待片刻后重试）。<br/>"
-                f"<b>注册表 CATIA* ProgID：</b>{reg_str}<br/>"
-                f"<b>ROT 条目（前{len(rot_preview)}条）：</b><br/>　　{rot_str}"
-            )
-        elif info["status"] == "broken":
-            lines.append(
-                "<br/><b>建议：</b>检测到 COM 对象异常。可能原因为早绑定缓存（gen_py）污染。"
-                "请重启本程序（启动时会自动清理缓存），或参阅帮助文档中的手动修复步骤。"
-            )
-        if info["status"] == "access_denied":
-            lines.append(
-                "<br/><b>根本原因：</b>Windows Vista+ 的 UAC 隔离机制导致：以管理员身份运行的"
-                " CATIA 所注册的 COM 对象，对普通权限进程完全不可见（GetActiveObject 和 ROT "
-                '枚举均失败，看起来像"未连接"）。<br/>'
-                "<b>解决方案：</b>以管理员身份重启本程序，或将 CATIA 改为普通权限运行。"
-            )
-        if info.get("is_v5") is False:
-            lines.append(
-                "<br/><b>建议：</b>已检测到 3DEXPERIENCE 连接，而非 CATIA V5。"
-                "本程序会自动通过 ROT 枚举查找 CATIA V5 实例。"
-                "如问题持续，请手动启动 CATIA V5 R28 后重试。"
-            )
+        # ── 连接异常：区分权限不匹配方向 ────────────────────────────────
+        elif status == "broken" and catia_running:
+            if is_elevated:
+                # 本程序管理员，CATIA 普通用户
+                lines += [
+                    "",
+                    "<b>根本原因：</b>本程序以<b>管理员</b>权限运行，CATIA 以<b>普通用户</b>"
+                    "权限运行。Windows UAC 隔离机制导致管理员进程无法看到普通用户进程注册的"
+                    " ROT 对象。",
+                    "<b>解决方案：</b>以<b>普通用户身份（不提权）</b>直接运行本程序。",
+                ]
+            else:
+                lines += [
+                    "",
+                    "<b>根本原因：</b>CATIA 进程存在，但所有 COM 连接方式均失败。"
+                    "最常见原因：CATIA 以<b>管理员</b>权限运行，而本程序以<b>普通用户</b>"
+                    "权限运行（UAC ROT 隔离）。",
+                    "<b>解决方案：</b>将 CATIA 改为<b>普通用户</b>权限运行（取消「以管理员身份运行」），"
+                    "使两侧权限级别一致。",
+                ]
+
+        # ── 未连接 ───────────────────────────────────────────────────────
+        elif status == "disconnected":
+            lines += [
+                "",
+                "<b>原因：</b>未检测到运行中的 CATIA V5 进程。",
+                "<b>建议：</b>请先启动 CATIA V5，再重试。",
+            ]
 
         html = "<br/>".join(lines)
 
-        # access_denied 且尚未提权时，提供"以管理员身份重启"按钮
-        if info["status"] == "access_denied" and not info.get("is_elevated"):
-            msg = QMessageBox(self)
-            msg.setWindowTitle("CATIA 连接诊断")
-            msg.setTextFormat(Qt.TextFormat.RichText)
-            msg.setText(html)
-            btn_restart = msg.addButton("以管理员身份重启", QMessageBox.ButtonRole.AcceptRole)
-            msg.addButton("关闭", QMessageBox.ButtonRole.RejectRole)
-            msg.exec()
-            if msg.clickedButton() == btn_restart:
-                self._restart_as_admin()
-        else:
-            QMessageBox.information(self, "CATIA 连接诊断", html)
+        msg = QMessageBox(self)
+        msg.setWindowTitle("CATIA 连接诊断")
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setText(html)
+        msg.exec()
 
-    def _restart_as_admin(self) -> None:
-        """使用 ShellExecuteW 以 runas 动词重新以管理员身份启动本程序，然后退出当前实例。"""
+    @staticmethod
+    def _detect_crack_version_subdir(catia_root: str) -> str | None:
+        """从 CATIA 安装路径末尾（如 B28、B33）推断 crack 子目录名（如 R28、R33）。
+
+        例：``C:\\Program Files\\Dassault Systemes\\B33`` → ``"R33"``
+        若路径末尾不符合 ``B\\d+`` 格式，则返回 None。
+        """
+        name = Path(catia_root).name.upper()
+        m = re.match(r"^B(\d+)$", name)
+        if m:
+            return f"R{m.group(1)}"
+        return None
+
+    def _run_copy_elevated(self, operations: list[tuple[Path, Path]]) -> bool:
+        """以管理员权限批量复制文件（ShellExecuteExW + WaitForSingleObject）。
+
+        写入临时批处理文件，通过 UAC「runas」动词以管理员身份静默执行，
+        同步等待完成后清理临时文件。
+
+        :param operations: ``[(src_path, dest_path), ...]`` 复制操作列表。
+        :returns: ``True`` 表示 UAC 提权已接受并等待完成；
+                  ``False`` 表示用户取消 UAC 或系统调用失败。
+                  返回 True **不保证**文件一定写入成功，调用方需自行验证目标文件。
+        """
         import ctypes
-        try:
-            executable = sys.executable
-            # PyInstaller 打包后 sys.executable 就是 exe 本身；
-            # 开发模式下需要把脚本路径作为参数传入
-            if getattr(sys, "frozen", False):
-                # 打包模式：直接提权重启 exe
-                params = " ".join(sys.argv[1:])
-            else:
-                # 开发模式：python.exe <main.py> [args...]
-                params = " ".join(sys.argv)
+        from ctypes import wintypes
+        import tempfile
 
-            result = ctypes.windll.shell32.ShellExecuteW(
-                None,        # hwnd
-                "runas",     # verb（触发 UAC 提权对话框）
-                executable,
-                params,
-                None,        # working directory
-                1,           # SW_SHOWNORMAL
-            )
-            # ShellExecuteW 返回值 > 32 表示成功
-            if result > 32:
-                sys.exit(0)
-            else:
-                QMessageBox.warning(
-                    self, "重启失败",
-                    f"无法以管理员身份重启（ShellExecuteW 返回 {result}）。\n"
-                    '请手动右键点击程序图标，选择"以管理员身份运行"。'
-                )
+        if not operations:
+            return True
+
+        # 构建批处理文件内容（若目标目录不存在则先创建）
+        lines = ["@echo off"]
+        for src, dest in operations:
+            parent = str(dest.parent)
+            lines.append(f'if not exist "{parent}" mkdir "{parent}"')
+            lines.append(f'copy /Y "{src}" "{dest}"')
+        bat_content = "\r\n".join(lines) + "\r\n"
+
+        # 写入临时 .bat 文件（CATIA 路径通常为 ASCII，GBK 可安全表示）
+        bat_path = ""
+        try:
+            fd, bat_path = tempfile.mkstemp(suffix=".bat")
+            with os.fdopen(fd, "w", encoding="gbk", errors="replace") as f:
+                f.write(bat_content)
         except Exception as exc:
-            QMessageBox.warning(self, "重启失败", f"发生异常：{exc}")
+            logger.warning(f"创建临时批处理文件失败：{exc}")
+            return False
+
+        # SHELLEXECUTEINFOW 结构体（Windows SDK 定义）
+        SEE_MASK_NOCLOSEPROCESS = 0x00000040
+        SW_HIDE = 0
+
+        class _SHELLEXECUTEINFOW(ctypes.Structure):
+            _fields_ = [
+                ("cbSize",         wintypes.DWORD),
+                ("fMask",          wintypes.ULONG),
+                ("hwnd",           wintypes.HWND),
+                ("lpVerb",         wintypes.LPCWSTR),
+                ("lpFile",         wintypes.LPCWSTR),
+                ("lpParameters",   wintypes.LPCWSTR),
+                ("lpDirectory",    wintypes.LPCWSTR),
+                ("nShow",          ctypes.c_int),
+                ("hInstApp",       wintypes.HINSTANCE),
+                ("lpIDList",       ctypes.c_void_p),
+                ("lpClass",        wintypes.LPCWSTR),
+                ("hkeyClass",      wintypes.HKEY),
+                ("dwHotKey",       wintypes.DWORD),
+                ("hIconOrMonitor", wintypes.HANDLE),   # union hIcon/hMonitor
+                ("hProcess",       wintypes.HANDLE),
+            ]
+
+        sei = _SHELLEXECUTEINFOW()
+        sei.cbSize = ctypes.sizeof(sei)
+        sei.fMask = SEE_MASK_NOCLOSEPROCESS
+        sei.hwnd = None
+        sei.lpVerb = "runas"
+        sei.lpFile = "cmd.exe"
+        sei.lpParameters = f'/c "{bat_path}"'
+        sei.lpDirectory = None
+        sei.nShow = SW_HIDE
+
+        accepted = False
+        try:
+            ok = bool(ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(sei)))
+            if ok and sei.hProcess:
+                # 等待 cmd.exe 执行完毕（最多 60 秒）
+                WAIT_TIMEOUT = 0x00000102
+                ret = ctypes.windll.kernel32.WaitForSingleObject(sei.hProcess, 60000)
+                ctypes.windll.kernel32.CloseHandle(sei.hProcess)
+                if ret == WAIT_TIMEOUT:
+                    logger.warning("提权复制操作等待超时（60 秒），请手动确认结果。")
+                accepted = True
+            else:
+                logger.info("ShellExecuteExW 返回失败，用户可能取消了 UAC 提权。")
+        except Exception as exc:
+            logger.warning(f"ShellExecuteExW 调用异常：{exc}")
+        finally:
+            try:
+                if bat_path:
+                    os.unlink(bat_path)
+            except Exception:
+                pass
+
+        return accepted
 
     # ── 中央控件区域 ──────────────────────────────────────────────────────
 
@@ -300,7 +336,14 @@ class MainWindow(QMainWindow):
         )
         btn_mass_props.clicked.connect(self._open_mass_props_dialog)
 
-        for btn in (btn_bom_export, btn_bom_edit, btn_mass_props):
+        btn_plm_sync = QPushButton("同步 BOM 到 PLM")
+        btn_plm_sync.setToolTip(
+            "将当前 CATIA 产品结构（BOM）同步到 DocdokuPLM 服务端，\n"
+            "自动创建零件、写入属性并上传 STEP 几何文件"
+        )
+        btn_plm_sync.clicked.connect(self._open_plm_sync_dialog)
+
+        for btn in (btn_bom_export, btn_bom_edit, btn_mass_props, btn_plm_sync):
             bom_layout.addWidget(btn)
         layout.addWidget(bom_group)
 
@@ -409,6 +452,9 @@ class MainWindow(QMainWindow):
         ))
         bom_menu.addAction(QAction(
             "BOM属性补全", self, triggered=self._open_bom_edit_dialog
+        ))
+        bom_menu.addAction(QAction(
+            "同步BOM到PLM", self, triggered=self._open_plm_sync_dialog
         ))
 
         # 图纸菜单
@@ -664,6 +710,15 @@ class MainWindow(QMainWindow):
     def _open_mass_props_dialog(self) -> None:
         self._show_dialog("_dlg_mass_props", lambda: MassPropsDialog(self))
 
+    def _open_plm_sync_dialog(self) -> None:
+        def factory():
+            dlg = PlmSyncDialog(self)
+            # 同步运行期间暂停 CATIA 连接检查，避免 COM 调用持有 GIL 阻塞 Worker 线程
+            dlg.sync_started.connect(self._connection_timer.stop)
+            dlg.sync_done.connect(self._connection_timer.start)
+            return dlg
+        self._show_dialog("_dlg_plm_sync", factory)
+
     def _open_stamp_part_template_dialog(self) -> None:
         self._show_dialog("_dlg_stamp_template", lambda: FileConvertDialog(
             parent=self,
@@ -900,19 +955,38 @@ class MainWindow(QMainWindow):
                 f"'{base_name}' 已成功复制到：\n{dest_file}",
             )
         except PermissionError:
-            QMessageBox.critical(
+            reply = QMessageBox.question(
                 self, "权限不足",
-                f"无法复制文件，请以管理员身份运行程序。\n\n目标路径：\n{dest_file}",
+                f"无法直接复制文件（权限不足）。\n\n"
+                f"目标路径：\n{dest_file}\n\n"
+                f"是否通过 UAC 提权以管理员身份重试？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
+            if reply == QMessageBox.StandardButton.Yes:
+                accepted = self._run_copy_elevated([(src_file, dest_file)])
+                if accepted:
+                    if dest_file.exists():
+                        QMessageBox.information(
+                            self, "成功",
+                            f"'{base_name}' 已成功复制到：\n{dest_file}",
+                        )
+                    else:
+                        QMessageBox.warning(
+                            self, "结果未知",
+                            f"提权复制已执行，但无法确认文件是否成功写入。\n"
+                            f"请手动确认：\n{dest_file}",
+                        )
+                else:
+                    QMessageBox.information(self, "已取消", "用户取消了 UAC 提权，文件未复制。")
         except Exception as e:
             QMessageBox.critical(self, "错误", f"发生意外错误：\n{e}")
 
     def _crack(self) -> None:
-        src_dir = resource_path(CRACK_DIR_PATH)
-        if not src_dir.exists() or not src_dir.is_dir():
+        base_src_dir = resource_path(CRACK_DIR_PATH)
+        if not base_src_dir.exists() or not base_src_dir.is_dir():
             QMessageBox.warning(
                 self, "文件夹未找到",
-                f"找不到 'crack' 文件夹：\n{src_dir.parent}",
+                f"找不到 'crack' 文件夹：\n{base_src_dir.parent}",
             )
             return
 
@@ -935,6 +1009,25 @@ class MainWindow(QMainWindow):
             if not catia_root:
                 return
 
+        # 按版本推断专属子目录（如安装路径末尾为 B28 → crack/R28）
+        version_subdir = self._detect_crack_version_subdir(catia_root)
+        src_dir = base_src_dir
+        if version_subdir:
+            versioned_dir = base_src_dir / version_subdir
+            if versioned_dir.is_dir():
+                src_dir = versioned_dir
+                logger.info(f"使用版本专属 crack 目录：{src_dir}")
+            else:
+                reply = QMessageBox.question(
+                    self, "找不到版本专属目录",
+                    f"未找到版本专属 crack 子目录：\n{versioned_dir}\n\n"
+                    f"是否改用通用 crack 根目录中的文件？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                )
+                if reply == QMessageBox.StandardButton.No:
+                    return
+                # src_dir 保持为 base_src_dir（通用目录）
+
         dest_dir = Path(catia_root) / "win_b64" / "code" / "bin"
         if not dest_dir.exists():
             QMessageBox.critical(
@@ -945,7 +1038,10 @@ class MainWindow(QMainWindow):
 
         files = [f for f in src_dir.iterdir() if f.is_file()]
         if not files:
-            QMessageBox.warning(self, "文件夹为空", "'crack' 文件夹中没有文件。")
+            QMessageBox.warning(
+                self, "文件夹为空",
+                f"crack 源目录中没有文件：\n{src_dir}",
+            )
             return
 
         try:
@@ -961,9 +1057,31 @@ class MainWindow(QMainWindow):
                 + "\n".join(copied),
             )
         except PermissionError:
-            QMessageBox.critical(
+            reply = QMessageBox.question(
                 self, "权限不足",
-                f"无法复制文件，请以管理员身份运行程序。\n\n目标路径：\n{dest_dir}",
+                f"无法直接复制文件（权限不足）。\n\n"
+                f"目标路径：\n{dest_dir}\n\n"
+                f"是否通过 UAC 提权以管理员身份重试？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
+            if reply == QMessageBox.StandardButton.Yes:
+                ops = [(f, dest_dir / f.name) for f in files]
+                accepted = self._run_copy_elevated(ops)
+                if accepted:
+                    success_count = sum(1 for _, dst in ops if dst.exists())
+                    if success_count == len(ops):
+                        QMessageBox.information(
+                            self, "成功",
+                            f"已成功复制 {success_count} 个文件到：\n{dest_dir}\n\n"
+                            + "\n".join(f.name for f in files),
+                        )
+                    else:
+                        QMessageBox.warning(
+                            self, "部分完成",
+                            f"提权复制已执行，但仅确认 {success_count}/{len(ops)} 个文件写入成功。\n"
+                            f"目标路径：\n{dest_dir}\n\n请手动确认复制结果。",
+                        )
+                else:
+                    QMessageBox.information(self, "已取消", "用户取消了 UAC 提权，文件未复制。")
         except Exception as e:
             QMessageBox.critical(self, "错误", f"发生意外错误：\n{e}")
