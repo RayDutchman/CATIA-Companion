@@ -44,6 +44,7 @@ def write_bom_to_catia(
         "Revision":     "revision",
         "Definition":   "definition",
         "Source":       "source",
+        "Description":  "description_reference",
     }
 
     def _set_prop(product, name: str, value: str) -> None:
@@ -201,7 +202,8 @@ def write_bom_to_catia(
     # ── CATIA connection ────────────────────────────────────────────────────
     caa         = get_catia_v5_application()
     application = caa.application
-    application.visible = True
+    if not application.visible:
+        application.visible = True
     documents   = application.documents
 
     if file_path is None:

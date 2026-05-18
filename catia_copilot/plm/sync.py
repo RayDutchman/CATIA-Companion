@@ -25,23 +25,11 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BomNode:
     """BOM 树中的一个节点（对应 CATIA 零件或组件）。"""
-    part_number: str          # CATIA Part Number
-    name: str                 # 显示名称
-    description: str = ""     # 描述
-    # ── CATIA 内置属性 ────────────────────────────────────────────────────────
-    nomenclature: str = ""    # 术语（中文名称）
-    revision: str = ""        # 版本
-    definition: str = ""      # 定义
-    source: str = ""          # 来源（未知 / 自制 / 外购）
-    # ── 用户自定义属性 ────────────────────────────────────────────────────────
-    material: str = ""        # 材料
-    weight: str = ""          # 重量（字符串，单位 kg）
-    part_type: str = ""       # 零件类型
-    design_status: str = ""   # 设计状态
-    material_code: str = ""   # 物料编码
-    stock_category: str = ""  # 存货类别
-    spec: str = ""            # 规格型号
-    remark: str = ""          # 备注
+    part_number: str          # CATIA Part Number（PLM 零件编号）
+    # 所有属性统一存入 attrs，键名与 CATIA 列名一致：
+    #   内置属性使用英文列名（Nomenclature / Definition / Revision / Source / Description）
+    #   自定义属性使用 UserRefProperty 键名（中文，如"材料"/"重量"等）
+    attrs: dict[str, str] = field(default_factory=dict)
     children: list["BomNode"] = field(default_factory=list)
     # 叶子节点（零件）保存 pycatia Part 对象引用，用于导出 STEP（预留）
     _catia_ref: Any = field(default=None, repr=False)
@@ -77,29 +65,17 @@ class SyncResult:
 
 # ── BOM 提取（CATIA COM，须在主线程调用） ──────────────────────────────────────
 
-# 需要从 CATIA 读取的自定义属性列（与 UserRefProperties 键名一致）
-_CUSTOM_COLS = ["零件类型", "设计状态", "材料", "重量", "物料编码", "存货类别", "规格型号", "备注"]
+# 需要从 CATIA 读取的属性列（内置英文列名 + 用户自定义中文属性名）
+# 顺序与 constants.py BOM_ALL_COLUMNS 中的内置属性对齐
+_BUILTIN_ATTR_COLS: list[str] = ["Nomenclature", "Definition", "Revision", "Source", "Description"]
+_CUSTOM_COLS:       list[str] = ["零件类型", "设计状态", "材料", "重量", "物料编码", "存货类别", "规格型号", "备注"]
+_ALL_ATTR_COLS:     list[str] = _BUILTIN_ATTR_COLS + _CUSTOM_COLS
 
-# 列名 → BomNode 字段名映射（自定义属性；PLM 属性名 = CATIA 列名）
-_COL_TO_FIELD = {
-    "零件类型":  "part_type",
-    "设计状态":  "design_status",
-    "材料":      "material",
-    "重量":      "weight",
-    "物料编码":  "material_code",
-    "存货类别":  "stock_category",
-    "规格型号":  "spec",
-    "备注":      "remark",
-}
-
-# CATIA 内置属性：CATIA 列名 → (BomNode 字段名, PLM 属性显示名)
-# Source 原始值为 "0"/"1"/"2"，在读取时转换为 "未知"/"自制"/"外购"
-_BUILTIN_COL_TO_FIELD_AND_PLM = {
-    "Nomenclature": ("nomenclature", "中文名称"),
-    "Revision":     ("revision",     "版本"),
-    "Definition":   ("definition",   "定义"),
-    "Source":       ("source",       "来源"),
-}
+# PLM instanceAttributes 时跳过的列：结构性列 + 已作为 name 字段写入的 Nomenclature
+_STRUCTURAL_COLS: frozenset[str] = frozenset({
+    "Level", "Type", "Filename", "Filepath", "Part Number", "Quantity",
+    "Nomenclature",   # 已作为零件名称（name 字段）写入，无需重复存为属性
+})
 
 
 def extract_bom(progress_callback=None) -> BomNode | None:
@@ -132,9 +108,9 @@ def extract_bom(progress_callback=None) -> BomNode | None:
 
     try:
         rows = collect_bom_rows(
-            file_path=None,           # 使用当前活动文档
-            columns=list(_BUILTIN_COL_TO_FIELD_AND_PLM.keys()) + _CUSTOM_COLS,  # 内置 + 自定义
-            custom_columns=_CUSTOM_COLS,                                         # 仅自定义
+            file_path=None,
+            columns=_ALL_ATTR_COLS,        # 内置属性 + 自定义属性
+            custom_columns=_CUSTOM_COLS,   # 仅自定义属性（用于 UserRefProperties 读取）
             progress_callback=_row_cb,
         )
     except Exception as exc:
@@ -155,6 +131,8 @@ def _rows_to_bom_tree(rows: list[dict]) -> BomNode | None:
 
     行按前序（父先于子）排列，Level 字段表示深度（根节点为 0）。
     使用栈恢复父子关系。
+    所有属性列直接存入 node.attrs，键名 = CATIA 列名。
+    Source 数值字符串（"0"/"1"/"2"）在此处转换为中文显示名。
     """
     if not rows:
         return None
@@ -162,37 +140,28 @@ def _rows_to_bom_tree(rows: list[dict]) -> BomNode | None:
     from catia_copilot.constants import SOURCE_TO_DISPLAY
 
     root: BomNode | None = None
-    # stack[i] 存储当前路径上深度为 i 的节点
     stack: list[BomNode] = []
 
     for row in rows:
         level = int(row.get("Level", 0))
-        pn = str(row.get("Part Number") or "").strip()
-        name = str(row.get("Filename") or pn or "UNKNOWN")
+        pn    = str(row.get("Part Number") or "").strip()
         if not pn:
-            pn = name
+            pn = str(row.get("Filename") or "UNKNOWN").strip()
 
-        node = BomNode(part_number=pn, name=name)
+        node = BomNode(part_number=pn)
 
-        # 读取自定义属性
-        for col, field_name in _COL_TO_FIELD.items():
+        # 将所有属性列存入 attrs（跳过结构性列）
+        for col in _ALL_ATTR_COLS:
             val = str(row.get(col) or "").strip()
-            if val:
-                setattr(node, field_name, val)
-
-        # 读取 CATIA 内置属性（Source 数值转中文显示名）
-        for catia_col, (field_name, _plm_name) in _BUILTIN_COL_TO_FIELD_AND_PLM.items():
-            val = str(row.get(catia_col) or "").strip()
-            if catia_col == "Source":
+            if col == "Source":
                 val = SOURCE_TO_DISPLAY.get(val, val)
             if val:
-                setattr(node, field_name, val)
+                node.attrs[col] = val
 
         if level == 0:
-            root = node
+            root  = node
             stack = [node]
         else:
-            # 弹出栈中层级 >= 当前层级的节点，找到直接父节点
             while len(stack) > level:
                 stack.pop()
             if stack:
@@ -269,16 +238,27 @@ def _sync_node(
     pn = node.part_number
     cb(f"同步：{pn}")
 
-    # 2. 创建零件
+    # PLM 零件名称 = Nomenclature（中文名称）；若为空则回退到零件编号
+    plm_name = node.attrs.get("Nomenclature") or pn
+
+    # 2. 创建或获取零件；同时确定当前可写迭代号
+    #    - 新建：create_part 返回 WIP 状态，迭代号固定为 1
+    #    - 已存在：需先 checkout 产生新迭代，再更新属性
+    iteration     = 1
+    needs_checkout = False
     try:
-        part_number, version = client.create_part(workspace, pn, node.description, tpl_id)
+        part_number, version = client.create_part(
+            workspace, pn, plm_name,
+            node.attrs.get("Description", ""),
+            tpl_id,
+        )
         result.created += 1
     except PlmApiError as exc:
         if exc.status_code == 409:
-            # 已存在，获取当前版本
             try:
-                part_number, version = client._get_latest_version(workspace, pn)
+                part_number, version, iteration = client._get_latest_version(workspace, pn)
                 result.skipped += 1
+                needs_checkout = True
             except PlmApiError as exc2:
                 result.failed += 1
                 result.errors.append(f"{pn}: 查询现有版本失败 — {exc2}")
@@ -290,29 +270,29 @@ def _sync_node(
             cb(f"  ✗ {pn}: 创建失败 — {exc}")
             return None
 
-    # 3. 更新属性
-    attr_values = {}
-    # 自定义属性（PLM 属性名 = CATIA 列名）
-    for attr_name, field_name in _COL_TO_FIELD.items():
-        val = getattr(node, field_name, "")
-        if val:
-            attr_values[attr_name] = val
-    # CATIA 内置属性（PLM 属性名 = 中文显示名）
-    for _catia_col, (field_name, plm_name) in _BUILTIN_COL_TO_FIELD_AND_PLM.items():
-        val = getattr(node, field_name, "")
-        if val:
-            attr_values[plm_name] = val
+    # 3. 已存在零件：checkout 产生新迭代后才能写属性
+    if needs_checkout:
+        try:
+            iteration = client.checkout_part(workspace, part_number, version)
+        except PlmApiError as exc:
+            logger.warning(f"Checkout 失败（{pn}），跳过属性更新：{exc}")
+            return part_number, version
+
+    # 4. 更新属性：直接使用 node.attrs，跳过结构性列
+    attr_values = {
+        k: v for k, v in node.attrs.items()
+        if k not in _STRUCTURAL_COLS and v
+    }
 
     try:
         client.update_iteration(
-            workspace, part_number, version, 1,
+            workspace, part_number, version, iteration,
             attr_values, child_components,
         )
     except PlmApiError as exc:
         logger.warning(f"属性更新失败（{pn}）：{exc}")
-        # 属性更新失败不阻断后续步骤
 
-    # 4. Check In
+    # 5. Check In
     try:
         client.checkin_part(workspace, part_number, version)
     except PlmApiError as exc:

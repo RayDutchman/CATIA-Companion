@@ -2711,7 +2711,8 @@ class MassPropsDialog(QDialog):
             from catia_copilot.catia.connection import get_catia_v5_application as _pycatia  # noqa: PLC0415
             caa         = _pycatia()
             application = caa.application
-            application.visible = True
+            if not application.visible:
+                application.visible = True
             documents   = application.documents
 
             fp_resolved = Path(fp).resolve()

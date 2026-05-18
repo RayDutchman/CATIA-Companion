@@ -790,7 +790,8 @@ def remeasure_part_mass_props(
     try:
         caa = get_catia_v5_application()
         application = caa.application
-        application.visible = True
+        if not application.visible:
+            application.visible = True
         documents = application.documents
 
         fp_resolved = Path(filepath).resolve()
@@ -1114,7 +1115,8 @@ def collect_mass_props_rows(
     # ── CATIA 连接与文档处理 ─────────────────────────────────────────────────
     caa         = get_catia_v5_application()
     application = caa.application
-    application.visible = True  # 确保 CATIA 窗口可见，避免后台静默状态下 COM 调用挂起
+    if not application.visible:  # 避免触发 ShowWindow 导致 CATIA 窗口位置跳回历史值
+        application.visible = True
     documents   = application.documents
 
     if file_path is None:

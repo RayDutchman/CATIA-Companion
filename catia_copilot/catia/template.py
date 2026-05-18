@@ -65,7 +65,8 @@ def apply_part_template(
 
     caa = get_catia_v5_application()
     application = caa.application
-    application.visible = True
+    if not application.visible:
+        application.visible = True
 
     succeeded: list[str] = []
     failed:    list[str] = []

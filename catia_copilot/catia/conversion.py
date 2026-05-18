@@ -113,7 +113,8 @@ def convert_drawing_to_pdf(
 
     caa = get_catia_v5_application()
     application = caa.application
-    application.visible = True
+    if not application.visible:
+        application.visible = True
     documents = application.documents
 
     bulk_action: str | None = None  # "skip_all", "overwrite_all", or "cancel"
@@ -200,7 +201,8 @@ def convert_part_to_step(
 
     caa = get_catia_v5_application()
     application = caa.application
-    application.visible = True
+    if not application.visible:
+        application.visible = True
     documents = application.documents
 
     bulk_action: str | None = None
