@@ -64,11 +64,14 @@ def collect_bom_rows(
     from pycatia.product_structure_interfaces.product_document import ProductDocument
     from catia_copilot.catia.connection import get_catia_v5_application
 
+    # pycatia Product 对象直接封装的内置属性（getattr 路径）
+    # description_reference → product.DescriptionRef（引用产品的描述，属性对话框里填写的值）
     DIRECT_ATTR_MAP: dict[str, str] = {
         "Nomenclature": "nomenclature",
         "Revision":     "revision",
         "Definition":   "definition",
         "Source":       "source",
+        "Description":  "description_reference",
     }
 
     def _get_prop(product, name: str) -> str:
@@ -252,7 +255,15 @@ def collect_bom_rows(
     # ── CATIA connection ────────────────────────────────────────────────────
     caa         = get_catia_v5_application()
     application = caa.application
-    application.visible = True
+    # 仅在 CATIA 当前不可见时才设置 Visible=True。
+    # 若 CATIA 已可见而仍调用 application.visible = True，会触发 CATIA 内部
+    # ShowWindow，将窗口位置/尺寸恢复到历史保存值，导致窗口无故跳回旧位置。
+    # 已知局限：若 CATIA COM 对最小化窗口的 Visible getter 返回 False（内部以
+    # IsIconic() 判断），本 guard 仍会触发 ShowWindow，将窗口从最小化状态恢复
+    # 到旧位置。完整修复需额外用 win32gui.IsIconic(hwnd) 检查，属低优先级边缘
+    # 场景，暂不处理。
+    if not application.visible:
+        application.visible = True
     documents   = application.documents
 
     if file_path is None:

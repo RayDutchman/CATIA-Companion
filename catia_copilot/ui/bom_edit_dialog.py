@@ -96,7 +96,7 @@ class BomEditDialog(QDialog):
             c for c in saved_visible if c in PRESET_USER_REF_PROPERTIES
         ]
 
-        # 可显示/隐藏的标准列（术语、版本、定义、来源）
+        # 可显示/隐藏的标准列（术语、版本、定义、来源、描述）
         saved_hideable = self._edit_settings.value("visible_hideable_columns", BOM_HIDEABLE_COLUMNS)
         if isinstance(saved_hideable, str):
             saved_hideable = [saved_hideable]
@@ -607,7 +607,7 @@ class BomEditDialog(QDialog):
         self._rebuild_columns_and_repopulate()
 
     def _on_hideable_col_toggled(self) -> None:
-        """处理可隐藏列复选框切换（术语、版本、定义、来源）。"""
+        """处理可隐藏列复选框切换（术语、版本、定义、来源、描述）。"""
         self._visible_hideable_cols = [
             name for name, cb in self._preset_checkboxes.items()
             if name in BOM_HIDEABLE_COLUMNS and cb.isChecked()
@@ -1471,7 +1471,8 @@ class BomEditDialog(QDialog):
         from catia_copilot.catia.connection import get_catia_v5_application as _pycatia
         caa         = _pycatia()
         application = caa.application
-        application.visible = True
+        if not application.visible:
+            application.visible = True
         documents   = application.documents
 
         # 缓存：文件路径 → 文档对象
@@ -1641,7 +1642,8 @@ class BomEditDialog(QDialog):
             from catia_copilot.catia.connection import get_catia_v5_application as _pycatia
             caa         = _pycatia()
             application = caa.application
-            application.visible = True
+            if not application.visible:
+                application.visible = True
             documents   = application.documents
             src         = Path(fp).resolve()
 
@@ -2177,7 +2179,8 @@ class BomEditDialog(QDialog):
             from catia_copilot.catia.connection import get_catia_v5_application as _pycatia  # noqa: PLC0415
             caa         = _pycatia()
             application = caa.application
-            application.visible = True
+            if not application.visible:
+                application.visible = True
             documents   = application.documents
 
             fp_resolved = Path(fp).resolve()

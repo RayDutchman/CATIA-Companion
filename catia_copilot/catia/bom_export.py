@@ -89,7 +89,8 @@ def export_bom_to_excel(
 
     caa         = get_catia_v5_application()
     application = caa.application
-    application.visible = True
+    if not application.visible:
+        application.visible = True
     documents   = application.documents
 
     # ── Shared xlsx style objects ────────────────────────────────────────────

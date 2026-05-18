@@ -33,7 +33,8 @@ def find_dependencies(
     target      = Path(target_path).resolve()
     caa         = get_catia_v5_application()
     application = caa.application
-    application.visible = True
+    if not application.visible:
+        application.visible = True
     documents   = application.documents
 
     # 在我们执行任何操作之前，已打开文档的快照

@@ -10,6 +10,7 @@
    - Revision（修订版本）
    - Definition（定义）
    - Source（来源）
+   - Description（描述）
 
    这些属性通过 pycatia ``Product`` 对象的同名 Python 属性直接读取。
    当产品实例没有自己的 ``ReferenceProduct``（例如根产品）时，直接读取
@@ -43,6 +44,7 @@ _DIRECT_ATTR_MAP: dict[str, str] = {
     "Revision":     "revision",
     "Definition":   "definition",
     "Source":       "source",
+    "Description":  "description_reference",
 }
 
 # 全部内置属性字段名（可直接传给 read_builtin_properties()）
@@ -64,14 +66,14 @@ def _candidate_targets(product):
 
 
 def read_builtin_properties(product, names: list[str] | None = None) -> dict[str, str]:
-    """读取 CATIA 产品的内置属性（Nomenclature / Revision / Definition / Source）。
+    """读取 CATIA 产品的内置属性（Nomenclature / Revision / Definition / Source / Description ）。
 
     与 ``bom_collect._get_prop()`` 逻辑相同，但作为独立函数暴露。
 
     参数
     ----
     product : pycatia Product 包装对象
-    names   : 要读取的属性字段名列表；默认读取全部四个内置字段。
+    names   : 要读取的属性字段名列表；默认读取全部五个内置字段。
 
     返回
     ----

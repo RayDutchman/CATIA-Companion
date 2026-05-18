@@ -7,7 +7,7 @@ DocdokuPLM REST API 客户端。
     client = PlmApiClient("http://localhost:8001/docdoku-plm-server-rest/api")
     client.login("admin", "password")
     tpl_id = client.ensure_part_template("Workspace_0")
-    pn, version = client.create_part("Workspace_0", "PART-001", "描述", tpl_id)
+    pn, version = client.create_part("Workspace_0", "PART-001", "零件名称", "描述", tpl_id)
     client.update_iteration("Workspace_0", pn, version, 1, {"材料": "铝合金", "重量": "1.23"}, [])
     client.checkin_part("Workspace_0", pn, version)
 """
@@ -39,22 +39,24 @@ class PlmApiClient:
     TEMPLATE_ID = "CATIA_Standard"
 
     # 模板字段定义：(字段名, 类型)
+    # 字段名与 CATIA 列名保持一致（内置属性用英文列名，自定义属性用中文 UserRefProperty 键名）
     # 类型：TEXT 或 NUMBER
     _TEMPLATE_ATTRS = [
-        # CATIA 内置属性
-        ("中文名称",  "TEXT"),
-        ("版本",      "TEXT"),
-        ("定义",      "TEXT"),
-        ("来源",      "TEXT"),
-        # 用户自定义属性
-        ("零件类型",  "TEXT"),
-        ("设计状态",  "TEXT"),
-        ("材料",      "TEXT"),
-        ("重量",      "NUMBER"),
-        ("物料编码",  "TEXT"),
-        ("存货类别",  "TEXT"),
-        ("规格型号",  "TEXT"),
-        ("备注",      "TEXT"),
+        # CATIA 内置属性（与 constants.py BOM_ALL_COLUMNS 对齐）
+        ("Nomenclature", "TEXT"),   # 已作为零件名称写入 name 字段，此处仅供模板声明
+        ("Definition",   "TEXT"),
+        ("Revision",     "TEXT"),
+        ("Source",       "TEXT"),
+        ("Description",  "TEXT"),
+        # 用户自定义属性（与 PRESET_USER_REF_PROPERTIES 对齐）
+        ("零件类型",     "TEXT"),
+        ("设计状态",     "TEXT"),
+        ("材料",         "TEXT"),
+        ("重量",         "TEXT"),   # Python 端统一字符串，不做 NUMBER 转换
+        ("物料编码",     "TEXT"),
+        ("存货类别",     "TEXT"),
+        ("规格型号",     "TEXT"),
+        ("备注",         "TEXT"),
     ]
 
     def __init__(self, base_url: str):
@@ -242,6 +244,7 @@ class PlmApiClient:
         self,
         workspace: str,
         part_number: str,
+        name: str,
         description: str,
         template_id: str | None = None,
     ) -> tuple[str, str]:
@@ -250,13 +253,16 @@ class PlmApiClient:
         若零件已存在（HTTP 409），则直接返回现有零件的版本号（不报错）。
 
         参数：
-            template_id: 零件模板 ID；传 None 时不携带 templateId 字段
+            part_number:  零件编号（唯一标识）
+            name:         零件名称（对应 Nomenclature；为空时回退到零件编号）
+            description:  描述文本
+            template_id:  零件模板 ID；传 None 时不携带 templateId 字段
         """
         ws = urllib.parse.quote(workspace)
         path = f"/workspaces/{ws}/parts"
         payload: dict = {
-            "number": part_number,
-            "name": part_number,
+            "number":      part_number,
+            "name":        name or part_number,
             "description": description,
         }
         if template_id is not None:
@@ -270,18 +276,23 @@ class PlmApiClient:
             if exc.status_code == 409:
                 # 标准重复冲突
                 logger.debug(f"PLM 零件已存在（409），跳过创建：{part_number}")
-                return self._get_latest_version(workspace, part_number)
+                pn, ver, _iter = self._get_latest_version(workspace, part_number)
+                return pn, ver
             if exc.status_code == 400 and (
                 "不唯一" in str(exc) or "unique" in str(exc).lower()
             ):
                 # DocdokuPLM 部分版本对重复零件返回 400 而非 409
                 logger.debug(f"PLM 零件已存在（400 不唯一），跳过创建：{part_number}")
-                return self._get_latest_version(workspace, part_number)
+                pn, ver, _iter = self._get_latest_version(workspace, part_number)
+                return pn, ver
             raise
 
-    def _get_latest_version(self, workspace: str, part_number: str) -> tuple[str, str]:
-        """获取已存在零件的最新版本号。
+    def _get_latest_version(
+        self, workspace: str, part_number: str
+    ) -> tuple[str, str, int]:
+        """获取已存在零件的最新版本号和最新迭代号。
 
+        返回：(零件号, 版本, 最新迭代号)
         DocdokuPLM 端点须带版本后缀：/parts/{pn}-{ver}
         实际上零件版本几乎都从 A 开始，直接尝试 -A。
         """
@@ -292,13 +303,38 @@ class PlmApiClient:
             try:
                 result = self._request("GET", f"/workspaces/{ws}/parts/{pn}-{ver}") or {}
                 version = result.get("version", ver)
-                return part_number, version
+                iteration = result.get("lastIterationNumber", 1)
+                return part_number, version, iteration
             except PlmApiError as exc:
                 if exc.status_code == 404:
                     continue
                 raise
-        # 兜底：返回 A（后续操作失败时会有对应错误）
-        return part_number, "A"
+        # 兜底：返回 A iter 1（后续操作失败时会有对应错误）
+        return part_number, "A", 1
+
+    def checkout_part(self, workspace: str, part_number: str, version: str) -> int:
+        """Check Out 零件，返回新建迭代号。
+
+        checkout 会创建一个新迭代，新迭代号 = 上一迭代号 + 1。
+        若零件已处于 checkout 状态（当前用户），则直接返回现有迭代号，不报错。
+        """
+        ws = urllib.parse.quote(workspace)
+        pn = urllib.parse.quote(part_number)
+        try:
+            result = self._request(
+                "PUT",
+                f"/workspaces/{ws}/parts/{pn}-{version}/checkout",
+            ) or {}
+            iteration = result.get("lastIterationNumber", 1)
+            logger.debug(f"PLM Check Out：{part_number}-{version} → iter{iteration}")
+            return iteration
+        except PlmApiError as exc:
+            # 已处于 checkout 状态时服务端返回 403/400，直接查询当前迭代号
+            if exc.status_code in (400, 403):
+                logger.debug(f"PLM 零件已在 checkout 状态，查询当前迭代：{part_number}")
+                _pn, _ver, iteration = self._get_latest_version(workspace, part_number)
+                return iteration
+            raise
 
     def update_iteration(
         self,
@@ -312,19 +348,18 @@ class PlmApiClient:
         """更新零件迭代的属性和子组件列表。
 
         参数：
-            attr_values:  字段名→值 映射，重量字段自动转 NUMBER 类型
+            attr_values:  字段名→值 映射，所有属性均以 TEXT 类型写入
             components:   子组件列表，每项为 {"component": {"number": ..., "version": ...}}
         """
         ws = urllib.parse.quote(workspace)
         pn = urllib.parse.quote(part_number)
         path = f"/workspaces/{ws}/parts/{pn}-{version}/iterations/{iteration}"
 
-        # 构造 instanceAttributes
-        number_fields = {name for name, atype in self._TEMPLATE_ATTRS if atype == "NUMBER"}
-        instance_attrs = []
-        for name, value in attr_values.items():
-            atype = "NUMBER" if name in number_fields else "TEXT"
-            instance_attrs.append({"type": atype, "name": name, "value": value})
+        # 所有属性统一 TEXT 类型（Python 端不做数值转换）
+        instance_attrs = [
+            {"type": "TEXT", "name": name, "value": value}
+            for name, value in attr_values.items()
+        ]
 
         self._request("PUT", path, {
             "instanceAttributes": instance_attrs,
