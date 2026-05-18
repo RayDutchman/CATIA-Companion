@@ -54,6 +54,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    uac_admin=False,  # 以普通用户权限运行；CATIA V5 本身也应以普通用户运行，管理员进程反而看不到其 ROT
     icon='resources/icon.ico',  # Uncomment after placing icon.ico in resources/
 )
 

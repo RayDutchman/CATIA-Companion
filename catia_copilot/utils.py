@@ -4,7 +4,8 @@ CATIA Copilot 实用工具函数模块。
 提供：
 - resource_path()               – 解析打包资源文件路径（支持 PyInstaller）
 - detect_catia_root()           – 通过注册表自动检测 CATIA V5 安装目录（优先返回 V5，不返回 3DE）
-- check_catia_connection()      – 3 态 COM 连接检测（"connected"/"broken"/"disconnected"）
+- is_admin()                    – 检测当前进程是否以管理员身份运行
+- check_catia_connection()      – 4 态 COM 连接检测（"connected"/"broken"/"access_denied"/"disconnected"）
 - diagnose_catia_connection()   – 详细 COM 诊断，返回含版本、文档数等信息的字典
 - ensure_clean_gencache()       – 启动时清理 win32com 早绑定缓存（gen_py 目录）
 - estimate_column_width()       – 估算 Excel 列宽度（支持中日韩字符）
@@ -71,13 +72,15 @@ def _is_catia_v5_dispatch(dispatch) -> bool:
 def _find_catia_v5_in_rot():
     """枚举 Windows Running Object Table，返回 CATIA V5 的 COM dispatch 对象。
 
-    当 "CATIA.Application" ProgID 在注册表中已被 3DEXPERIENCE 覆盖时，
+    当 "CATIA.Application" ProgID 在注册表中不存在（CO_E_CLASSSTRING）时，
     GetActiveObject("CATIA.Application") 无法找到 V5；此函数通过直接枚举 ROT
     来绕过 ProgID→CLSID 映射。找到返回 dispatch 对象，否则返回 None。
 
-    使用 win32com.client.dynamic.Dispatch 而非普通的 Dispatch，强制晚绑定以
-    避免 gen_py 早绑定缓存干扰（早绑定缓存可能来自 3DEXPERIENCE，导致用其
-    接口描述调用 V5 对象时抛出异常）。
+    修复：rot.GetObject(moniker) 返回的是 PyIUnknown，需要先通过
+    QueryInterface(IID_IDispatch) 获取 IDispatch 接口，再用 dynamic.Dispatch
+    包装为晚绑定对象（避免 gen_py 缓存干扰）。
+
+    同时将每个 moniker 的显示名和失败原因写入 DEBUG 日志，便于诊断问题。
     """
     if _win32com_client is None:
         return None
@@ -86,24 +89,143 @@ def _find_catia_v5_in_rot():
         from win32com.client import dynamic as _wcc_dynamic
         rot = pythoncom.GetRunningObjectTable()
         enum = rot.EnumRunning()
+        # 用于获取 moniker 显示名的 bind context
+        try:
+            bind_ctx = pythoncom.CreateBindCtx(0)
+        except Exception:
+            bind_ctx = None
         while True:
             monikers = enum.Next(1)
             if not monikers:
                 break
             moniker = monikers[0]
+            # 尝试获取 moniker 显示名（用于日志/诊断）
+            display_name = "<unknown>"
+            if bind_ctx is not None:
+                try:
+                    display_name = moniker.GetDisplayName(bind_ctx, None)
+                except Exception as dn_exc:
+                    display_name = f"<DisplayName 失败: {dn_exc}>"
             try:
                 obj = rot.GetObject(moniker)
-                # 强制使用晚绑定（绕过 gen_py 缓存）
-                dispatch = _wcc_dynamic.Dispatch(obj)
+                # rot.GetObject 返回 PyIUnknown；需要先 QI 到 IDispatch
+                # 再包装为 dynamic.Dispatch 对象（晚绑定，绕过 gen_py 缓存）
+                try:
+                    idispatch = obj.QueryInterface(pythoncom.IID_IDispatch)
+                except Exception as qi_exc:
+                    logger.debug(
+                        f"ROT moniker [{display_name}] QI(IID_IDispatch) 失败：{qi_exc}"
+                    )
+                    continue
+                dispatch = _wcc_dynamic.Dispatch(idispatch)
                 _ = dispatch.Name   # 功能性测试
                 if _is_catia_v5_dispatch(dispatch):
-                    logger.debug("通过 ROT 枚举找到 CATIA V5 COM 对象")
+                    logger.debug(f"通过 ROT 枚举找到 CATIA V5 COM 对象：{display_name}")
                     return dispatch
-            except Exception:
+                else:
+                    logger.debug(f"ROT moniker [{display_name}] 不是 CATIA V5，跳过")
+            except Exception as exc:
+                logger.debug(f"ROT moniker [{display_name}] 处理失败：{exc}")
                 continue
     except Exception as exc:
         logger.debug(f"ROT 枚举失败：{exc}")
     return None
+
+
+def _find_catia_progids_in_rot() -> list[str]:
+    """枚举 ROT 中所有条目，返回其显示名列表（用于诊断）。
+
+    与 _find_catia_v5_in_rot() 不同，此函数不尝试 QI/Dispatch，
+    仅收集显示名，即使对象不可 Dispatch 也会记录。
+
+    返回：
+        显示名字符串列表，枚举失败时返回空列表。
+    """
+    monikers_list: list[str] = []
+    if _win32com_client is None:
+        return monikers_list
+    try:
+        import pythoncom
+        rot = pythoncom.GetRunningObjectTable()
+        enum = rot.EnumRunning()
+        try:
+            bind_ctx = pythoncom.CreateBindCtx(0)
+        except Exception:
+            bind_ctx = None
+        while True:
+            items = enum.Next(1)
+            if not items:
+                break
+            moniker = items[0]
+            display_name = "<unknown>"
+            if bind_ctx is not None:
+                try:
+                    display_name = moniker.GetDisplayName(bind_ctx, None)
+                except Exception:
+                    pass
+            monikers_list.append(display_name)
+    except Exception as exc:
+        logger.debug(f"_find_catia_progids_in_rot 枚举失败：{exc}")
+    return monikers_list
+
+
+def _find_catia_progids_in_registry() -> list[str]:
+    """在 HKEY_CLASSES_ROOT 中搜索所有以 "CATIA" 开头的 ProgID 键。
+
+    CATIA V5 通常注册的 ProgID 为 "CATIA.Application" 等，但当
+    3DEXPERIENCE 共存时可能被覆盖，或者 ProgID 的实际名称与预期不同。
+    此函数枚举 HKCR 顶级键，收集所有匹配 "CATIA*" 的 ProgID 及其
+    对应的 CLSID（如果有），供连接函数动态选择正确的 ProgID。
+
+    返回：
+        ProgID 字符串列表（如 ["CATIA.Application", "CATIA.Document", ...]），
+        无法访问注册表时返回空列表。
+    """
+    catia_progids: list[str] = []
+    try:
+        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "") as hkcr:
+            i = 0
+            while True:
+                try:
+                    key_name = winreg.EnumKey(hkcr, i)
+                    if key_name.upper().startswith("CATIA"):
+                        catia_progids.append(key_name)
+                        logger.debug(f"发现 CATIA ProgID：{key_name}")
+                    i += 1
+                except OSError:
+                    break
+    except Exception as exc:
+        logger.debug(f"_find_catia_progids_in_registry 失败：{exc}")
+    return catia_progids
+
+
+# CATIA V5 Application 对象的已知 CLSID（与 ProgID 注册无关）。
+# 即使 HKCR 中不存在 "CATIA.Application" ProgID，仍可用 CLSID 直接
+# 调用 GetActiveObject，绕过 ProgID→CLSID 查找失败（CO_E_CLASSSTRING）。
+_CATIA_V5_KNOWN_CLSIDS = [
+    "{87FD6F40-E252-11D5-8040-0001B5FA1031}",  # CATIA V5 Application（R20+ 通用）
+]
+
+
+def _try_get_active_object_by_clsid(clsid: str):
+    """尝试用 CLSID 字符串直接调用 GetActiveObject，绕过 ProgID 查找。
+
+    win32com.client.GetActiveObject 支持传入 CLSID 格式（"{...}"）字符串，
+    内部通过 CLSIDFromString 解析，不依赖 ProgID 注册。
+
+    返回晚绑定 dispatch 对象（成功时），或 None（失败时）。
+    """
+    if _win32com_client is None:
+        return None
+    try:
+        import win32com.client as _wcc
+        from win32com.client import dynamic as _dyn
+        _raw = _wcc.GetActiveObject(clsid)
+        _oleobj = getattr(_raw, "_oleobj_", None)
+        return _dyn.Dispatch(_oleobj) if _oleobj is not None else _raw
+    except Exception as exc:
+        logger.debug(f"GetActiveObject({clsid!r}) 失败：{exc}")
+        return None
 
 
 def resource_path(filename: str) -> Path:
@@ -221,18 +343,118 @@ def detect_catia_root() -> str | None:
     return None
 
 
+def is_admin() -> bool:
+    """返回 True 表示当前进程以 Windows 管理员（提升权限）身份运行。
+
+    使用 ``ctypes.windll.shell32.IsUserAnAdmin()`` 检测。
+    在非 Windows 平台或调用失败时始终返回 False。
+    """
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def _is_catia_process_running() -> bool:
+    """检测 CNEXT.exe（CATIA V5 主进程）是否在系统中运行。
+
+    通过调用 ``tasklist /FI "IMAGENAME eq CNEXT.exe" /NH`` 检测，
+    无需管理员权限。返回 True 表示进程存在，False 表示不存在或检测失败。
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq CNEXT.exe", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        # tasklist 找到匹配项时输出中会包含 "CNEXT.exe"
+        return "CNEXT.exe" in result.stdout
+    except Exception as exc:
+        logger.debug(f"_is_catia_process_running 检测失败：{exc}")
+        return False
+
+
+def get_catia_v5_com_dispatch():
+    """获取运行中的 CATIA V5 COM dispatch 对象（晚绑定，绕过 gen_py 缓存）。
+
+    这是所有业务代码应调用的统一入口，替代直接使用
+    ``GetActiveObject("CATIA.Application")`` 或 ``_find_catia_v5_in_rot()``。
+
+    连接策略（按优先级）：
+    1. 遍历 HKCR 中发现的所有 "CATIA*" ProgID + 经典备选。
+    2. 使用已知 CLSID ``{87FD6F40-E252-11D5-8040-0001B5FA1031}`` 直连
+       （解决 HKCR 无 ProgID 导致的 CO_E_CLASSSTRING 问题）。
+    3. ROT 枚举 + IID_IDispatch QueryInterface（解决 CATIA 普通用户运行
+       但 ProgID 注册缺失的场景）。
+
+    返回：
+        CATIA V5 的晚绑定 COM dispatch 对象（成功时），或 None（未找到时）。
+    """
+    if _win32com_client is None:
+        return None
+
+    import win32com.client as _wcc
+    from win32com.client import dynamic as _dyn
+
+    def _try_get(key: str):
+        try:
+            _raw = _wcc.GetActiveObject(key)
+            _oleobj = getattr(_raw, "_oleobj_", None)
+            candidate = _dyn.Dispatch(_oleobj) if _oleobj is not None else _raw
+            _ = candidate.Name  # 可用性测试
+            if _is_catia_v5_dispatch(candidate):
+                return candidate
+        except Exception:
+            pass
+        return None
+
+    # 阶段 1：注册表 ProgID + 经典备选
+    progids = _find_catia_progids_in_registry()
+    for classic in ("CATIA.Application", "CNEXT.Application"):
+        if classic not in progids:
+            progids.append(classic)
+    for key in progids:
+        obj = _try_get(key)
+        if obj is not None:
+            logger.debug(f"get_catia_v5_com_dispatch: 通过 ProgID [{key}] 连接成功")
+            return obj
+
+    # 阶段 2：已知 CLSID 直连（绕过 CO_E_CLASSSTRING）
+    for clsid in _CATIA_V5_KNOWN_CLSIDS:
+        obj = _try_get(clsid)
+        if obj is not None:
+            logger.debug(f"get_catia_v5_com_dispatch: 通过 CLSID [{clsid}] 连接成功")
+            return obj
+
+    # 阶段 3：ROT 枚举（加 IID_IDispatch QI，应对 ProgID/CLSID 均失败的场景）
+    obj = _find_catia_v5_in_rot()
+    if obj is not None:
+        logger.debug("get_catia_v5_com_dispatch: 通过 ROT 枚举连接成功")
+        return obj
+
+    return None
+
+
 def check_catia_connection() -> str:
     """检测 CATIA V5 是否正在运行并可通过 COM 访问。
 
-    返回以下三种状态之一：
+    返回以下四种状态之一：
 
     - ``"connected"``     — CATIA V5 已运行，COM 对象可获取，且功能性测试通过。
-    - ``"broken"``        — COM 对象可获取（GetActiveObject 成功），但访问属性时
-                            抛出异常，说明连接存在异常（例如早绑定缓存污染）。
+    - ``"broken"``        — COM 对象可获取但访问属性时抛出异常；或 CATIA 进程
+                            存在但所有 COM 连接方式均失败（COM 注册异常等）。
+    - ``"access_denied"`` — CATIA V5 进程正在运行，但当前进程权限不足（CATIA 以
+                            管理员身份运行而本进程未提权），导致 COM ROT 对本进程
+                            不可见。需要以管理员身份重启本程序。
     - ``"disconnected"``  — CATIA V5 未运行或 COM 完全不可用。
 
-    当 "CATIA.Application" ProgID 在注册表中被 3DEXPERIENCE 覆盖时，此函数
-    会自动通过 ROT 枚举查找运行中的 CATIA V5 实例，确保状态正确显示。
+    连接策略（按优先级）：
+    1. 遍历 HKCR 中发现的所有 "CATIA*" ProgID + 经典备选。
+    2. 用已知 CLSID 直连（绕过 ProgID 注册，解决 CO_E_CLASSSTRING）。
+    3. ROT 枚举（加 IID_IDispatch QI，绕过 ProgID→CLSID 映射）。
+    4. 上述均失败时根据进程是否存在及权限判断原因。
 
     所有 COM 包装均强制使用晚绑定（dynamic.Dispatch），避免 gen_py 早绑定
     缓存污染干扰 .Version 等属性的读取。
@@ -240,31 +462,82 @@ def check_catia_connection() -> str:
     if _win32com_client is None:
         return "disconnected"
 
-    # ── 方式 1：标准 GetActiveObject（强制晚绑定，绕过 gen_py 缓存）────────
-    # win32com.client.GetActiveObject 内部自动完成 ProgID→CLSID→QI(IDispatch)
-    # 的全套流程，在所有 pywin32 版本中均可靠工作。
-    # app._oleobj_ 取出底层 PyIDispatch，再交给 dynamic.Dispatch 包装为晚绑定
-    # 代理，避免 gen_py 早绑定缓存干扰 .Version 等属性的读取。
-    _broken = False
-    try:
-        import win32com.client as _wcc
-        from win32com.client import dynamic as _dyn
-        _raw_app = _wcc.GetActiveObject("CATIA.Application")
-        app = _dyn.Dispatch(_raw_app._oleobj_)
-        try:
-            _ = app.Name  # 功能性测试
-            if _is_catia_v5_dispatch(app):
-                return "connected"
-            # GetActiveObject 返回的是 3DE，继续尝试 ROT 枚举
-        except Exception:
-            _broken = True
-    except Exception:
-        pass
+    # E_ACCESSDENIED HRESULT（0x80070005），以有符号 int32 表示
+    _E_ACCESSDENIED = -2147024891
 
-    if _broken:
+    import win32com.client as _wcc
+    from win32com.client import dynamic as _dyn
+
+    def _try_progid(progid: str):
+        """尝试通过 progid/clsid 获取晚绑定 dispatch 对象。
+        返回 (app, hresult_error)：app 非 None 表示成功。
+        """
+        try:
+            _raw = _wcc.GetActiveObject(progid)
+            _oleobj = getattr(_raw, "_oleobj_", None)
+            return (_dyn.Dispatch(_oleobj) if _oleobj is not None else _raw), None
+        except Exception as exc:
+            hr = getattr(exc, "hresult", None)
+            if hr is None:
+                try:
+                    hr = exc.args[0]
+                except Exception:
+                    pass
+            return None, hr
+
+    # ── 阶段 1：遍历注册表 ProgID + 经典备选 ────────────────────────────
+    registry_progids = _find_catia_progids_in_registry()
+    for classic in ("CATIA.Application", "CNEXT.Application"):
+        if classic not in registry_progids:
+            registry_progids.append(classic)
+
+    _got_access_denied = False
+    _got_broken = False
+
+    for progid in registry_progids:
+        app, hr = _try_progid(progid)
+        if hr == _E_ACCESSDENIED:
+            _got_access_denied = True
+            logger.debug(f"GetActiveObject({progid!r}) → E_ACCESSDENIED")
+            continue
+        if app is not None:
+            try:
+                _ = app.Name
+                if _is_catia_v5_dispatch(app):
+                    logger.debug(f"GetActiveObject({progid!r}) 成功，连接 CATIA V5")
+                    return "connected"
+                logger.debug(f"GetActiveObject({progid!r}) 返回非 V5 对象，继续")
+            except Exception:
+                _got_broken = True
+
+    if _got_access_denied and not _got_broken:
+        logger.debug("所有 ProgID 均返回 E_ACCESSDENIED → access_denied")
+        return "access_denied"
+
+    if _got_broken:
         return "broken"
 
-    # ── 方式 2：ROT 枚举（ProgID 被 3DE 覆盖时的降级路径）────────────────
+    # ── 阶段 2：已知 CLSID 直连（绕过 CO_E_CLASSSTRING）────────────────
+    for clsid in _CATIA_V5_KNOWN_CLSIDS:
+        app, hr = _try_progid(clsid)
+        if hr == _E_ACCESSDENIED:
+            _got_access_denied = True
+            logger.debug(f"GetActiveObject({clsid!r}) → E_ACCESSDENIED")
+            continue
+        if app is not None:
+            try:
+                _ = app.Name
+                if _is_catia_v5_dispatch(app):
+                    logger.debug(f"GetActiveObject({clsid!r}) 成功，连接 CATIA V5")
+                    return "connected"
+            except Exception:
+                return "broken"
+
+    if _got_access_denied:
+        logger.debug("CLSID 直连也返回 E_ACCESSDENIED → access_denied")
+        return "access_denied"
+
+    # ── 阶段 3：ROT 枚举（加 IID_IDispatch QI，绕过 ProgID 映射）────────
     try:
         app = _find_catia_v5_in_rot()
         if app is not None:
@@ -272,6 +545,18 @@ def check_catia_connection() -> str:
             return "connected"
     except Exception:
         return "broken"
+
+    # ── 所有方式均失败：根据进程是否存在及当前权限判断原因 ──────────────
+    if _is_catia_process_running():
+        if not is_admin():
+            # 进程存在但本程序未提权，且没有收到 E_ACCESSDENIED → COM 其他原因失败
+            # （注意：如果 CATIA 也是普通用户，以管理员运行反而看不到 ROT；
+            #  此处只要进程存在 + 未提权 + ROT 枚举失败 → 保守判定为 broken）
+            logger.debug("CNEXT.exe 存在，未提权，所有 COM 方式均失败 → broken")
+            return "broken"
+        else:
+            logger.debug("CNEXT.exe 存在，已提权，但 COM 连接失败 → broken")
+            return "broken"
 
     return "disconnected"
 
@@ -281,19 +566,27 @@ def diagnose_catia_connection() -> dict:
 
     返回字典包含以下键：
 
-    - ``status``         (str)            — "connected" / "broken" / "disconnected"
-    - ``error``          (str | None)     — 最近一次异常描述（如有）
-    - ``app_name``       (str | None)     — CATIA 应用名称（如 "CATIA"）
-    - ``app_version``    (str | None)     — CATIA 版本字符串
-    - ``is_v5``          (bool | None)    — True 表示连接到 CATIA V5；False 表示 3DEXPERIENCE
-    - ``active_doc``     (str | None)     — 当前活动文档名称
-    - ``doc_count``      (int | None)     — 已打开文档数量
-    - ``gen_py_path``    (str)            — win32com gen_py 缓存目录路径
-    - ``gen_py_exists``  (bool)           — gen_py 缓存目录是否存在
+    - ``status``                   (str)            — "connected" / "broken" / "access_denied" / "disconnected"
+    - ``error``                    (str | None)     — 最近一次异常描述（如有）
+    - ``get_active_error``         (str | None)     — GetActiveObject 的实际报错（与 error 区分）
+    - ``rot_found``                (bool)           — ROT 枚举是否找到 CATIA V5 对象
+    - ``app_name``                 (str | None)     — CATIA 应用名称（如 "CATIA"）
+    - ``app_version``              (str | None)     — CATIA 版本字符串
+    - ``is_v5``                    (bool | None)    — True 表示连接到 CATIA V5；False 表示 3DEXPERIENCE
+    - ``active_doc``               (str | None)     — 当前活动文档名称
+    - ``doc_count``                (int | None)     — 已打开文档数量
+    - ``gen_py_path``              (str)            — win32com gen_py 缓存目录路径
+    - ``gen_py_exists``            (bool)           — gen_py 缓存目录是否存在
+    - ``is_elevated``              (bool)           — 当前进程是否以管理员身份运行
+    - ``catia_process_running``    (bool)           — CNEXT.exe 进程是否正在运行
+    - ``registry_catia_progids``   (list[str])      — HKCR 中找到的所有 CATIA* ProgID
+    - ``rot_monikers``             (list[str])      — ROT 中所有条目的显示名（不论是否 CATIA）
     """
     result: dict = {
         "status": "disconnected",
         "error": None,
+        "get_active_error": None,
+        "rot_found": False,
         "app_name": None,
         "app_version": None,
         "is_v5": None,
@@ -301,6 +594,10 @@ def diagnose_catia_connection() -> dict:
         "doc_count": None,
         "gen_py_path": "",
         "gen_py_exists": False,
+        "is_elevated": is_admin(),
+        "catia_process_running": _is_catia_process_running(),
+        "registry_catia_progids": [],
+        "rot_monikers": [],
     }
 
     # ── gen_py 缓存目录 ────────────────────────────────────────────────────
@@ -316,31 +613,121 @@ def diagnose_catia_connection() -> dict:
     result["gen_py_path"] = str(gen_py_path)
     result["gen_py_exists"] = gen_py_path.exists()
 
+    # ── 收集注册表 ProgID 列表（诊断用）─────────────────────────────────────
+    result["registry_catia_progids"] = _find_catia_progids_in_registry()
+
+    # ── 收集 ROT 显示名列表（诊断用）──────────────────────────────────────
+    result["rot_monikers"] = _find_catia_progids_in_rot()
+
     # ── COM 连接检测 ──────────────────────────────────────────────────────
     if _win32com_client is None:
         result["error"] = "win32com 未安装，无法进行 COM 调用"
         return result
 
-    # 方式 1：标准 GetActiveObject（强制晚绑定，绕过 gen_py 缓存）
-    # win32com.client.GetActiveObject 内部自动完成 ProgID→CLSID→QI(IDispatch)
-    # 的全套流程，在所有 pywin32 版本中均可靠工作。
-    # app._oleobj_ 取出底层 PyIDispatch，再交给 dynamic.Dispatch 包装为晚绑定代理。
+    # E_ACCESSDENIED HRESULT（0x80070005），以有符号 int32 表示
+    _E_ACCESSDENIED = -2147024891
+
+    import win32com.client as _wcc
+    from win32com.client import dynamic as _dyn
+
+    def _try_get(key: str):
+        """尝试用 ProgID 或 CLSID 获取晚绑定 dispatch，返回 (app, hresult)。"""
+        try:
+            _raw = _wcc.GetActiveObject(key)
+            _oleobj = getattr(_raw, "_oleobj_", None)
+            _candidate = _dyn.Dispatch(_oleobj) if _oleobj is not None else _raw
+            _ = _candidate.Name  # 可用性测试
+            return _candidate, None
+        except Exception as exc:
+            hr = getattr(exc, "hresult", None)
+            if hr is None:
+                try:
+                    hr = exc.args[0]
+                except Exception:
+                    pass
+            return None, hr
+
+    # 构建要尝试的 ProgID/CLSID 列表：注册表发现的 + 经典备选 + 已知 CLSID
+    progids_to_try = list(result["registry_catia_progids"])
+    for classic in ("CATIA.Application", "CNEXT.Application"):
+        if classic not in progids_to_try:
+            progids_to_try.append(classic)
+    all_keys_to_try = progids_to_try + [
+        c for c in _CATIA_V5_KNOWN_CLSIDS if c not in progids_to_try
+    ]
+
     app = None
-    try:
-        import win32com.client as _wcc
-        from win32com.client import dynamic as _dyn
-        _raw_app = _wcc.GetActiveObject("CATIA.Application")
-        app = _dyn.Dispatch(_raw_app._oleobj_)
-    except Exception as exc:
-        result["error"] = str(exc)
+    _got_access_denied = False
+    _last_error: str | None = None
+
+    for key in all_keys_to_try:
+        _candidate, hr = _try_get(key)
+        if _candidate is not None:
+            app = _candidate
+            logger.debug(f"diagnose: GetActiveObject({key!r}) 成功")
+            break
+        _last_error = f"GetActiveObject({key!r}) 失败：{hr}"
+        if hr == _E_ACCESSDENIED:
+            _got_access_denied = True
+            logger.debug(f"diagnose: GetActiveObject({key!r}) → E_ACCESSDENIED")
+
+    result["get_active_error"] = _last_error
+
+    # 若所有方式均 E_ACCESSDENIED，直接判定
+    if app is None and _got_access_denied:
+        result["status"] = "access_denied"
+        result["error"] = (
+            "E_ACCESSDENIED (0x80070005)：CATIA 可能以管理员身份运行，"
+            "而本程序未提权。请以管理员身份重启本程序。\n"
+            f"尝试过的 ProgID/CLSID：{all_keys_to_try}"
+        )
+        return result
 
     if app is None:
-        # 方式 2：ROT 枚举（应对 ProgID 被 3DE 覆盖的场景）
-        app = _find_catia_v5_in_rot()
-        if app is None:
-            result["status"] = "disconnected"
+        # 方式 3：ROT 枚举（加 IID_IDispatch QI）
+        rot_app = _find_catia_v5_in_rot()
+        if rot_app is not None:
+            result["rot_found"] = True
+            app = rot_app
+        else:
+            # 所有方式均失败，根据进程是否存在及权限判断原因
+            if result["catia_process_running"]:
+                if not result["is_elevated"]:
+                    # 未提权但所有 COM 方式均失败（没有收到 E_ACCESSDENIED）
+                    # 可能是 CATIA 也以普通用户运行但 ROT QI 仍失败，
+                    # 或 COM 注册表问题 → 保守判定为 broken
+                    result["status"] = "broken"
+                    result["error"] = (
+                        "CNEXT.exe 进程存在，GetActiveObject（ProgID + CLSID）和 ROT 枚举均失败。\n"
+                        "可能原因：\n"
+                        "  ① HKCR 中无 CATIA ProgID，且已知 CLSID 直连也失败\n"
+                        "  ② CATIA 以不同权限级别运行（UAC 隔离）\n"
+                        "  ③ CATIA 正在初始化中，尚未注册 COM 对象\n"
+                        f"尝试过的 ProgID/CLSID：{all_keys_to_try}\n"
+                        f"注册表发现的 CATIA ProgID：{result['registry_catia_progids']}\n"
+                        f"ROT 条目（前10条）：{result['rot_monikers'][:10]}\n"
+                        f"最近错误：{result['get_active_error']}"
+                    )
+                else:
+                    result["status"] = "broken"
+                    result["error"] = (
+                        "CNEXT.exe 进程存在，本程序已以管理员身份运行，\n"
+                        "但所有 COM 连接方式均失败。\n"
+                        "⚠️ 注意：如果 CATIA 是以普通用户（非管理员）运行的，\n"
+                        "则管理员进程无法看到普通用户的 ROT 对象。\n"
+                        "建议：请改为以普通用户身份运行本程序（与 CATIA 相同权限级别）。\n"
+                        "可能原因：\n"
+                        "  ① CATIA 以普通用户运行，而本程序以管理员运行（权限级别不匹配）\n"
+                        "  ② HKCR 中无 CATIA ProgID，CLSID 直连也失败\n"
+                        "  ③ gen_py 早绑定缓存问题或 CATIA 正在初始化\n"
+                        f"尝试过的 ProgID/CLSID：{all_keys_to_try}\n"
+                        f"注册表发现的 CATIA ProgID：{result['registry_catia_progids']}\n"
+                        f"ROT 条目（前10条）：{result['rot_monikers'][:10]}\n"
+                        f"最近错误：{result['get_active_error']}"
+                    )
+            else:
+                result["status"] = "disconnected"
             return result
-        result["error"] = None  # 通过 ROT 枚举找到，清除之前的错误
 
     # GetActiveObject 或 ROT 枚举成功 — 继续功能性测试
     try:

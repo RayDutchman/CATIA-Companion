@@ -93,6 +93,9 @@ class MainWindow(QMainWindow):
         elif status == "broken":
             self._catia_status_label.setText("⚠ CATIA 连接异常")
             self._catia_status_label.setProperty("catiaConnected", "broken")
+        elif status == "access_denied":
+            self._catia_status_label.setText("⚠ 权限不足（点击诊断）")
+            self._catia_status_label.setProperty("catiaConnected", "broken")
         else:
             self._catia_status_label.setText("● CATIA 未连接")
             self._catia_status_label.setProperty("catiaConnected", "false")
@@ -104,17 +107,36 @@ class MainWindow(QMainWindow):
         """运行 CATIA COM 详细诊断并以对话框形式呈现结果。"""
         info = diagnose_catia_connection()
 
+        # broken 状态根据是否已提权细分描述
+        _broken_admin = (
+            info["status"] == "broken"
+            and info.get("is_elevated")
+            and info.get("catia_process_running")
+        )
         status_text = {
             "connected":    "✅ 已连接（功能测试通过）",
-            "broken":       "⚠️ 连接异常（COM 对象存在但功能测试失败）",
+            "broken":       "⚠️ 连接异常（COM 对象存在但功能测试失败，或 COM 注册异常）",
+            "access_denied":"⚠️ 权限不足（CATIA 以管理员运行，本程序未提权）",
             "disconnected": "❌ 未连接（CATIA V5 未运行或 COM 不可用）",
         }.get(info["status"], info["status"])
 
         lines = [
             f"<b>连接状态：</b>{status_text}",
         ]
+
+        # 权限与进程状态（始终显示，帮助排查 UAC / COM 问题）
+        elevated_text = "是（管理员）" if info.get("is_elevated") else "否（普通用户）"
+        process_text  = "运行中" if info.get("catia_process_running") else "未检测到"
+        lines.append(f"<b>本程序权限：</b>{elevated_text}")
+        lines.append(f"<b>CNEXT.exe 进程：</b>{process_text}")
+
         if info["error"]:
             lines.append(f"<b>错误详情：</b><code>{info['error']}</code>")
+        # 若 error 已被替换为高层描述，再单独展示 GetActiveObject 原始错误
+        if info.get("get_active_error") and info.get("get_active_error") != info["error"]:
+            lines.append(
+                f"<b>GetActiveObject 原始错误：</b><code>{info['get_active_error']}</code>"
+            )
         if info["app_name"]:
             lines.append(f"<b>应用名称：</b>{info['app_name']}")
         if info.get("app_version"):
@@ -134,10 +156,40 @@ class MainWindow(QMainWindow):
         elif info["status"] == "connected":
             lines.append("<b>当前活动文档：</b>（无）")
 
-        if info["status"] == "broken":
+        # ── 建议区 ──────────────────────────────────────────────────────
+        if _broken_admin:
+            # 注册表 ProgID 列表
+            reg_progids = info.get("registry_catia_progids") or []
+            reg_str = "、".join(reg_progids) if reg_progids else "（未找到）"
+            # ROT 条目（仅展示前 10 条，防止对话框过长）
+            rot_entries = info.get("rot_monikers") or []
+            rot_preview = rot_entries[:10]
+            rot_str = "<br/>　　".join(rot_preview) if rot_preview else "（无条目或枚举失败）"
+            lines.append(
+                "<br/><b>分析：</b>本程序已以管理员身份运行，CATIA 进程也在运行，"
+                "但所有 COM 连接方式均失败。<br/>"
+                "<b style='color:red'>⚠️ 重要提示：</b>"
+                "ROT 为空，强烈提示 CATIA 是以<b>普通用户（非管理员）</b>身份运行的。"
+                "以管理员身份运行的本程序无法访问普通用户的 COM 对象。<br/>"
+                "<b>首选解决方案：</b>请改为以<b>普通用户身份（不提权）</b>直接运行本程序。<br/>"
+                "其他可能原因：<br/>"
+                "① HKCR 中无 CATIA ProgID（CO_E_CLASSSTRING），已知 CLSID 直连也失败；<br/>"
+                "② gen_py 早绑定缓存（版本不匹配）干扰了 COM 调用；<br/>"
+                "③ CATIA 正在初始化中，尚未完成 COM 注册（等待片刻后重试）。<br/>"
+                f"<b>注册表 CATIA* ProgID：</b>{reg_str}<br/>"
+                f"<b>ROT 条目（前{len(rot_preview)}条）：</b><br/>　　{rot_str}"
+            )
+        elif info["status"] == "broken":
             lines.append(
                 "<br/><b>建议：</b>检测到 COM 对象异常。可能原因为早绑定缓存（gen_py）污染。"
                 "请重启本程序（启动时会自动清理缓存），或参阅帮助文档中的手动修复步骤。"
+            )
+        if info["status"] == "access_denied":
+            lines.append(
+                "<br/><b>根本原因：</b>Windows Vista+ 的 UAC 隔离机制导致：以管理员身份运行的"
+                " CATIA 所注册的 COM 对象，对普通权限进程完全不可见（GetActiveObject 和 ROT "
+                '枚举均失败，看起来像"未连接"）。<br/>'
+                "<b>解决方案：</b>以管理员身份重启本程序，或将 CATIA 改为普通权限运行。"
             )
         if info.get("is_v5") is False:
             lines.append(
@@ -147,7 +199,54 @@ class MainWindow(QMainWindow):
             )
 
         html = "<br/>".join(lines)
-        QMessageBox.information(self, "CATIA 连接诊断", html)
+
+        # access_denied 且尚未提权时，提供"以管理员身份重启"按钮
+        if info["status"] == "access_denied" and not info.get("is_elevated"):
+            msg = QMessageBox(self)
+            msg.setWindowTitle("CATIA 连接诊断")
+            msg.setTextFormat(Qt.TextFormat.RichText)
+            msg.setText(html)
+            btn_restart = msg.addButton("以管理员身份重启", QMessageBox.ButtonRole.AcceptRole)
+            msg.addButton("关闭", QMessageBox.ButtonRole.RejectRole)
+            msg.exec()
+            if msg.clickedButton() == btn_restart:
+                self._restart_as_admin()
+        else:
+            QMessageBox.information(self, "CATIA 连接诊断", html)
+
+    def _restart_as_admin(self) -> None:
+        """使用 ShellExecuteW 以 runas 动词重新以管理员身份启动本程序，然后退出当前实例。"""
+        import ctypes
+        try:
+            executable = sys.executable
+            # PyInstaller 打包后 sys.executable 就是 exe 本身；
+            # 开发模式下需要把脚本路径作为参数传入
+            if getattr(sys, "frozen", False):
+                # 打包模式：直接提权重启 exe
+                params = " ".join(sys.argv[1:])
+            else:
+                # 开发模式：python.exe <main.py> [args...]
+                params = " ".join(sys.argv)
+
+            result = ctypes.windll.shell32.ShellExecuteW(
+                None,        # hwnd
+                "runas",     # verb（触发 UAC 提权对话框）
+                executable,
+                params,
+                None,        # working directory
+                1,           # SW_SHOWNORMAL
+            )
+            # ShellExecuteW 返回值 > 32 表示成功
+            if result > 32:
+                sys.exit(0)
+            else:
+                QMessageBox.warning(
+                    self, "重启失败",
+                    f"无法以管理员身份重启（ShellExecuteW 返回 {result}）。\n"
+                    '请手动右键点击程序图标，选择"以管理员身份运行"。'
+                )
+        except Exception as exc:
+            QMessageBox.warning(self, "重启失败", f"发生异常：{exc}")
 
     # ── 中央控件区域 ──────────────────────────────────────────────────────
 
