@@ -563,12 +563,16 @@ _HELP_HTML = f"""\
     <td><span style="color: #c97a00">⚠ CATIA 连接异常</span></td>
     <td>
       COM 对象可获取（CATIA 在运行），但访问属性时失败。<br />
-      最常见原因：<b>早绑定缓存（gen_py）污染</b>——重启本程序（启动时自动清理）即可修复。
+      通常原因：CATIA 正在初始化，或 ProgID/CLSID 注册异常。稍候重试即可。
     </td>
   </tr>
   <tr>
     <td><span style="color: #cc2222">● CATIA 未连接</span></td>
-    <td>CATIA 未运行或 COM 完全不可用。请先打开 CATIA。</td>
+    <td>
+      CATIA V5 未运行或 COM 完全不可用。请先打开 CATIA V5 R28。<br />
+      <b>注意：</b>若同时安装了 3DEXPERIENCE，程序会自动通过枚举 ROT 查找 CATIA V5，
+      无需手动干预。如仍提示未连接，请手动启动 CATIA V5 R28 后再操作。
+    </td>
   </tr>
 </table>
 <p>
@@ -589,25 +593,24 @@ _HELP_HTML = f"""\
   <tr>
     <td><b>Q: 状态栏显示橙色"⚠ CATIA 连接异常"是什么意思？</b></td>
     <td>
-      A: 这表示 CATIA 进程确实在运行，COM 对象也能获取，但对它的功能性调用失败了。 最常见原因是
-      <b>win32com 早绑定缓存（gen_py）污染</b>（见下一条）。<br />
-      可通过菜单 <b>帮助 → CATIA 连接诊断</b> 查看诊断详情，按提示重启程序即可。
+      A: 这表示 CATIA 进程确实在运行，COM 对象也能获取，但对它的功能性调用失败了。<br />
+      通常是 CATIA 尚未完全启动或 COM 注册暂时异常，稍候重试即可。<br />
+      可通过菜单 <b>帮助 → CATIA 连接诊断</b> 查看详细原因。
     </td>
   </tr>
   <tr>
-    <td><b>Q: 重启后仍然无法连接 CATIA，怀疑 COM 缓存损坏？</b></td>
+    <td><b>Q: 同时安装了 CATIA V5 和 3DEXPERIENCE，程序显示"CATIA 未连接"或执行命令时打开了 3DEXPERIENCE？</b></td>
     <td>
-      A: <b>win32com 早绑定缓存（gen_py）污染</b>可能导致 COM 连接异常。<br />
-      <b>原因：</b>其他工具或脚本曾调用 <code>win32com.client.gencache.EnsureDispatch()</code>， 在
-      <code>%LOCALAPPDATA%\\Temp\\gen_py\\</code> 写入了 CATIA 类型库的早绑定缓存文件，
-      导致后续所有晚绑定调用（本程序所使用的方式）受到干扰。<br />
-      <b>本程序已内置自动修复：</b>每次启动时会自动删除该缓存目录，正常情况下无需手动处理。<br />
-      <b>手动修复步骤（若异常发生在程序启动期间）：</b>
+      A: 这是 Windows COM 注册表被 3DEXPERIENCE 覆盖导致的冲突问题。<br />
+      <b>原因：</b>两套产品均使用 "CATIA.Application" COM ProgID；后安装的版本会覆盖注册表中该 ProgID
+      的 CLSID 映射，导致 COM 调用找不到 V5 实例，转而启动 3DEXPERIENCE。<br />
+      <b>本程序已内置自动解决方案：</b>
       <ol>
-        <li>关闭 CATIA 和所有 Python 进程</li>
-        <li>删除目录 <code>%LOCALAPPDATA%\\Temp\\gen_py\\</code>（整个文件夹）</li>
-        <li>重新启动本程序和 CATIA</li>
+        <li>优先通过枚举 Windows ROT（Running Object Table）直接查找 CATIA V5 实例，绕过 ProgID→CLSID 注册表映射。</li>
+        <li>若 CATIA V5 未运行，程序会自动从注册表检测 CATIA V5 安装路径（优先选择 V5 而非 3DE），
+            并启动 CNEXT.exe。</li>
       </ol>
+      <b>若仍出现问题：</b>请确保先手动启动 CATIA V5 R28，再使用本程序。
     </td>
   </tr>
   <tr>

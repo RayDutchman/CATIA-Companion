@@ -28,10 +28,10 @@ def find_dependencies(
     progress_callback:
         可选的 ``callable(str)``，在搜索运行时使用状态消息调用。
     """
-    from pycatia import catia
+    from catia_copilot.catia.connection import get_catia_v5_application
 
     target      = Path(target_path).resolve()
-    caa         = catia()
+    caa         = get_catia_v5_application()
     application = caa.application
     application.visible = True
     documents   = application.documents

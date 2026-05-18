@@ -57,3 +57,6 @@ crack/
 macros/refresh_drawing_info.catvba
 test.py
 catia_copilot/ui/help.html
+
+# ── Playwright MCP ───────────────────────────────────────────────────────────
+.playwright-mcp/

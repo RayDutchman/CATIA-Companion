@@ -60,10 +60,10 @@ def apply_part_template(
         ``(success_count, failed_messages)``，其中 *failed_messages* 包含
         每个无法刷写的文件的一个人类可读字符串。
     """
-    from pycatia import catia
     from pycatia.mec_mod_interfaces.part_document import PartDocument
+    from catia_copilot.catia.connection import get_catia_v5_application
 
-    caa = catia()
+    caa = get_catia_v5_application()
     application = caa.application
     application.visible = True
 

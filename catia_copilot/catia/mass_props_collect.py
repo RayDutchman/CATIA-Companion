@@ -786,9 +786,9 @@ def remeasure_part_mass_props(
         成功时返回质量特性字典（内部 SI 单位，与 :func:`collect_mass_props_rows`
         相同格式）；找不到文档或读取失败时返回 None。
     """
-    from pycatia import catia  # 运行时导入，避免无 CATIA 环境时报错
+    from catia_copilot.catia.connection import get_catia_v5_application  # 运行时导入，避免无 CATIA 环境时报错
     try:
-        caa = catia()
+        caa = get_catia_v5_application()
         application = caa.application
         application.visible = True
         documents = application.documents
@@ -850,8 +850,9 @@ def collect_mass_props_rows(
           Density, Weight, CogX, CogY, CogZ, Ixx, Iyy, Izz, Ixy, Ixz, Iyz,
           _filepath, _placement, _not_found, _no_file, _unreadable, _meas_failed
     """
-    from pycatia import catia, CatWorkModeType
+    from pycatia import CatWorkModeType
     from pycatia.product_structure_interfaces.product_document import ProductDocument
+    from catia_copilot.catia.connection import get_catia_v5_application
 
     _total_count: int = 0
     # 以文件路径为键缓存质量特性测量结果，避免同一零件多实例重复测量
@@ -1111,7 +1112,7 @@ def collect_mass_props_rows(
             pass
 
     # ── CATIA 连接与文档处理 ─────────────────────────────────────────────────
-    caa         = catia()
+    caa         = get_catia_v5_application()
     application = caa.application
     application.visible = True  # 确保 CATIA 窗口可见，避免后台静默状态下 COM 调用挂起
     documents   = application.documents

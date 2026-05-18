@@ -108,10 +108,10 @@ def convert_drawing_to_pdf(
     返回：
         成功导出的文件数量
     """
-    from pycatia import catia
     from pycatia.drafting_interfaces.drawing_document import DrawingDocument
+    from catia_copilot.catia.connection import get_catia_v5_application
 
-    caa = catia()
+    caa = get_catia_v5_application()
     application = caa.application
     application.visible = True
     documents = application.documents
@@ -196,9 +196,9 @@ def convert_part_to_step(
     返回：
         成功导出的文件数量
     """
-    from pycatia import catia
+    from catia_copilot.catia.connection import get_catia_v5_application
 
-    caa = catia()
+    caa = get_catia_v5_application()
     application = caa.application
     application.visible = True
     documents = application.documents

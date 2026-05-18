@@ -31,7 +31,7 @@ def export_bom_to_excel(
     summary_include_assemblies: bool = False,
     summary_sort_column: str | None = None,
     output_format: str = "xlsx",
-) -> None:
+) -> list[Path]:
     """Export a hierarchical or summarised BOM from CATProduct files to Excel (.xlsx) or CSV.
 
     Parameters
@@ -64,11 +64,16 @@ def export_bom_to_excel(
         when ``None``.  Only used when *summarize* is ``True``.
     output_format:
         ``"xlsx"`` (default) or ``"csv"``.
+
+    Returns
+    -------
+    list[Path]
+        The file paths that were successfully written.
     """
     import openpyxl
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-    from pycatia import catia
     from pycatia.product_structure_interfaces.product_document import ProductDocument
+    from catia_copilot.catia.connection import get_catia_v5_application
 
     if columns is None:
         columns = BOM_DEFAULT_COLUMNS
@@ -82,7 +87,7 @@ def export_bom_to_excel(
     bom_suffix = "_汇总BOM" if summarize else "_BOM"
     use_csv = output_format.lower() == "csv"
 
-    caa         = catia()
+    caa         = get_catia_v5_application()
     application = caa.application
     application.visible = True
     documents   = application.documents
@@ -150,6 +155,7 @@ def export_bom_to_excel(
             for row in rows:
                 writer.writerow([row.get(c, "") for c in columns])
 
+    written_paths: list[Path] = []
     total_files = len(file_paths)
     for file_idx, path in enumerate(file_paths, start=1):
         if path is None:
@@ -180,6 +186,9 @@ def export_bom_to_excel(
                 wb   = openpyxl.Workbook()
                 ws   = wb.active
                 ws.title = "汇总BOM" if summarize else "BOM"
+                _write_sheet(ws, rows)
+                wb.save(dest)
+            written_paths.append(dest)
             continue
 
         src      = Path(path).resolve()
@@ -236,6 +245,9 @@ def export_bom_to_excel(
             wb       = openpyxl.Workbook()
             ws       = wb.active
             ws.title = "汇总BOM" if summarize else "BOM"
+            _write_sheet(ws, rows)
+            wb.save(dest)
+        written_paths.append(dest)
 
         # Close the document only if we were the one who opened it
         if src not in already_open:
@@ -249,3 +261,5 @@ def export_bom_to_excel(
                     pass
 
         logger.info(f"Done: {src.name}\n")
+
+    return written_paths

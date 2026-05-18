@@ -60,8 +60,9 @@ def collect_bom_rows(
         is appended to the result list.  May raise an exception to abort the
         traversal (e.g. when the user cancels).
     """
-    from pycatia import catia, CatWorkModeType
+    from pycatia import CatWorkModeType
     from pycatia.product_structure_interfaces.product_document import ProductDocument
+    from catia_copilot.catia.connection import get_catia_v5_application
 
     DIRECT_ATTR_MAP: dict[str, str] = {
         "Nomenclature": "nomenclature",
@@ -249,7 +250,7 @@ def collect_bom_rows(
             pass
 
     # ── CATIA connection ────────────────────────────────────────────────────
-    caa         = catia()
+    caa         = get_catia_v5_application()
     application = caa.application
     application.visible = True
     documents   = application.documents

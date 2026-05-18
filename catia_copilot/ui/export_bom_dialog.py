@@ -6,6 +6,7 @@ BOM 导出对话框。
 """
 
 import logging
+import subprocess
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -14,7 +15,8 @@ from PySide6.QtWidgets import (
     QGroupBox, QPushButton, QMessageBox, QProgressDialog, QApplication,
     QCheckBox, QComboBox, QWidget,
 )
-from PySide6.QtCore import Qt, QSettings
+from PySide6.QtCore import Qt, QSettings, QUrl
+from PySide6.QtGui import QDesktopServices
 
 from catia_copilot.constants import (
     BOM_ALL_COLUMNS,
@@ -441,7 +443,7 @@ class ExportBomDialog(QDialog):
             QApplication.processEvents()
 
         try:
-            export_bom_to_excel(
+            written_paths = export_bom_to_excel(
                 [file_path], output_folder,
                 columns=selected_cols,
                 custom_columns=self._custom_columns,
@@ -458,6 +460,40 @@ class ExportBomDialog(QDialog):
         finally:
             progress.close()
 
-        fmt_label = "CSV文件" if self._output_format == "csv" else "Excel文件"
-        QMessageBox.information(self, "导出成功", f"BOM已成功导出为{fmt_label}。")
+        dest_path = written_paths[0] if written_paths else None
+        if dest_path is not None:
+            self._show_export_success(dest_path)
+        else:
+            fmt_label = "CSV文件" if self._output_format == "csv" else "Excel文件"
+            QMessageBox.information(self, "导出成功", f"BOM已成功导出为{fmt_label}。")
         self.accept()
+
+    def _show_export_success(self, dest_path: Path) -> None:
+        """导出成功后弹出含"打开文件"和"打开所在文件夹"按钮的提示框。"""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("导出成功")
+        msg.setText(f"BOM已成功导出：\n{dest_path}")
+        msg.setIcon(QMessageBox.Icon.Information)
+        open_file_btn   = msg.addButton("打开文件", QMessageBox.ButtonRole.ActionRole)
+        open_folder_btn = msg.addButton("打开所在文件夹", QMessageBox.ButtonRole.ActionRole)
+        msg.addButton(QMessageBox.StandardButton.Ok)
+        msg.exec()
+        clicked = msg.clickedButton()
+        if clicked == open_file_btn:
+            try:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(dest_path)))
+            except Exception as exc:
+                logger.warning(f"Failed to open exported file: {exc}")
+        elif clicked == open_folder_btn:
+            self._open_path(str(dest_path))
+
+    def _open_path(self, fp: str) -> None:
+        """在 Windows 资源管理器中打开包含 *fp* 的文件夹，并高亮选中该文件。"""
+        p = Path(fp).resolve()
+        try:
+            if p.exists():
+                subprocess.Popen(f'explorer /select,"{p}"', shell=True)
+            elif p.parent.exists():
+                subprocess.Popen(f'explorer "{p.parent}"', shell=True)
+        except Exception as exc:
+            logger.warning(f"Failed to open path in Explorer: {exc}")
